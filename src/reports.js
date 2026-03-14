@@ -352,7 +352,7 @@ class ReportsService {
   /**
    * Schedule daily report delivery
    */
-  scheduleDaily ReportDelivery(tenantId, phone, time = '21:00') {
+  scheduleDailyReportDelivery(tenantId, phone, time = '21:00') {
     console.log(`[Reports] Scheduled daily report for tenant ${tenantId} at ${time}`);
     
     // This would use a cron job in production
