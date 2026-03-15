@@ -1001,14 +1001,16 @@ function renderStaff(D) {
   // Day header row
   const dayHeaders = weekDays.map(date => {
     const isToday = date === todayIsoAlloc;
+    const isPast  = date < todayIsoAlloc;
     const isSelected = date === allocDate;
     const d = new Date(date);
     const dayName = d.toLocaleDateString('en-IN',{weekday:'short'});
     const dayNum = d.getDate();
-    return `<th style="padding:8px 4px;text-align:center;min-width:100px;cursor:pointer;border-bottom:2px solid ${isSelected?'var(--accent)':isToday?'var(--green)':'var(--border)'}"
+    return `<th style="padding:8px 4px;text-align:center;min-width:100px;cursor:pointer;border-bottom:2px solid ${isSelected?'var(--accent)':isToday?'var(--green)':'var(--border)'};${isPast?'opacity:0.4':''}"
       onclick="allocDate='${date}';renderPage()">
       <div style="font-size:10px;font-weight:700;color:${isToday?'var(--green)':isSelected?'var(--accent-light)':'var(--text-3)'};letter-spacing:0.5px">${dayName.toUpperCase()}</div>
       <div style="font-size:15px;font-weight:800;color:${isToday?'var(--green)':isSelected?'var(--accent-light)':'var(--text-0)'}">${dayNum}</div>
+      ${isPast ? '<div style="font-size:9px;color:var(--text-3);margin-top:1px">locked</div>' : ''}
     </th>`;
   }).join('');
 
@@ -1037,9 +1039,9 @@ function renderStaff(D) {
         const empId = dayAlloc[nKey];
         const emp = empId ? D.employees.find(e => parseInt(e.id) === parseInt(empId)) : null;
         const isToday = date === todayIsoAlloc;
+        const isPastAllocDay = date < todayIsoAlloc;
         const isSelected = date === allocDate;
         const dayEmps = getRosteredEmps(date);
-        const opts = dayEmps.map(e => `<option value="${e.id}" ${emp && parseInt(e.id)===parseInt(emp.id)?'selected':''}>${e.name}</option>`).join('');
 
         const selectOpts = dayEmps.map(e =>
           `<option value="${e.id}" ${emp && parseInt(e.id)===parseInt(emp.id) ? 'selected' : ''}>${sanitize(e.name)}</option>`
@@ -1052,6 +1054,19 @@ function renderStaff(D) {
           const otherDk = date+'_'+otherS.name;
           return !!(allocations[otherDk]?.[nKey]);
         });
+
+        // Past day — show assigned employee as read-only chip, no dropdown
+        if (isPastAllocDay) {
+          return `<td style="padding:5px;background:transparent;border-right:1px solid var(--border-light);vertical-align:middle;min-width:110px;opacity:0.45">
+            ${emp ? `
+              <div style="display:flex;align-items:center;gap:5px;background:var(--bg-1);border:1px solid var(--border);border-radius:7px;padding:5px 7px">
+                <span style="width:22px;height:22px;border-radius:6px;background:${empColor(emp)};display:grid;place-items:center;color:#fff;font-size:9px;font-weight:800;flex-shrink:0">${empInitials(emp.name)}</span>
+                <span style="font-size:11px;font-weight:700;color:var(--text-2);flex:1">${sanitize(emp.name)}</span>
+              </div>
+            ` : `<div style="font-size:10px;color:var(--text-3);text-align:center;padding:4px">—</div>`}
+          </td>`;
+        }
+
         return `<td style="padding:5px;background:${cellHasConflict?'rgba(239,68,68,0.05)':isSelected?'rgba(212,148,15,0.04)':isToday?'rgba(34,197,94,0.03)':'transparent'};border-right:1px solid ${cellHasConflict?'rgba(239,68,68,0.3)':'var(--border-light)'};vertical-align:middle;min-width:110px">
           ${emp ? `
             <div style="display:flex;align-items:center;gap:5px;background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.25);border-radius:7px;padding:5px 7px;margin-bottom:4px">
