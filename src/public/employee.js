@@ -3879,9 +3879,16 @@ async function loadData() {
   })();
   // ── BULK LOAD: single HTTP request instead of 25+ individual calls ─────────
   // Reduces login time from ~8s to <1s on Railway
+  // NOTE: Use raw fetch (not apiFetch) to avoid triggering 401→logout during preload
   let _bulk = null;
   try {
-    _bulk = await apiFetch('/data/bulk-load');
+    const _token = typeof getAuthToken === 'function' ? getAuthToken() : null;
+    if (_token) {
+      const _bulkResp = await fetch((typeof API_BASE !== 'undefined' ? API_BASE : '/api') + '/data/bulk-load', {
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + _token }
+      });
+      if (_bulkResp.ok) _bulk = await _bulkResp.json();
+    }
   } catch(e) {
     console.warn('[loadData] bulk-load failed, falling back to individual calls:', e.message);
   }
