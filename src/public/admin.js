@@ -1593,7 +1593,24 @@ function renderSettings(D) {
     <span style="color:var(--text-3)">${l}</span><span class="fw-600" style="color:var(--text-1)">${v}</span>
   </div>`).join('');
 
-  // Build subscription info card
+  // Build subscription info card — always fetch fresh when viewing Settings
+  if (APP.page === 'settings') {
+    const _tid = APP.tenant?.id;
+    if (_tid) {
+      fetch('/api/public/subscription/' + encodeURIComponent(_tid))
+        .then(r => r.json())
+        .then(s => {
+          if (JSON.stringify(s) !== JSON.stringify(window._subStatus)) {
+            window._subStatus = s;
+            window._subStatusAt = Date.now();
+            if (APP.page === 'settings') {
+              var el = document.getElementById('content');
+              if (el) try { el.innerHTML = renderSettings(APP.data); } catch(e2) {}
+            }
+          }
+        }).catch(() => {});
+    }
+  }
   const sub = window._subStatus;
   const subCard = sub ? (function() {
     var statusMap = {
