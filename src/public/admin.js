@@ -267,16 +267,18 @@ function renderDashboard(D) {
       </div>`
     : '';
 
-  // Subscription status badge — fetch async if not loaded
-  if (!window._subStatus) {
+  // Subscription status badge — fetch if not loaded or stale (>60s)
+  const _subAge = window._subStatusAt ? (Date.now() - window._subStatusAt) : Infinity;
+  if (!window._subStatus || _subAge > 60000) {
     const tid = APP.tenant?.id;
     if (tid) {
       fetch('/api/public/subscription/' + encodeURIComponent(tid))
         .then(r => r.json()).then(s => {
+          var wasExpired = window._subStatus && window._subStatus.is_read_only;
           window._subStatus = s;
-          // Update badge in place without full re-render to avoid loop
-          var badge = document.getElementById('subStatusBadge');
-          if (badge && APP.page === 'dashboard') renderPage();
+          window._subStatusAt = Date.now();
+          // Only re-render if status changed (avoid loop)
+          if (wasExpired !== s.is_read_only && APP.page === 'dashboard') renderPage();
         }).catch(()=>{});
     }
   }
