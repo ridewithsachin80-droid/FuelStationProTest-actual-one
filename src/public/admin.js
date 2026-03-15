@@ -72,8 +72,8 @@ function renderDashboard(D) {
 
   // Active shift
   let shiftsHtml = D.shifts.map(s => {
-    const [sh] = s.start.split(':').map(Number);
-    const [eh] = s.end.split(':').map(Number);
+    const [sh] = (s.start||'00:00').split(':').map(Number);
+    const [eh] = (s.end||'00:00').split(':').map(Number);
     const isActive = sh < eh ? (h >= sh && h < eh) : (h >= sh || h < eh);
     return `<div class="shift-block ${isActive ? 'is-active' : ''}" style="margin-bottom:8px">
       <div class="flex-between">
@@ -683,7 +683,9 @@ function renderCredit(D) {
       <div class="flex-between mb-14" style="align-items:flex-start">
         <div><div class="fw-800" style="color:var(--text-0);font-size:16px">${sanitize(c.name)}</div>
           ${badge(c.type, c.type === 'Fleet' ? 'badge-blue' : 'badge-purple')}
-          ${(c.loyaltyPoints||0) > 0 ? `<span style="margin-left:6px;font-size:11px;color:var(--accent-light);font-weight:700">⭐ ${(c.loyaltyPoints||0).toLocaleString('en-IN')} pts</span>` : ''}
+          ${c.loyaltyEnrolled
+            ? `<span style="margin-left:6px;font-size:11px;font-weight:700;color:var(--accent-light);background:rgba(212,148,15,0.1);border:1px solid rgba(212,148,15,0.3);padding:1px 7px;border-radius:99px">⭐ Loyalty${(c.loyaltyPoints||0)>0?' · '+(c.loyaltyPoints||0).toLocaleString('en-IN')+' pts':''}</span>`
+            : `<span style="margin-left:6px;font-size:11px;color:var(--text-3);background:var(--bg-2);border:1px solid var(--border);padding:1px 7px;border-radius:99px">No loyalty</span>`}
         </div>
         <div class="text-right"><div class="mono fw-800" style="color:${pct > 80 ? 'var(--red)' : 'var(--orange)'};font-size:20px">${cur(c.outstanding)}</div>
           <div style="font-size:11px;color:var(--text-3)">of ${cur(c.limit)}</div></div>
@@ -914,8 +916,8 @@ function renderStaff(D) {
   const h = new Date().getHours();
   const shiftCards = sortedShifts.map(s => {
     const emps = D.employees.filter(e => (e.shift||'').split(',').map(x=>x.trim()).includes(s.name));
-    const [sh] = s.start.split(':').map(Number);
-    const [eh] = s.end.split(':').map(Number);
+    const [sh] = (s.start||'00:00').split(':').map(Number);
+    const [eh] = (s.end||'00:00').split(':').map(Number);
     const isActive = sh < eh ? (h >= sh && h < eh) : (h >= sh || h < eh);
     return `<div class="dbox-lg" style="border:1px solid ${isActive ? 'rgba(212,148,15,0.3)' : 'var(--border-light)'};border-radius:var(--radius);${isActive ? 'background:rgba(212,148,15,0.04)' : ''}">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
@@ -1937,15 +1939,27 @@ function renderRoster(D) {
           </div>`
       ).join('');
       // Single dropdown replaces per-employee add-buttons
-      const unassigned = emps.filter(e => !assigned.includes(String(e.id)));
-      const addDropdown = isPastWeek || unassigned.length === 0 ? '' :
+      // Only show employees whose allocated shift matches this row (e.shift is comma-separated)
+      const shiftMatch = emps.filter(e => {
+        const empShifts = (e.shift||'').split(',').map(s => s.trim().toLowerCase());
+        return empShifts.includes(shift.name.toLowerCase()) || empShifts.includes(shift.name.trim().toLowerCase());
+      });
+      const unassigned = shiftMatch.filter(e => !assigned.includes(String(e.id)));
+      const noEligible = shiftMatch.length === 0;
+      const allAssigned = shiftMatch.length > 0 && unassigned.length === 0;
+      const addDropdown = isPastWeek ? '' : noEligible ? '' : allAssigned
+        ? "<div style='font-size:10px;color:var(--text-3);margin-top:4px;text-align:center'>All assigned</div>"
+        :
         `<select style="margin-top:${assignedEmps.length?'5px':'0'};width:100%;background:var(--bg-1);border:1px dashed var(--border);border-radius:6px;padding:4px 6px;color:var(--text-3);font-size:11px;font-family:var(--font);cursor:pointer"
           onchange="if(this.value){rosterAssign('${dateStr}','${shift.name}',this.value);this.value=''}">
           <option value="">+ Assign</option>
           ${unassigned.map(e => `<option value="${e.id}">${sanitize(e.name)}</option>`).join('')}
         </select>`;
+      const noStaffHint = !isPastWeek && noEligible
+        ? "<div style='font-size:10px;color:var(--text-3);text-align:center;padding:6px 0;opacity:0.5'>No staff</div>"
+        : '';
       return `<td style="vertical-align:top;padding:6px;background:${isToday?'rgba(212,148,15,0.04)':'transparent'};border-left:1px solid var(--border-light)">
-        ${empChips}${addDropdown}
+        ${empChips}${addDropdown}${noStaffHint}
       </td>`;
     }).join('');
 
