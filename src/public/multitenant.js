@@ -176,6 +176,7 @@ async function mt_showSelector() {
             ${isSuperLoggedIn ? `
               <div style="font-size:11px;color:var(--text-2);margin-bottom:12px;line-height:1.6">Full control: add/edit stations, manage admins, activate/deactivate and view all data.</div>
               <button class="btn btn-accent btn-sm btn-block" onclick="mt_openCompareStations()" style="font-size:12px;font-weight:700;margin-bottom:8px">🏢 Compare Stations</button>
+              <button class="btn btn-accent btn-sm btn-block" onclick="mt_openBillingDashboard()" style="font-size:12px;font-weight:700;margin-bottom:8px;background:rgba(34,197,94,0.15);color:var(--green);border-color:rgba(34,197,94,0.4)">💳 Subscriptions & Billing</button>
               <button class="btn btn-ghost btn-sm btn-block" onclick="mt_changeSupercreds()" style="font-size:11px;margin-bottom:8px">🔑 Change Super Admin Credentials</button>
               <button class="btn btn-ghost btn-sm btn-block" onclick="mt_superLogout()" style="font-size:11px;color:var(--red)">⏻ Logout Super Admin</button>
             ` : `
@@ -651,6 +652,186 @@ async function mt_doSuperLogin() {
   } catch(e) { /* offline or server not ready — compare will show cached data */ }
   mt_toast('Super Admin logged in', 'success');
   mt_showSelector();
+}
+
+async function mt_openBillingDashboard() {
+  const overlay = document.createElement('div');
+  overlay.id = 'billingOverlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:var(--bg-0);z-index:10010;display:flex;flex-direction:column;overflow-y:auto';
+  overlay.innerHTML = `
+    <div style="max-width:900px;margin:0 auto;width:100%;padding:20px">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:24px;position:sticky;top:0;background:var(--bg-0);padding:12px 0;z-index:1">
+        <button onclick="document.getElementById('billingOverlay').remove()" style="background:var(--bg-2);border:1px solid var(--border);color:var(--text-2);border-radius:8px;padding:8px 14px;cursor:pointer;font-size:13px;font-weight:600">← Back</button>
+        <h2 style="font-size:20px;font-weight:800;color:var(--text-0)">💳 Subscriptions & Billing</h2>
+        <button onclick="mt_loadBillingData()" style="margin-left:auto;background:var(--bg-2);border:1px solid var(--border);color:var(--text-2);border-radius:8px;padding:6px 12px;cursor:pointer;font-size:12px">🔄 Refresh</button>
+      </div>
+      <div id="billingContent" style="text-align:center;padding:60px;color:var(--text-3)">
+        <div style="font-size:36px;margin-bottom:12px">⏳</div>
+        <div style="font-weight:600">Loading subscription data…</div>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  await mt_loadBillingData();
+}
+
+async function mt_loadBillingData() {
+  const el = document.getElementById('billingContent');
+  if (!el) return;
+  el.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-3)"><div style="font-size:28px;margin-bottom:8px">⏳</div>Loading…</div>';
+  try {
+    const token = typeof getAuthToken === 'function' ? getAuthToken() : '';
+    const resp = await fetch('/api/subscriptions', { headers: { 'Authorization': 'Bearer ' + token } });
+    if (!resp.ok) { el.innerHTML = '<div style="color:var(--red);padding:40px;text-align:center">⚠️ Could not load. Make sure you are logged in as super admin.</div>'; return; }
+    const subs = await resp.json();
+
+    const total   = subs.length;
+    const active  = subs.filter(function(s){return s.effective_status==='active';}).length;
+    const trial   = subs.filter(function(s){return s.effective_status==='trial';}).length;
+    const expired = subs.filter(function(s){return s.effective_status==='expired';}).length;
+    const grace   = subs.filter(function(s){return s.effective_status==='grace';}).length;
+    const mrr     = subs.filter(function(s){return s.effective_status==='active';}).reduce(function(a,s){return a+(s.price_monthly||0);},0);
+    const totalPaid = subs.reduce(function(a,s){return a+(parseFloat(s.total_paid)||0);},0);
+
+    function statusBadge(s) {
+      var m = {trial:['#3b82f6','Trial'],active:['#22c55e','Active'],grace:['#f97316','Grace'],expired:['#ef4444','Expired'],suspended:['#9ca3af','Suspended']};
+      var cm = m[s]||m.expired; var c=cm[0]; var l=cm[1];
+      return '<span style="background:'+c+'22;color:'+c+';font-size:10px;font-weight:700;padding:2px 8px;border-radius:99px">'+l+'</span>';
+    }
+
+    var expSoon = subs.filter(function(s){return s.effective_status==='active'&&s.days_left!==null&&s.days_left<=7;}).length;
+    var expiryAlert = expSoon > 0
+      ? '<div style="padding:10px 14px;background:rgba(249,115,22,0.08);border:1px solid rgba(249,115,22,0.3);border-radius:8px;margin-bottom:16px;font-size:13px;color:#f97316">⚠️ <strong>'+expSoon+' station(s)</strong> expiring within 7 days</div>'
+      : '';
+
+    var statItems = [['🏪','Total',total],['✅','Active',active],['⏱️','Trial',trial],['⚠️','Expired',expired+(grace?'+'+grace:'')],['💰','MRR','₹'+mrr.toLocaleString('en-IN')],['📊','Collected','₹'+Math.round(totalPaid).toLocaleString('en-IN')]];
+    var statRow = '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:20px">';
+    statItems.forEach(function(item){
+      statRow += '<div style="background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center"><div style="font-size:18px;font-weight:800;color:var(--text-0)">'+item[2]+'</div><div style="font-size:11px;color:var(--text-3)">'+item[0]+' '+item[1]+'</div></div>';
+    });
+    statRow += '</div>';
+
+    var planLabels = {trial:'Trial',monthly:'Monthly',quarterly:'Quarterly',halfyearly:'Half-Yearly',yearly:'Yearly'};
+    var cards = '';
+    subs.forEach(function(s) {
+      var daysLabel = s.effective_status === 'trial'
+        ? (s.trial_days_left > 0 ? s.trial_days_left+' trial days left' : 'Trial expired')
+        : (s.days_left !== null ? (s.days_left > 0 ? s.days_left+' days left' : 'Expired') : '—');
+      var urgency = s.effective_status === 'expired' ? 'rgba(239,68,68,0.4)' : (s.days_left !== null && s.days_left <= 7) ? 'rgba(249,115,22,0.4)' : 'var(--border)';
+      var planLabel = planLabels[s.plan]||s.plan||'Trial';
+      var safeName = (s.station_name||s.tenant_id||'').replace(/'/g,'');
+      cards += '<div style="background:var(--bg-2);border:1px solid '+urgency+';border-radius:10px;padding:14px;margin-bottom:12px">';
+      cards += '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">';
+      cards += '<div><div style="font-size:15px;font-weight:800;color:var(--text-0)">'+(s.station_name||s.tenant_id||'')+'</div>';
+      cards += '<div style="font-size:11px;color:var(--text-3)">'+(s.location||'')+''+(s.owner_name?' · '+s.owner_name:'')+'</div></div>';
+      cards += '<div style="text-align:right">'+statusBadge(s.effective_status)+'<div style="font-size:11px;color:var(--text-3);margin-top:3px">'+daysLabel+'</div></div></div>';
+      cards += '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;font-size:11px;margin-bottom:10px">';
+      cards += '<div style="background:var(--bg-0);border-radius:6px;padding:6px;text-align:center"><div style="font-weight:700">'+planLabel+'</div><div style="color:var(--text-3)">Plan</div></div>';
+      cards += '<div style="background:var(--bg-0);border-radius:6px;padding:6px;text-align:center"><div style="font-weight:700;font-family:var(--mono)">₹'+(s.price_monthly||0).toLocaleString('en-IN')+'</div><div style="color:var(--text-3)">Monthly</div></div>';
+      cards += '<div style="background:var(--bg-0);border-radius:6px;padding:6px;text-align:center"><div style="font-weight:700;font-family:var(--mono)">₹'+Math.round(s.total_paid||0).toLocaleString('en-IN')+'</div><div style="color:var(--text-3)">Collected</div></div>';
+      cards += '</div>';
+      cards += '<div style="display:flex;gap:8px">';
+      cards += '<button data-tid="'+s.tenant_id+'" data-name="'+safeName+'" data-price="'+(s.price_monthly||0)+'" onclick="mt_recordPaymentFromBilling(this.dataset.tid,this.dataset.name,parseFloat(this.dataset.price))" style="flex:1;background:rgba(34,197,94,0.1);border:1px solid rgba(34,197,94,0.3);color:#4ade80;border-radius:6px;padding:7px;font-size:12px;font-weight:700;cursor:pointer">💰 Record Payment</button>';
+      cards += '<button data-tid="'+s.tenant_id+'" data-name="'+safeName+'" onclick="mt_subSettingsFromBilling(this.dataset.tid,this.dataset.name)" style="flex:1;background:var(--bg-0);border:1px solid var(--border);color:var(--text-2);border-radius:6px;padding:7px;font-size:12px;font-weight:700;cursor:pointer">⚙️ Settings</button>';
+      cards += '</div></div>';
+    });
+    if (!cards) cards = '<div style="text-align:center;padding:40px;color:var(--text-3)">No stations found</div>';
+
+    el.innerHTML = statRow + expiryAlert + cards;
+  } catch(e) { el.innerHTML = '<div style="color:var(--red);padding:40px;text-align:center">Error: '+e.message+'</div>'; }
+}
+
+async function mt_recordPaymentFromBilling(tenantId, stationName, defaultPrice) {
+  const plans = [['monthly','Monthly (1 mo)'],['quarterly','Quarterly (3 mo)'],['halfyearly','Half-Yearly (6 mo)'],['yearly','Yearly (12 mo)']];
+  const planOpts = plans.map(([v,l]) => '<option value="'+v+'">'+l+'</option>').join('');
+  const html = '<div style="padding:4px 0">'
+    + '<div style="margin-bottom:12px"><label style="font-size:11px;font-weight:700;color:var(--text-3);text-transform:uppercase">Plan</label>'
+    + '<select id="rp2_plan" style="width:100%;margin-top:4px;padding:8px;background:var(--bg-2);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px">'+planOpts+'</select></div>'
+    + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">'
+    + '<div><label style="font-size:11px;font-weight:700;color:var(--text-3);text-transform:uppercase">Amount (₹)</label><input id="rp2_amount" type="number" value="'+Math.round(defaultPrice)+'" style="width:100%;margin-top:4px;padding:8px;background:var(--bg-2);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px" /></div>'
+    + '<div><label style="font-size:11px;font-weight:700;color:var(--text-3);text-transform:uppercase">Mode</label><select id="rp2_mode" style="width:100%;margin-top:4px;padding:8px;background:var(--bg-2);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px"><option value="upi">UPI</option><option value="cash">Cash</option><option value="bank">Bank Transfer</option><option value="cheque">Cheque</option></select></div>'
+    + '</div>'
+    + '<div style="margin-bottom:12px"><label style="font-size:11px;font-weight:700;color:var(--text-3);text-transform:uppercase">Reference / UTR</label><input id="rp2_ref" placeholder="UPI ref, UTR, cheque no..." style="width:100%;margin-top:4px;padding:8px;background:var(--bg-2);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px" /></div>'
+    + '</div>';
+
+  const confirmed = await mt_confirmDialog('💰 Record Payment — ' + stationName, html, 'Record Payment');
+  if (!confirmed) return;
+  const plan   = document.getElementById('rp2_plan')?.value || 'monthly';
+  const amount = parseFloat(document.getElementById('rp2_amount')?.value) || 0;
+  const mode   = document.getElementById('rp2_mode')?.value || 'upi';
+  const ref    = document.getElementById('rp2_ref')?.value?.trim() || '';
+  const months = { monthly:1, quarterly:3, halfyearly:6, yearly:12 }[plan] || 1;
+  if (!amount) { mt_toast('Enter a valid amount', 'error'); return; }
+  try {
+    const token = typeof getAuthToken === 'function' ? getAuthToken() : '';
+    const resp = await fetch('/api/subscriptions/' + encodeURIComponent(tenantId) + '/payments', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+      body: JSON.stringify({ plan, amount, payment_mode: mode, reference: ref, months })
+    });
+    if (!resp.ok) { const r = await resp.json(); mt_toast(r.error || 'Failed', 'error'); return; }
+    mt_toast('✅ Payment recorded — subscription extended!', 'success');
+    await mt_loadBillingData();
+  } catch(e) { mt_toast('Error: ' + e.message, 'error'); }
+}
+
+async function mt_subSettingsFromBilling(tenantId, stationName) {
+  try {
+    const token = typeof getAuthToken === 'function' ? getAuthToken() : '';
+    const resp = await fetch('/api/subscriptions/' + encodeURIComponent(tenantId), { headers: { 'Authorization': 'Bearer ' + token } });
+    const sub = await resp.json();
+    const html = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">'
+      + '<div><label style="font-size:11px;font-weight:700;color:var(--text-3);text-transform:uppercase">Status</label>'
+      + '<select id="ss2_status" style="width:100%;margin-top:4px;padding:8px;background:var(--bg-2);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px">'
+      + ['trial','active','suspended'].map(s => '<option value="'+s+'" '+(sub.status===s?'selected':'')+'>'+{trial:'Trial',active:'Active',suspended:'Suspended'}[s]+'</option>').join('')
+      + '</select></div>'
+      + '<div><label style="font-size:11px;font-weight:700;color:var(--text-3);text-transform:uppercase">Trial Days</label>'
+      + '<input id="ss2_trial" type="number" value="'+(sub.trial_days||30)+'" style="width:100%;margin-top:4px;padding:8px;background:var(--bg-2);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px" /></div>'
+      + '</div>'
+      + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">'
+      + '<div><label style="font-size:11px;font-weight:700;color:var(--text-3);text-transform:uppercase">Monthly Price (₹)</label>'
+      + '<input id="ss2_price" type="number" value="'+(sub.price_monthly||0)+'" style="width:100%;margin-top:4px;padding:8px;background:var(--bg-2);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px" /></div>'
+      + '<div><label style="font-size:11px;font-weight:700;color:var(--text-3);text-transform:uppercase">Grace Days</label>'
+      + '<input id="ss2_grace" type="number" value="'+(sub.grace_days||3)+'" style="width:100%;margin-top:4px;padding:8px;background:var(--bg-2);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px" /></div>'
+      + '</div>'
+      + '<div><label style="font-size:11px;font-weight:700;color:var(--text-3);text-transform:uppercase">Owner WhatsApp</label>'
+      + '<input id="ss2_phone" value="'+(sub.owner_phone||'')+'" placeholder="+91XXXXXXXXXX" style="width:100%;margin-top:4px;padding:8px;background:var(--bg-2);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px" /></div>';
+
+    const confirmed = await mt_confirmDialog('⚙️ Settings — ' + stationName, html, 'Save Settings');
+    if (!confirmed) return;
+    const token2 = typeof getAuthToken === 'function' ? getAuthToken() : '';
+    const r2 = await fetch('/api/subscriptions/' + encodeURIComponent(tenantId), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token2 },
+      body: JSON.stringify({
+        status: document.getElementById('ss2_status')?.value,
+        trial_days: parseInt(document.getElementById('ss2_trial')?.value)||30,
+        price_monthly: parseFloat(document.getElementById('ss2_price')?.value)||0,
+        grace_days: parseInt(document.getElementById('ss2_grace')?.value)||3,
+        owner_phone: document.getElementById('ss2_phone')?.value?.trim()||''
+      })
+    });
+    if (!r2.ok) { const e = await r2.json(); mt_toast(e.error||'Save failed','error'); return; }
+    mt_toast('✅ Settings saved', 'success');
+    await mt_loadBillingData();
+  } catch(e) { mt_toast('Error: ' + e.message, 'error'); }
+}
+
+function mt_confirmDialog(title, bodyHtml, confirmLabel) {
+  return new Promise(resolve => {
+    const id = 'mtConfirm_' + Date.now();
+    const overlay = document.createElement('div');
+    overlay.setAttribute('data-mtconfirm', '1');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:10020;display:flex;align-items:center;justify-content:center;padding:20px';
+    overlay.innerHTML = '<div style="background:var(--bg-1);border:1px solid var(--border);border-radius:12px;padding:20px;width:100%;max-width:420px;max-height:80vh;overflow-y:auto">'
+      + '<div style="font-size:15px;font-weight:800;color:var(--text-0);margin-bottom:16px">'+title+'</div>'
+      + bodyHtml
+      + '<div style="display:flex;gap:8px;margin-top:16px">'
+      + '<div style="display:flex;gap:8px;margin-top:16px">'
+      + '<button onclick="this.closest(\'[data-mtconfirm]\').remove();window._mtConfirmResolve(false)" style="flex:1;background:var(--bg-2);border:1px solid var(--border);color:var(--text-2);border-radius:6px;padding:10px;font-size:13px;font-weight:700;cursor:pointer">Cancel</button>'
+      + '<button onclick="this.closest(\'[data-mtconfirm]\').remove();window._mtConfirmResolve(true)" style="flex:1;background:var(--accent);border:none;color:#000;border-radius:6px;padding:10px;font-size:13px;font-weight:700;cursor:pointer">'+confirmLabel+'</button>'
+    window._mtConfirmResolve = resolve;
+    document.body.appendChild(overlay);
+  });
 }
 
 async function mt_openCompareStations() {
