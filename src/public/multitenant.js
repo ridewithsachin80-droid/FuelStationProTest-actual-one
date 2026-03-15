@@ -283,7 +283,7 @@ function mt_showTenantForm(existing) {
               <label class="form-label">Available Plans</label>
               <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:4px" id="tPlanCards">
                 <label style="display:flex;align-items:center;gap:8px;padding:10px 12px;border:1px solid rgba(212,148,15,0.4);border-radius:8px;cursor:pointer;background:rgba(212,148,15,0.06)">
-                  <input type="checkbox" id="tPlan_monthly" checked style="accent-color:var(--accent)" />
+                  <input type="checkbox" id="tPlan_monthly" style="accent-color:var(--accent)" />
                   <div><div style="font-size:12px;font-weight:700;color:var(--text-0)">Monthly</div>
                   <div style="font-size:11px;color:var(--text-3)">₹<span id="tPrice_monthly">999</span>/mo</div></div>
                 </label>
@@ -302,6 +302,15 @@ function mt_showTenantForm(existing) {
                   <div><div style="font-size:12px;font-weight:700;color:var(--text-0)">Yearly <span style="font-size:10px;color:var(--green);font-weight:700">15% off</span></div>
                   <div style="font-size:11px;color:var(--text-3)">₹<span id="tPrice_yearly">10190</span> / yr</div></div>
                 </label>
+                <script>
+                  (function(){
+                    // Default: all 4 plans checked
+                    ['monthly','quarterly','halfyearly','yearly'].forEach(function(p){
+                      var el = document.getElementById('tPlan_'+p);
+                      if(el) el.checked = true;
+                    });
+                  })();
+                </script>
               </div>
               <div style="font-size:10px;color:var(--text-3);margin-top:6px">✓ Check the plans you want to offer this station. Station owner can choose when renewing.</div>
             </div>
