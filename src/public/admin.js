@@ -6,6 +6,115 @@
 // ═══════════════════════════════════════════════════════════
 
 // ── DASHBOARD ────────────────────────────────────────────────
+
+// ── ALLOCATION CONFLICT AUDIT — scans all saved allocations for overlaps ─────
+window._renderAllocConflictBanner = function(D2, allocObj) {
+  try {
+    if (!D2 || !allocObj) return '';
+    const shifts2 = D2.shifts || [];
+    if (shifts2.length < 2) return '';
+
+    // Self-contained overlap check — no external dependencies
+    function _localOverlap(sA, sB) {
+      var toMin = function(t) { var p=(t||'00:00').split(':'); return parseInt(p[0]||0)*60+parseInt(p[1]||0); };
+      var as=toMin(sA.start), ae=toMin(sA.end), bs=toMin(sB.start), be=toMin(sB.end);
+      // overnight: end <= start means crosses midnight, add 1440
+      var ae2 = ae <= as ? ae+1440 : ae;
+      var be2 = be <= bs ? be+1440 : be;
+      // a shift equal start+end (e.g. 06:00-06:00) = full 24h
+      if (ae2 === as) ae2 = as + 1440;
+      if (be2 === bs) be2 = bs + 1440;
+      function ov(a1,a2,b1,b2){ return a1 < b2 && a2 > b1; }
+      return ov(as,ae2,bs,be2) || ov(as+1440,ae2+1440,bs,be2) || ov(as,ae2,bs+1440,be2+1440);
+    }
+
+    // Self-contained sanitize — no external dependencies
+    function _san(s) { return String(s||'').replace(/[<>&"']/g, function(c){return({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'}[c]);}); }
+
+    var allConflicts = [];
+    var allKeys = Object.keys(allocObj);
+
+    allKeys.forEach(function(dkA) {
+      if (!dkA || dkA.length < 12) return;
+      var date = dkA.slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return;
+      var shiftNameA = dkA.slice(11);
+      var sA = null;
+      for (var i=0;i<shifts2.length;i++) { if (shifts2[i].name === shiftNameA) { sA=shifts2[i]; break; } }
+      if (!sA) return;
+      var allocA = allocObj[dkA] || {};
+      var nKeysA = Object.keys(allocA);
+      if (nKeysA.length === 0) return;
+
+      allKeys.forEach(function(dkB) {
+        if (dkB <= dkA) return;
+        if (dkB.slice(0,10) !== date) return;
+        var shiftNameB = dkB.slice(11);
+        var sB = null;
+        for (var j=0;j<shifts2.length;j++) { if (shifts2[j].name === shiftNameB) { sB=shifts2[j]; break; } }
+        if (!sB) return;
+        if (!_localOverlap(sA, sB)) return;
+        var allocB = allocObj[dkB] || {};
+
+        nKeysA.forEach(function(nKey) {
+          if (!allocB[nKey]) return;
+          var empA = null, empB = null;
+          for (var k=0;k<(D2.employees||[]).length;k++) {
+            if (parseInt(D2.employees[k].id) === parseInt(allocA[nKey])) empA = D2.employees[k];
+            if (parseInt(D2.employees[k].id) === parseInt(allocB[nKey])) empB = D2.employees[k];
+          }
+          var nParts = nKey.split('_');
+          var pumpId = nParts[0], nozzle = nParts[1];
+          var pump2 = null;
+          for (var m=0;m<(D2.pumps||[]).length;m++) { if (String(D2.pumps[m].id)===pumpId) { pump2=D2.pumps[m]; break; } }
+          allConflicts.push({
+            date: date, nKey: nKey, pumpId: pumpId, nozzle: nozzle,
+            pump: pump2 ? pump2.name : ('Pump '+pumpId),
+            shiftA: shiftNameA, shiftB: shiftNameB,
+            empA: empA ? empA.name : '?', empB: empB ? empB.name : '?'
+          });
+        });
+      });
+    });
+
+    console.log('[ConflictBanner] scanned', allKeys.length, 'keys, found', allConflicts.length, 'conflicts');
+    if (allConflicts.length === 0) return '';
+
+    var rows = allConflicts.map(function(c) {
+      var dateLabel = new Date(c.date).toLocaleDateString('en-IN', {day:'numeric',month:'short'});
+      return '<div style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:rgba(239,68,68,0.06);border-radius:6px;margin-bottom:6px;flex-wrap:wrap;font-size:12px">'
+        + '<span style="color:var(--red);font-weight:700;white-space:nowrap">⚠ '+_san(c.pump)+' · N'+c.nozzle+' · '+dateLabel+'</span>'
+        + '<span style="color:var(--text-2);white-space:nowrap"><strong>'+_san(c.shiftA)+'</strong> → '+_san(c.empA)+'</span>'
+        + '<span style="color:var(--text-3)">vs</span>'
+        + '<span style="color:var(--text-2);white-space:nowrap"><strong>'+_san(c.shiftB)+'</strong> → '+_san(c.empB)+'</span>'
+        + '<div style="display:flex;gap:6px;margin-left:auto;flex-shrink:0">'
+        + '<button class="btn btn-ghost btn-sm" style="font-size:10px;color:var(--red);border-color:rgba(239,68,68,0.4)" onclick="window._fixAlloc(this)" data-shift="'+c.shiftA+'" data-date="'+c.date+'">Fix '+_san(c.shiftA)+'</button>'
+        + '<button class="btn btn-ghost btn-sm" style="font-size:10px;color:var(--red);border-color:rgba(239,68,68,0.4)" onclick="window._fixAlloc(this)" data-shift="'+c.shiftB+'" data-date="'+c.date+'">Fix '+_san(c.shiftB)+'</button>'
+        + '</div></div>';
+    }).join('');
+
+    return '<div style="padding:12px 16px;background:rgba(239,68,68,0.06);border:1px solid rgba(239,68,68,0.3);border-radius:10px;margin-bottom:16px">'
+      + '<div style="font-size:13px;font-weight:700;color:var(--red);margin-bottom:10px">'
+      + '⚠️ '+allConflicts.length+' pump conflict'+(allConflicts.length>1?'s':'')+' — same nozzle assigned to two overlapping shifts'
+      + '</div>'+rows
+      + '<div style="font-size:11px;color:var(--text-3);margin-top:8px">Use Fix buttons to open that shift on that date, then click ✕ on the conflicting assignment.</div>'
+      + '</div>';
+  } catch(e) {
+    console.error('[ConflictBanner] ERROR:', e.message, e.stack);
+    return '';
+  }
+};
+
+// Helper called by conflict banner Fix buttons
+window._fixAlloc = function(btn) {
+  var shift = btn.getAttribute('data-shift');
+  var date  = btn.getAttribute('data-date');
+  if (shift) allocShift = shift;
+  if (date)  allocDate  = date;
+  window.staffTab = 'allocation';
+  renderPage();
+};
+
 // ── Normalize null shift times — auto-heals missing start/end in DB ─────────
 // Saves corrected shifts back to DB so they're fixed permanently after first load.
 function _normalizeShiftTimes(shifts) {
@@ -892,7 +1001,14 @@ function renderStaff(D) {
           `<option value="${e.id}" ${emp && parseInt(e.id)===parseInt(emp.id) ? 'selected' : ''}>${sanitize(e.name)}</option>`
         ).join('');
 
-        return `<td style="padding:5px;background:${isSelected?'rgba(212,148,15,0.04)':isToday?'rgba(34,197,94,0.03)':'transparent'};border-right:1px solid var(--border-light);vertical-align:middle;min-width:110px">
+        // Check if this nozzle has a conflict on this date across other shifts
+        const cellHasConflict = (APP.data.shifts||[]).some(otherS => {
+          if (otherS.name === allocShift) return false;
+          if (!_shiftsOverlap((APP.data.shifts||[]).find(s=>s.name===allocShift)||{}, otherS)) return false;
+          const otherDk = date+'_'+otherS.name;
+          return !!(allocations[otherDk]?.[nKey]);
+        });
+        return `<td style="padding:5px;background:${cellHasConflict?'rgba(239,68,68,0.05)':isSelected?'rgba(212,148,15,0.04)':isToday?'rgba(34,197,94,0.03)':'transparent'};border-right:1px solid ${cellHasConflict?'rgba(239,68,68,0.3)':'var(--border-light)'};vertical-align:middle;min-width:110px">
           ${emp ? `
             <div style="display:flex;align-items:center;gap:5px;background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.25);border-radius:7px;padding:5px 7px;margin-bottom:4px">
               <span style="width:22px;height:22px;border-radius:6px;background:${empColor(emp)};display:grid;place-items:center;color:#fff;font-size:9px;font-weight:800;flex-shrink:0">${empInitials(emp.name)}</span>
@@ -1065,6 +1181,7 @@ function renderStaff(D) {
 
   } else if (window.staffTab === 'allocation') {
     tabContent = `
+      ${window._renderAllocConflictBanner ? window._renderAllocConflictBanner(APP.data, allocations) : ''}
       <div class="card mb-24">
         <div class="card-head">
           <h4>⛽ Pump & Nozzle Allocation Board</h4>
@@ -8223,13 +8340,95 @@ function removeAllocForDate(pumpId, nozzle, date) {
 }
 
 // Direct single-click assign for week grid (no modal needed)
+
+// ── PUMP ALLOCATION CONFLICT DETECTION ───────────────────────────────────────
+// Returns conflict info if the same nozzle on the same date is already assigned
+// in another shift whose time overlaps with shiftName. Returns null if clear.
+function _shiftsOverlap(s1, s2) {
+  // Parse HH:MM to minutes-since-midnight
+  const toMin = t => { const [h,m] = (t||'00:00').split(':').map(Number); return h*60+m; };
+  const s1s = toMin(s1.start), s1e = toMin(s1.end);
+  const s2s = toMin(s2.start), s2e = toMin(s2.end);
+  // Normalize overnight shifts (end < start means crosses midnight)
+  const s1End = s1e <= s1s ? s1e + 1440 : s1e;
+  const s2End = s2e <= s2s ? s2e + 1440 : s2e;
+  // Check overlap — also check with +1440 offset for overnight cross
+  const overlaps = (as, ae, bs, be) => as < be && ae > bs;
+  return overlaps(s1s, s1End, s2s, s2End)
+      || overlaps(s1s + 1440, s1End + 1440, s2s, s2End)
+      || overlaps(s1s, s1End, s2s + 1440, s2End + 1440);
+}
+
+function _findNozzleConflict(date, shiftName, pumpId, nozzle) {
+  const D = APP.data;
+  const shifts = D.shifts || [];
+  const currentShift = shifts.find(s => s.name === shiftName);
+  if (!currentShift) return null;
+  const nozzleKey = `${String(pumpId)}_${nozzle}`;
+  const conflicts = [];
+  // Check all other shifts on this date
+  shifts.filter(s => s.name !== shiftName).forEach(otherShift => {
+    const dk = date + '_' + otherShift.name;
+    const otherAlloc = allocations[dk];
+    if (!otherAlloc || !otherAlloc[nozzleKey]) return;
+    if (!_shiftsOverlap(currentShift, otherShift)) return;
+    const existingEmpId = otherAlloc[nozzleKey];
+    const emp = D.employees.find(e => parseInt(e.id) === parseInt(existingEmpId));
+    conflicts.push({
+      shiftName: otherShift.name,
+      shiftTime: `${otherShift.start||'?'}–${otherShift.end||'?'}`,
+      empName: emp ? emp.name : 'Unknown',
+    });
+  });
+  return conflicts.length > 0 ? conflicts : null;
+}
+
+// Called when user confirms override of a conflict
+function _assignNozzleConfirmed(pumpId, nozzle, empId, date, shiftNameOverride) {
+  const useShift = shiftNameOverride || allocShift;
+  const useDate  = date || allocDate;
+  const dk = useDate + '_' + useShift;
+  if (!allocations[dk]) allocations[dk] = {};
+  allocations[dk][`${String(pumpId)}_${nozzle}`] = parseInt(empId);
+  const emp  = APP.data.employees.find(e => parseInt(e.id) === parseInt(empId));
+  const pump = APP.data.pumps.find(p => String(p.id) === String(pumpId));
+  saveAllocations();
+  closeModal();
+  toast(`${emp?.name} → ${pump?.name} Nozzle ${nozzle} (override)`, 'success');
+  renderPage();
+}
+window._assignNozzleConfirmed = _assignNozzleConfirmed;
+
 function assignNozzleForDate(pumpId, nozzle, date, empId) {
+  const emp  = APP.data.employees.find(e => parseInt(e.id) === parseInt(empId));
+  const pump = APP.data.pumps.find(p => String(p.id) === String(pumpId));
+  const d    = new Date(date).toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short'});
+  // Conflict check
+  const conflicts = _findNozzleConflict(date, allocShift, pumpId, nozzle);
+  if (conflicts) {
+    const conflictLines = conflicts.map(c =>
+      `<div style="padding:8px 12px;background:rgba(239,68,68,0.06);border:1px solid rgba(239,68,68,0.2);border-radius:6px;margin-bottom:6px;font-size:12px">
+        <span style="color:var(--red);font-weight:700">⚠ ${sanitize(c.shiftName)}</span>
+        <span style="color:var(--text-3);margin-left:6px">${c.shiftTime}</span>
+        <span style="color:var(--text-2);margin-left:6px">→ <strong>${sanitize(c.empName)}</strong> already assigned</span>
+      </div>`).join('');
+    openModal('⚠️ Pump Conflict Detected',
+      `<div style="margin-bottom:14px;font-size:13px;color:var(--text-1)">
+        <strong style="color:var(--text-0)">${pump?.name} — Nozzle ${nozzle}</strong> on <strong>${d}</strong>
+        is already assigned in an overlapping shift:
+       </div>
+       ${conflictLines}
+       <div style="margin-top:12px;font-size:13px;color:var(--text-2)">
+         Assigning <strong>${emp?.name}</strong> to <strong>${allocShift}</strong> will create a double-allocation.
+       </div>`,
+      `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+       <button class="btn btn-red" onclick="_assignNozzleConfirmed(${pumpId},'${nozzle}',${empId},'${date}','${allocShift}')">⚠ Assign Anyway</button>`
+    );
+    return;
+  }
   const dk = date + '_' + allocShift;
   if (!allocations[dk]) allocations[dk] = {};
   allocations[dk][`${String(pumpId)}_${nozzle}`] = empId;
-  const emp = APP.data.employees.find(e => parseInt(e.id) === parseInt(empId));
-  const pump = APP.data.pumps.find(p => String(p.id) === String(pumpId));
-  const d = new Date(date).toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short'});
   saveAllocations();
   toast(`${emp?.name} → ${pump?.name} N${nozzle} on ${d}`, 'success');
   renderPage();
@@ -8240,6 +8439,31 @@ function assignNozzle(pumpId, nozzle, empIdStr) {
   const dk = _allocKey();
   if (!allocations[dk]) allocations[dk] = {};
   if (empId) {
+    // Conflict check before assigning
+    const conflicts = _findNozzleConflict(allocDate, allocShift, pumpId, nozzle);
+    if (conflicts) {
+      const emp  = APP.data.employees.find(e => parseInt(e.id) === empId);
+      const pump = APP.data.pumps.find(p => String(p.id) === String(pumpId));
+      const conflictLines = conflicts.map(c =>
+        `<div style="padding:8px 12px;background:rgba(239,68,68,0.06);border:1px solid rgba(239,68,68,0.2);border-radius:6px;margin-bottom:6px;font-size:12px">
+          <span style="color:var(--red);font-weight:700">⚠ ${sanitize(c.shiftName)}</span>
+          <span style="color:var(--text-3);margin-left:6px">${c.shiftTime}</span>
+          <span style="color:var(--text-2);margin-left:6px">→ <strong>${sanitize(c.empName)}</strong> already assigned</span>
+        </div>`).join('');
+      openModal('⚠️ Pump Conflict Detected',
+        `<div style="margin-bottom:14px;font-size:13px;color:var(--text-1)">
+          <strong style="color:var(--text-0)">${pump?.name} — Nozzle ${nozzle}</strong> on <strong>${allocDate}</strong>
+          is already assigned in an overlapping shift:
+         </div>
+         ${conflictLines}
+         <div style="margin-top:12px;font-size:13px;color:var(--text-2)">
+           Assigning <strong>${emp?.name}</strong> to <strong>${allocShift}</strong> will create a double-allocation.
+         </div>`,
+        `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+         <button class="btn btn-red" onclick="_assignNozzleConfirmed(${pumpId},'${nozzle}',${empId},null,null)">⚠ Assign Anyway</button>`
+      );
+      return;
+    }
     allocations[dk][`${String(pumpId)}_${nozzle}`] = empId;
     const emp = APP.data.employees.find(e => parseInt(e.id) === parseInt(empId));
     const pump = APP.data.pumps.find(p => String(p.id) === String(pumpId));
@@ -8289,10 +8513,14 @@ function openChangeAllocModal(pumpId, nozzle) {
   const empItems = shiftEmps.map(e => {
     const isCurrent = e.id === currentEmpId;
     const nozzleCount = Object.values(allocations[dk] || {}).filter(id => id === e.id).length;
-    return `<div style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:${isCurrent ? 'rgba(34,197,94,0.06)' : 'var(--bg-0)'};border:1px solid ${isCurrent ? 'rgba(34,197,94,0.25)' : 'var(--border-light)'};border-radius:var(--radius-sm);cursor:pointer;margin-bottom:6px;transition:border-color 0.15s" onclick="assignNozzle(${pumpId},'${nozzle}','${e.id}');closeModal();" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='${isCurrent ? 'rgba(34,197,94,0.25)' : 'var(--border-light)'}'">
+    const empConflicts = _findNozzleConflict(allocDate, allocShift, pumpId, nozzle);
+    // An employee has a conflict if a different person is already on this nozzle in an overlapping shift
+    const hasConflict = !isCurrent && empConflicts && empConflicts.length > 0;
+    const conflictTip = hasConflict ? empConflicts.map(c=>`${c.shiftName}: ${c.empName}`).join(', ') : '';
+    return `<div style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:${isCurrent ? 'rgba(34,197,94,0.06)' : hasConflict ? 'rgba(239,68,68,0.03)' : 'var(--bg-0)'};border:1px solid ${isCurrent ? 'rgba(34,197,94,0.25)' : hasConflict ? 'rgba(239,68,68,0.25)' : 'var(--border-light)'};border-radius:var(--radius-sm);cursor:pointer;margin-bottom:6px;transition:border-color 0.15s" onclick="assignNozzle(${pumpId},'${nozzle}','${e.id}');closeModal();" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='${isCurrent ? 'rgba(34,197,94,0.25)' : hasConflict ? 'rgba(239,68,68,0.25)' : 'var(--border-light)'}'">
       <span style="width:30px;height:30px;border-radius:8px;background:${empColor(e)};display:grid;place-items:center;color:#fff;font-size:10px;font-weight:800;flex-shrink:0">${empInitials(e.name)}</span>
-      <div style="flex:1"><div class="fw-700" style="color:var(--text-0);font-size:13px">${e.name}</div><div style="font-size:10px;color:var(--text-3)">${e.role} · ${nozzleCount} nozzle${nozzleCount !== 1 ? 's' : ''}</div></div>
-      ${isCurrent ? '<span class="badge badge-green">Current</span>' : ''}
+      <div style="flex:1"><div class="fw-700" style="color:var(--text-0);font-size:13px">${e.name}</div><div style="font-size:10px;color:var(--text-3)">${e.role} · ${nozzleCount} nozzle${nozzleCount !== 1 ? 's' : ''}${hasConflict ? ' · <span style="color:var(--red)">⚠ conflict: '+conflictTip+'</span>' : ''}</div></div>
+      ${isCurrent ? '<span class="badge badge-green">Current</span>' : hasConflict ? '<span style="font-size:10px;color:var(--red);font-weight:700">⚠ Overlap</span>' : ''}
     </div>`;
   }).join('') || '<p style="color:var(--text-3);font-size:13px">No rostered employees found for this date & shift. Set the roster first.</p>';
 
