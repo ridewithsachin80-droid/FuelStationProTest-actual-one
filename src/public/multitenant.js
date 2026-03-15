@@ -267,6 +267,20 @@ function mt_showTenantForm(existing) {
               </div>
             </div>
           </div>
+          <div style="background:var(--bg-0);border-radius:var(--radius-sm);border:1px solid rgba(212,148,15,0.3);padding:14px;margin-top:12px">
+            <div style="font-size:11px;font-weight:700;color:var(--accent-light);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px">💳 Subscription Settings</div>
+            <div class="form-row">
+              <div class="form-group mb-0"><label class="form-label">Trial Period (days)</label>
+                <input class="form-input mono" id="tTrialDays" type="number" value="30" min="1" max="365" placeholder="30" />
+              </div>
+              <div class="form-group mb-0"><label class="form-label">Monthly Price (₹)</label>
+                <input class="form-input mono" id="tPriceMonthly" type="number" value="999" min="0" placeholder="999" />
+              </div>
+            </div>
+            <div class="form-group mt-10 mb-0"><label class="form-label">Owner WhatsApp (for reminders)</label>
+              <input class="form-input" id="tOwnerWA" type="tel" inputmode="numeric" maxlength="10" oninput="this.value=this.value.replace(/[^0-9]/g,'')" placeholder="10-digit mobile number" />
+            </div>
+          </div>
           ` : ''}
         </div>
         <input type="hidden" id="tId" value="${newId}" />
@@ -299,8 +313,22 @@ async function mt_saveTenant(isEdit) {
         await TenantAPI.update(id, { name, location, ownerName, phone, icon });
         mt_toast(name + ' updated', 'success');
       } else {
-        await TenantAPI.create({ name, location, ownerName, phone, icon, adminUser, adminPass });
-        mt_toast(name + ' created!', 'success');
+        const result = await TenantAPI.create({ name, location, ownerName, phone, icon, adminUser, adminPass });
+        // Create subscription record for the new station
+        const trialDays    = parseInt(document.getElementById('tTrialDays')?.value) || 30;
+        const priceMonthly = parseFloat(document.getElementById('tPriceMonthly')?.value) || 0;
+        const ownerWA      = (document.getElementById('tOwnerWA')?.value || '').trim();
+        const newTenantId  = result?.id || id;
+        if (newTenantId) {
+          try {
+            await fetch('/api/subscriptions/' + encodeURIComponent(newTenantId), {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + (typeof getAuthToken === 'function' ? getAuthToken() : '') },
+              body: JSON.stringify({ plan: 'trial', status: 'trial', trial_days: trialDays, price_monthly: priceMonthly, grace_days: 3, owner_phone: ownerWA ? '+91' + ownerWA : '' })
+            });
+          } catch(e) { console.warn('[Subscription] Could not create subscription record:', e.message); }
+        }
+        mt_toast(name + ' created with ' + trialDays + '-day trial!', 'success');
       }
       if (typeof mt_getTenants_async === 'function') await mt_getTenants_async();
       mt_showSelector();
