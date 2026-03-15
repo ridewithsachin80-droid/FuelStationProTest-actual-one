@@ -274,8 +274,35 @@ function mt_showTenantForm(existing) {
                 <input class="form-input mono" id="tTrialDays" type="number" value="30" min="1" max="365" placeholder="30" />
               </div>
               <div class="form-group mb-0"><label class="form-label">Monthly Price (₹)</label>
-                <input class="form-input mono" id="tPriceMonthly" type="number" value="999" min="0" placeholder="999" />
+                <input class="form-input mono" id="tPriceMonthly" type="number" value="999" min="0" placeholder="999"
+                  oninput="mt_updatePlanPrices()" />
               </div>
+            </div>
+            <div class="form-group mt-10 mb-0">
+              <label class="form-label">Available Plans</label>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:4px" id="tPlanCards">
+                <label style="display:flex;align-items:center;gap:8px;padding:10px 12px;border:1px solid rgba(212,148,15,0.4);border-radius:8px;cursor:pointer;background:rgba(212,148,15,0.06)">
+                  <input type="checkbox" id="tPlan_monthly" checked style="accent-color:var(--accent)" />
+                  <div><div style="font-size:12px;font-weight:700;color:var(--text-0)">Monthly</div>
+                  <div style="font-size:11px;color:var(--text-3)">₹<span id="tPrice_monthly">999</span>/mo</div></div>
+                </label>
+                <label style="display:flex;align-items:center;gap:8px;padding:10px 12px;border:1px solid var(--border);border-radius:8px;cursor:pointer">
+                  <input type="checkbox" id="tPlan_quarterly" style="accent-color:var(--accent)" />
+                  <div><div style="font-size:12px;font-weight:700;color:var(--text-0)">Quarterly <span style="font-size:10px;color:var(--green);font-weight:700">5% off</span></div>
+                  <div style="font-size:11px;color:var(--text-3)">₹<span id="tPrice_quarterly">2847</span> / 3 mo</div></div>
+                </label>
+                <label style="display:flex;align-items:center;gap:8px;padding:10px 12px;border:1px solid var(--border);border-radius:8px;cursor:pointer">
+                  <input type="checkbox" id="tPlan_halfyearly" style="accent-color:var(--accent)" />
+                  <div><div style="font-size:12px;font-weight:700;color:var(--text-0)">Half-Yearly <span style="font-size:10px;color:var(--green);font-weight:700">10% off</span></div>
+                  <div style="font-size:11px;color:var(--text-3)">₹<span id="tPrice_halfyearly">5394</span> / 6 mo</div></div>
+                </label>
+                <label style="display:flex;align-items:center;gap:8px;padding:10px 12px;border:1px solid var(--border);border-radius:8px;cursor:pointer">
+                  <input type="checkbox" id="tPlan_yearly" style="accent-color:var(--accent)" />
+                  <div><div style="font-size:12px;font-weight:700;color:var(--text-0)">Yearly <span style="font-size:10px;color:var(--green);font-weight:700">15% off</span></div>
+                  <div style="font-size:11px;color:var(--text-3)">₹<span id="tPrice_yearly">10190</span> / yr</div></div>
+                </label>
+              </div>
+              <div style="font-size:10px;color:var(--text-3);margin-top:6px">✓ Check the plans you want to offer this station. Station owner can choose when renewing.</div>
             </div>
             <div class="form-group mt-10 mb-0"><label class="form-label">Owner WhatsApp (for reminders)</label>
               <input class="form-input" id="tOwnerWA" type="tel" inputmode="numeric" maxlength="10" oninput="this.value=this.value.replace(/[^0-9]/g,'')" placeholder="10-digit mobile number" />
@@ -291,6 +318,15 @@ function mt_showTenantForm(existing) {
       </div>
     </div>
   `;
+}
+
+function mt_updatePlanPrices() {
+  const monthly = parseFloat(document.getElementById('tPriceMonthly')?.value) || 0;
+  const plans = { monthly:[1,0], quarterly:[3,5], halfyearly:[6,10], yearly:[12,15] };
+  Object.entries(plans).forEach(([p,[months,disc]]) => {
+    const el = document.getElementById('tPrice_'+p);
+    if (el) el.textContent = Math.round(monthly * months * (1 - disc/100)).toLocaleString('en-IN');
+  });
 }
 
 async function mt_saveTenant(isEdit) {
@@ -318,13 +354,27 @@ async function mt_saveTenant(isEdit) {
         const trialDays    = parseInt(document.getElementById('tTrialDays')?.value) || 30;
         const priceMonthly = parseFloat(document.getElementById('tPriceMonthly')?.value) || 0;
         const ownerWA      = (document.getElementById('tOwnerWA')?.value || '').trim();
+        // Collect enabled plans and their prices
+        const PLAN_MONTHS  = { monthly:1, quarterly:3, halfyearly:6, yearly:12 };
+        const PLAN_DISC    = { monthly:0, quarterly:5, halfyearly:10, yearly:15 };
+        const enabledPlans = Object.keys(PLAN_MONTHS).filter(p => document.getElementById('tPlan_'+p)?.checked);
+        const planPrices   = {};
+        enabledPlans.forEach(p => {
+          const disc = PLAN_DISC[p];
+          planPrices[p] = Math.round(priceMonthly * PLAN_MONTHS[p] * (1 - disc/100));
+        });
         const newTenantId  = result?.id || id;
         if (newTenantId) {
           try {
             await fetch('/api/subscriptions/' + encodeURIComponent(newTenantId), {
               method: 'PUT',
               headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + (typeof getAuthToken === 'function' ? getAuthToken() : '') },
-              body: JSON.stringify({ plan: 'trial', status: 'trial', trial_days: trialDays, price_monthly: priceMonthly, grace_days: 3, owner_phone: ownerWA ? '+91' + ownerWA : '' })
+              body: JSON.stringify({
+                plan: 'trial', status: 'trial', trial_days: trialDays,
+                price_monthly: priceMonthly, grace_days: 3,
+                owner_phone: ownerWA ? '+91' + ownerWA : '',
+                notes: 'Plans: ' + (enabledPlans.length ? enabledPlans.join(', ') : 'monthly') + ' | Prices: ' + JSON.stringify(planPrices)
+              })
             });
           } catch(e) { console.warn('[Subscription] Could not create subscription record:', e.message); }
         }
