@@ -1955,6 +1955,11 @@ function emp_vehParseSpeech(text) {
 }
 
 function emp_recordSale() {
+  // Block if subscription expired (read-only mode)
+  if (window._subStatus && window._subStatus.is_read_only) {
+    toast('🔒 Subscription expired — contact admin to renew before recording sales', 'error');
+    return;
+  }
   const l = parseFloat(document.getElementById('empSaleLiters')?.value);
   const a = parseFloat(document.getElementById('empSaleAmt')?.value);
   const v = emp_vehGetPlate();
@@ -2949,8 +2954,17 @@ function showLoginScreen() {
     '<div class="login-footer">FuelBunk Pro v3.0 &copy; 2026 &nbsp;·&nbsp; <a href="#" onclick="mt_switchStation();return false;" style="color:var(--accent-light);text-decoration:none;font-weight:600;">🏪 Switch Station</a></div>' +
     '</div></div>';
 
-  // Fetch employee list from server in background (refreshes dropdown even after cache clear)
+  // Fetch employee list + subscription status from server in background
   setTimeout(fetchPublicEmployees, 100);
+  setTimeout(function() {
+    var tenant = (typeof mt_getActiveTenant === 'function') ? mt_getActiveTenant() : null;
+    if (tenant && tenant.id) {
+      fetch('/api/public/subscription/' + encodeURIComponent(tenant.id))
+        .then(function(r) { return r.json(); })
+        .then(function(s) { window._subStatus = s; })
+        .catch(function() {});
+    }
+  }, 200);
   setTimeout(function() {
     var u = document.getElementById('adminUser');
     var p = document.getElementById('adminPass');
