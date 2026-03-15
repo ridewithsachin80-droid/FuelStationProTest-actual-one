@@ -7,6 +7,17 @@
 
 // ── DASHBOARD ────────────────────────────────────────────────
 
+// ── SUBSCRIPTION READ-ONLY GUARD ─────────────────────────────────────────────
+// Returns true and shows toast if subscription is expired (read-only mode).
+// Call at the top of any write action: if (subReadOnlyGuard()) return;
+function subReadOnlyGuard() {
+  if (window._subStatus && window._subStatus.is_read_only) {
+    toast('🔒 Subscription expired — contact your FuelBunk Pro admin to renew', 'error');
+    return true;
+  }
+  return false;
+}
+
 // ── ALLOCATION CONFLICT AUDIT — scans all saved allocations for overlaps ─────
 window._renderAllocConflictBanner = function(D2, allocObj) {
   try {
@@ -6343,6 +6354,7 @@ function renderPage() {
 // ── MODAL FORMS ──────────────────────────────────────────────
 
 function openSaleModal() {
+  if (subReadOnlyGuard()) return;
   const fuelOpts = FUEL_TYPES.map(f => `<option value="${f.id}">${f.name}</option>`).join('');
   const pumpOpts = APP.data.pumps.map(p => `<option value="${p.id}">${p.name} (${getFuel(p.fuelType).short})</option>`).join('');
   openModal('Record New Sale', `
@@ -6463,6 +6475,7 @@ async function saveSale() {
 const TANK_CAPACITIES = [10000, 16000, 20000];
 
 function openAddTankModal() {
+  if (subReadOnlyGuard()) return;
   const fuelOpts = FUEL_TYPES.map((f, i) =>
     `<label style="flex:1;cursor:pointer">
       <input type="radio" name="newTankFuelR" value="${f.id}" ${i===0?'checked':''} style="display:none" onchange="updateTankFuelPreview()">
@@ -6796,6 +6809,7 @@ function _cmRange(type) {
 }
 
 function openDipModal(preselect) {
+  if (subReadOnlyGuard()) return;
   // If called with a specific tankId, lock to that tank — no dropdown shown
   const lockedTank = preselect ? APP.data.tanks.find(t => t.id == preselect) : null;
   const firstTank  = lockedTank || APP.data.tanks[0];
@@ -7035,6 +7049,7 @@ async function saveDip() {
 }
 
 function openExpenseModal(prefillCategory) {
+  if (subReadOnlyGuard()) return;
   const categories = [
     { group: '🏪 Operating', items: ['Electricity', 'Rent', 'Salary', 'Maintenance', 'Insurance', 'Misc'] },
     { group: '🧾 Taxes', items: ['Local Sales Tax (Bill)', 'GST — Lube / Lubricants'] },
@@ -7304,6 +7319,7 @@ async function saveExpense() {
 }
 
 function openPurchaseModal() {
+  if (subReadOnlyGuard()) return;
   const fuelOpts = FUEL_TYPES.map(f => `<option value="${f.id}">${f.name}</option>`).join('');
   // Get default tax for first fuel type
   const defaultFuel = FUEL_TYPES[0]?.id || 'petrol';
@@ -9281,7 +9297,7 @@ let _billingLastFetch = 0;
 
 async function _fetchBilling() {
   try {
-    const resp = await fetch('/api/subscriptions', { headers: { 'Authorization': 'Bearer ' + (APP.token||'') } });
+    const resp = await fetch('/api/subscriptions', { headers: { 'Authorization': 'Bearer ' + (getAuthToken()||'') } });
     if (!resp.ok) return;
     _billingData = await resp.json();
     _billingLastFetch = Date.now();
@@ -9449,7 +9465,7 @@ async function savePayment() {
   try {
     const resp = await fetch('/api/subscriptions/' + encodeURIComponent(tid) + '/payments', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + (APP.token||'') },
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + (getAuthToken()||'') },
       body: JSON.stringify({ plan, amount, payment_mode: mode, reference: ref, months, notes })
     });
     const result = await resp.json();
@@ -9508,7 +9524,7 @@ async function saveSubSettings() {
   try {
     const resp = await fetch('/api/subscriptions/' + encodeURIComponent(tid), {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + (APP.token||'') },
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + (getAuthToken()||'') },
       body: JSON.stringify({ status, trial_days, price_monthly: price, grace_days: grace, owner_phone: phone, notes })
     });
     if (!resp.ok) { const r=await resp.json(); toast(r.error||'Save failed','error'); return; }
@@ -9523,7 +9539,7 @@ window.saveSubSettings = saveSubSettings;
 async function openPaymentHistoryModal(tenantId, stationName) {
   try {
     const resp = await fetch('/api/subscriptions/' + encodeURIComponent(tenantId) + '/payments', {
-      headers: { 'Authorization': 'Bearer ' + (APP.token||'') }
+      headers: { 'Authorization': 'Bearer ' + (getAuthToken()||'') }
     });
     const payments = await resp.json();
     const rows = payments.length > 0 ? payments.map(p => {
