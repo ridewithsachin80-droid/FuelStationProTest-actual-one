@@ -8660,9 +8660,6 @@ function empFormHTML(shiftOpts, vals) {
         </select>
       </div>
     </div>
-    <div class="form-group"><label class="form-label">Shift <span style="font-size:9px;color:var(--text-3);font-weight:400">(Ctrl/Cmd+click for multiple)</span></label>
-      <select class="form-input" id="empShift" multiple size="3" style="height:auto;padding:4px">${shiftOpts}</select>
-    </div>
     <div class="form-row">
       <div class="form-group"><label class="form-label">Phone</label><div style="display:flex;gap:8px"><input class="form-input" id="empPhoneCC" type="tel" inputmode="numeric" maxlength="4" placeholder="+91" value="${vals.phoneCC||'+91'}" style="width:72px;flex-shrink:0" /><input class="form-input" id="empPhone" type="tel" inputmode="numeric" maxlength="10" minlength="10" oninput="this.value=this.value.replace(/[^0-9]/g,'')" placeholder="10-digit number" value="${vals.phone||''}" style="flex:1" /></div></div>
       <div class="form-group"><label class="form-label">Monthly Salary (₹)</label><input class="form-input" id="empSalary" type="number" value="${vals.salary||12000}" /></div>
@@ -8683,9 +8680,7 @@ function empFormHTML(shiftOpts, vals) {
 }
 
 function openEmployeeModal() {
-  const D = APP.data;
-  const shiftOpts = D.shifts.map(s => `<option value="${s.name}">${s.name} (${s.start}–${s.end})</option>`).join('');
-  openModal('➕ Add Employee', empFormHTML(shiftOpts, {}),
+  openModal('➕ Add Employee', empFormHTML('', {}),
     `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-accent" onclick="addEmployee()">💾 Save Employee</button>`);
 }
 
@@ -8700,10 +8695,7 @@ function readEmpPermissions() {
 async function addEmployee() {
   const name = document.getElementById('empName')?.value?.trim();
   const role = document.getElementById('empRole')?.value;
-  const shiftEl = document.getElementById('empShift');
-  const shift = shiftEl
-    ? Array.from(shiftEl.selectedOptions).map(o => o.value).join(',')
-    : '';
+  const shift = ''; // Shift assigned via Roster, not at employee creation
   const phone = document.getElementById('empPhone')?.value?.trim();
   const salary = parseInt(document.getElementById('empSalary')?.value) || 12000;
   const empId  = (document.getElementById('empEmpId')?.value || '').trim().toUpperCase();
@@ -8738,12 +8730,8 @@ function openEditEmployeeModal(empId) {
   const D = APP.data;
   const e = D.employees.find(x => x.id === empId);
   if (!e) { toast('Employee not found — please refresh and try again', 'error'); return; }
-  const empShifts = (e.shift || '').split(',').map(s => s.trim()).filter(Boolean);
-  const shiftOpts = D.shifts.map(s =>
-    `<option value="${s.name}" ${empShifts.includes(s.name)?'selected':''}>${s.name} (${s.start}–${s.end})</option>`
-  ).join('');
   openModal('✏️ Edit Employee',
-    `<input type="hidden" id="editEmpId" value="${empId}" />` + empFormHTML(shiftOpts, e),
+    `<input type="hidden" id="editEmpId" value="${empId}" />` + empFormHTML('', e),
     `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-accent" onclick="saveEditEmployee()">💾 Save Changes</button>`
   );
 }
@@ -8771,14 +8759,8 @@ async function saveEditEmployee() {
   const oldName = oldEmp.name;
   const oldShift = oldEmp.shift;
 
-  // Collect selected shifts from multi-select
-  const shiftEl = document.getElementById('empShift');
-  const selectedShifts = shiftEl
-    ? Array.from(shiftEl.selectedOptions).map(o => o.value)
-    : (oldShift ? [oldShift] : []);
-  const newShift = selectedShifts.join(',');
-
-  D.employees[idx] = { ...oldEmp, name, role, shift: newShift, phone: phone||'', salary, empId: empEmpId||oldEmp.empId||'', aadhar: empAadhar||oldEmp.aadhar||'', permissions };
+  // Preserve existing shift — shift is managed via Roster, not this form
+  D.employees[idx] = { ...oldEmp, name, role, shift: oldShift||'', phone: phone||'', salary, empId: empEmpId||oldEmp.empId||'', aadhar: empAadhar||oldEmp.aadhar||'', permissions };
   try { await db.put('employees', D.employees[idx]); } catch(e) { console.warn('[EditEmployee]', e.message); }
 
   // FIX 4: propagate name change everywhere
