@@ -8,6 +8,7 @@
   },
   "scripts": {
     "start": "node src/server.js",
+    "prestart": "node scripts/setup.js",
     "dev": "node --watch src/server.js",
     "setup": "node scripts/setup.js",
     "generate-vapid": "node -e \"const wp=require('web-push');const k=wp.generateVAPIDKeys();console.log('\\nAdd these to your .env file:\\n');console.log('VAPID_PUBLIC_KEY=' + k.publicKey);console.log('VAPID_PRIVATE_KEY=' + k.privateKey);console.log('VAPID_MAILTO=mailto:admin@yourdomain.com\\n');\""
