@@ -270,49 +270,43 @@ function mt_showTenantForm(existing) {
           </div>
           <div style="background:var(--bg-0);border-radius:var(--radius-sm);border:1px solid rgba(212,148,15,0.3);padding:14px;margin-top:12px">
             <div style="font-size:11px;font-weight:700;color:var(--accent-light);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px">💳 Subscription Settings</div>
-            <div class="form-row">
-              <div class="form-group mb-0"><label class="form-label">Trial Period (days)</label>
-                <input class="form-input mono" id="tTrialDays" type="number" value="30" min="1" max="365" placeholder="30" />
-              </div>
-              <div class="form-group mb-0"><label class="form-label">Monthly Price (₹)</label>
-                <input class="form-input mono" id="tPriceMonthly" type="number" value="999" min="0" placeholder="999"
-                  oninput="mt_updatePlanPrices()" />
-              </div>
+            <div class="form-group mb-12">
+              <label class="form-label">Trial Period (days)</label>
+              <input class="form-input mono" id="tTrialDays" type="number" value="30" min="1" max="365" placeholder="30" style="max-width:160px" />
             </div>
-            <div class="form-group mt-10 mb-0">
-              <label class="form-label">Available Plans</label>
-              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:4px" id="tPlanCards">
-                <label style="display:flex;align-items:center;gap:8px;padding:10px 12px;border:1px solid rgba(212,148,15,0.4);border-radius:8px;cursor:pointer;background:rgba(212,148,15,0.06)">
-                  <input type="checkbox" id="tPlan_monthly" style="accent-color:var(--accent)" />
-                  <div><div style="font-size:12px;font-weight:700;color:var(--text-0)">Monthly</div>
-                  <div style="font-size:11px;color:var(--text-3)">₹<span id="tPrice_monthly">999</span>/mo</div></div>
-                </label>
-                <label style="display:flex;align-items:center;gap:8px;padding:10px 12px;border:1px solid var(--border);border-radius:8px;cursor:pointer">
-                  <input type="checkbox" id="tPlan_quarterly" style="accent-color:var(--accent)" />
-                  <div><div style="font-size:12px;font-weight:700;color:var(--text-0)">Quarterly <span style="font-size:10px;color:var(--green);font-weight:700">5% off</span></div>
-                  <div style="font-size:11px;color:var(--text-3)">₹<span id="tPrice_quarterly">2847</span> / 3 mo</div></div>
-                </label>
-                <label style="display:flex;align-items:center;gap:8px;padding:10px 12px;border:1px solid var(--border);border-radius:8px;cursor:pointer">
-                  <input type="checkbox" id="tPlan_halfyearly" style="accent-color:var(--accent)" />
-                  <div><div style="font-size:12px;font-weight:700;color:var(--text-0)">Half-Yearly <span style="font-size:10px;color:var(--green);font-weight:700">10% off</span></div>
-                  <div style="font-size:11px;color:var(--text-3)">₹<span id="tPrice_halfyearly">5394</span> / 6 mo</div></div>
-                </label>
-                <label style="display:flex;align-items:center;gap:8px;padding:10px 12px;border:1px solid var(--border);border-radius:8px;cursor:pointer">
-                  <input type="checkbox" id="tPlan_yearly" style="accent-color:var(--accent)" />
-                  <div><div style="font-size:12px;font-weight:700;color:var(--text-0)">Yearly <span style="font-size:10px;color:var(--green);font-weight:700">15% off</span></div>
-                  <div style="font-size:11px;color:var(--text-3)">₹<span id="tPrice_yearly">10190</span> / yr</div></div>
-                </label>
-                <script>
-                  (function(){
-                    // Default: all 4 plans checked
-                    ['monthly','quarterly','halfyearly','yearly'].forEach(function(p){
-                      var el = document.getElementById('tPlan_'+p);
-                      if(el) el.checked = true;
-                    });
-                  })();
-                </script>
+            <div class="form-group mb-0">
+              <label class="form-label">Plan Prices (₹) — set each independently</label>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:6px">
+                <div style="background:var(--bg-2);border:1px solid rgba(212,148,15,0.3);border-radius:8px;padding:10px">
+                  <div style="font-size:11px;font-weight:700;color:var(--text-0);margin-bottom:6px">📅 Monthly <span style="font-size:10px;color:var(--text-3);font-weight:400">/ 1 month</span></div>
+                  <div style="display:flex;align-items:center;gap:4px">
+                    <span style="font-size:13px;color:var(--text-3)">₹</span>
+                    <input class="form-input mono" id="tPrice_monthly" type="number" value="999" min="0" placeholder="999" style="font-size:15px;font-weight:700;padding:6px 8px" />
+                  </div>
+                </div>
+                <div style="background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:10px">
+                  <div style="font-size:11px;font-weight:700;color:var(--text-0);margin-bottom:6px">📅 Quarterly <span style="font-size:10px;color:var(--text-3);font-weight:400">/ 3 months</span></div>
+                  <div style="display:flex;align-items:center;gap:4px">
+                    <span style="font-size:13px;color:var(--text-3)">₹</span>
+                    <input class="form-input mono" id="tPrice_quarterly" type="number" value="2800" min="0" placeholder="2800" style="font-size:15px;font-weight:700;padding:6px 8px" />
+                  </div>
+                </div>
+                <div style="background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:10px">
+                  <div style="font-size:11px;font-weight:700;color:var(--text-0);margin-bottom:6px">📅 Half-Yearly <span style="font-size:10px;color:var(--text-3);font-weight:400">/ 6 months</span></div>
+                  <div style="display:flex;align-items:center;gap:4px">
+                    <span style="font-size:13px;color:var(--text-3)">₹</span>
+                    <input class="form-input mono" id="tPrice_halfyearly" type="number" value="5400" min="0" placeholder="5400" style="font-size:15px;font-weight:700;padding:6px 8px" />
+                  </div>
+                </div>
+                <div style="background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:10px">
+                  <div style="font-size:11px;font-weight:700;color:var(--text-0);margin-bottom:6px">📅 Yearly <span style="font-size:10px;color:var(--text-3);font-weight:400">/ 12 months</span></div>
+                  <div style="display:flex;align-items:center;gap:4px">
+                    <span style="font-size:13px;color:var(--text-3)">₹</span>
+                    <input class="form-input mono" id="tPrice_yearly" type="number" value="10000" min="0" placeholder="10000" style="font-size:15px;font-weight:700;padding:6px 8px" />
+                  </div>
+                </div>
               </div>
-              <div style="font-size:10px;color:var(--text-3);margin-top:6px">✓ Check the plans you want to offer this station. Station owner can choose when renewing.</div>
+              <div style="font-size:10px;color:var(--text-3);margin-top:6px">Each plan price is independent — set what you want to charge for each duration.</div>
             </div>
             <div class="form-group mt-10 mb-0"><label class="form-label">Owner WhatsApp (for reminders)</label>
               <input class="form-input" id="tOwnerWA" type="tel" inputmode="numeric" maxlength="10" oninput="this.value=this.value.replace(/[^0-9]/g,'')" placeholder="10-digit mobile number" />
@@ -328,15 +322,7 @@ function mt_showTenantForm(existing) {
       </div>
     </div>
   `;
-}
 
-function mt_updatePlanPrices() {
-  const monthly = parseFloat(document.getElementById('tPriceMonthly')?.value) || 0;
-  const plans = { monthly:[1,0], quarterly:[3,5], halfyearly:[6,10], yearly:[12,15] };
-  Object.entries(plans).forEach(([p,[months,disc]]) => {
-    const el = document.getElementById('tPrice_'+p);
-    if (el) el.textContent = Math.round(monthly * months * (1 - disc/100)).toLocaleString('en-IN');
-  });
 }
 
 async function mt_saveTenant(isEdit) {
@@ -362,17 +348,15 @@ async function mt_saveTenant(isEdit) {
         const result = await TenantAPI.create({ name, location, ownerName, phone, icon, adminUser, adminPass });
         // Create subscription record for the new station
         const trialDays    = parseInt(document.getElementById('tTrialDays')?.value) || 30;
-        const priceMonthly = parseFloat(document.getElementById('tPriceMonthly')?.value) || 0;
         const ownerWA      = (document.getElementById('tOwnerWA')?.value || '').trim();
-        // Collect enabled plans and their prices
-        const PLAN_MONTHS  = { monthly:1, quarterly:3, halfyearly:6, yearly:12 };
-        const PLAN_DISC    = { monthly:0, quarterly:5, halfyearly:10, yearly:15 };
-        const enabledPlans = Object.keys(PLAN_MONTHS).filter(p => document.getElementById('tPlan_'+p)?.checked);
-        const planPrices   = {};
-        enabledPlans.forEach(p => {
-          const disc = PLAN_DISC[p];
-          planPrices[p] = Math.round(priceMonthly * PLAN_MONTHS[p] * (1 - disc/100));
-        });
+        // Read individual plan prices
+        const planPrices = {
+          monthly:    parseFloat(document.getElementById('tPrice_monthly')?.value)    || 999,
+          quarterly:  parseFloat(document.getElementById('tPrice_quarterly')?.value)  || 2800,
+          halfyearly: parseFloat(document.getElementById('tPrice_halfyearly')?.value) || 5400,
+          yearly:     parseFloat(document.getElementById('tPrice_yearly')?.value)     || 10000,
+        };
+        const priceMonthly = planPrices.monthly;
         const newTenantId  = result?.id || id;
         if (newTenantId) {
           try {
@@ -383,7 +367,7 @@ async function mt_saveTenant(isEdit) {
                 plan: 'trial', status: 'trial', trial_days: trialDays,
                 price_monthly: priceMonthly, grace_days: 3,
                 owner_phone: ownerWA ? '+91' + ownerWA : '',
-                notes: 'Plans: ' + (enabledPlans.length ? enabledPlans.join(', ') : 'monthly') + ' | Prices: ' + JSON.stringify(planPrices)
+                notes: 'Prices: ' + JSON.stringify(planPrices)
               })
             });
           } catch(e) { console.warn('[Subscription] Could not create subscription record:', e.message); }
