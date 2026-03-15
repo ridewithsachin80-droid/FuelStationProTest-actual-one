@@ -652,7 +652,7 @@ async function mt_openBillingDashboard() {
       <div style="display:flex;align-items:center;gap:12px;margin-bottom:24px;position:sticky;top:0;background:var(--bg-0);padding:12px 0;z-index:1">
         <button onclick="document.getElementById('billingOverlay').remove()" style="background:var(--bg-2);border:1px solid var(--border);color:var(--text-2);border-radius:8px;padding:8px 14px;cursor:pointer;font-size:13px;font-weight:600">← Back</button>
         <h2 style="font-size:20px;font-weight:800;color:var(--text-0)">💳 Subscriptions & Billing</h2>
-        <button onclick="mt_loadBillingData()" style="margin-left:auto;background:var(--bg-2);border:1px solid var(--border);color:var(--text-2);border-radius:8px;padding:6px 12px;cursor:pointer;font-size:12px">🔄 Refresh</button>
+        <button onclick="_billingCache=null;mt_loadBillingData()" style="margin-left:auto;background:var(--bg-2);border:1px solid var(--border);color:var(--text-2);border-radius:8px;padding:6px 12px;cursor:pointer;font-size:12px">🔄 Refresh</button>
       </div>
       <div id="billingContent" style="text-align:center;padding:60px;color:var(--text-3)">
         <div style="font-size:36px;margin-bottom:12px">⏳</div>
@@ -663,70 +663,109 @@ async function mt_openBillingDashboard() {
   await mt_loadBillingData();
 }
 
-async function mt_loadBillingData() {
+// Store billing data globally so filter buttons can re-render without re-fetching
+var _billingCache = null;
+var _billingFilter = 'all'; // current active filter
+
+async function mt_loadBillingData(filter) {
+  if (filter !== undefined) _billingFilter = filter;
   const el = document.getElementById('billingContent');
   if (!el) return;
-  el.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-3)"><div style="font-size:28px;margin-bottom:8px">⏳</div>Loading…</div>';
-  try {
-    const token = typeof getAuthToken === 'function' ? getAuthToken() : '';
-    const resp = await fetch('/api/subscriptions', { headers: { 'Authorization': 'Bearer ' + token } });
-    if (!resp.ok) { el.innerHTML = '<div style="color:var(--red);padding:40px;text-align:center">⚠️ Could not load. Make sure you are logged in as super admin.</div>'; return; }
-    const subs = await resp.json();
 
-    const total   = subs.length;
-    const active  = subs.filter(function(s){return s.effective_status==='active';}).length;
-    const trial   = subs.filter(function(s){return s.effective_status==='trial';}).length;
-    const expired = subs.filter(function(s){return s.effective_status==='expired';}).length;
-    const grace   = subs.filter(function(s){return s.effective_status==='grace';}).length;
-    const mrr     = subs.filter(function(s){return s.effective_status==='active';}).reduce(function(a,s){return a+(s.price_monthly||0);},0);
-    const totalPaid = subs.reduce(function(a,s){return a+(parseFloat(s.total_paid)||0);},0);
+  // Fetch only if no cache or explicit refresh (no filter arg)
+  if (!_billingCache || filter === undefined) {
+    el.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-3)"><div style="font-size:28px;margin-bottom:8px">⏳</div>Loading…</div>';
+    try {
+      const token = typeof getAuthToken === 'function' ? getAuthToken() : '';
+      const resp = await fetch('/api/subscriptions', { headers: { 'Authorization': 'Bearer ' + token } });
+      if (!resp.ok) { el.innerHTML = '<div style="color:var(--red);padding:40px;text-align:center">⚠️ Could not load. Make sure you are logged in as super admin.</div>'; return; }
+      _billingCache = await resp.json();
+    } catch(e) { el.innerHTML = '<div style="color:var(--red);padding:40px;text-align:center">Error: '+e.message+'</div>'; return; }
+  }
 
-    function statusBadge(s) {
-      var m = {trial:['#3b82f6','Trial'],active:['#22c55e','Active'],grace:['#f97316','Grace'],expired:['#ef4444','Expired'],suspended:['#9ca3af','Suspended']};
-      var cm = m[s]||m.expired; var c=cm[0]; var l=cm[1];
-      return '<span style="background:'+c+'22;color:'+c+';font-size:10px;font-weight:700;padding:2px 8px;border-radius:99px">'+l+'</span>';
-    }
+  var subs = _billingCache;
+  var total      = subs.length;
+  var active     = subs.filter(function(s){return s.effective_status==='active';}).length;
+  var trial      = subs.filter(function(s){return s.effective_status==='trial';}).length;
+  var expired    = subs.filter(function(s){return s.effective_status==='expired'||s.effective_status==='grace';}).length;
+  var expiringSoon = subs.filter(function(s){ var dl=s.days_left!==null?s.days_left:(s.trial_days_left||0); return dl<=30 && dl>=0 && s.effective_status!=='expired'; }).length;
+  var mrr        = subs.filter(function(s){return s.effective_status==='active';}).reduce(function(a,s){return a+(s.price_monthly||0);},0);
+  var totalPaid  = subs.reduce(function(a,s){return a+(parseFloat(s.total_paid)||0);},0);
 
-    var expSoon = subs.filter(function(s){return s.effective_status==='active'&&s.days_left!==null&&s.days_left<=7;}).length;
-    var expiryAlert = expSoon > 0
-      ? '<div style="padding:10px 14px;background:rgba(249,115,22,0.08);border:1px solid rgba(249,115,22,0.3);border-radius:8px;margin-bottom:16px;font-size:13px;color:#f97316">⚠️ <strong>'+expSoon+' station(s)</strong> expiring within 7 days</div>'
-      : '';
+  function statusBadge(s) {
+    var m = {trial:['#3b82f6','Trial'],active:['#22c55e','Active'],grace:['#f97316','Grace'],expired:['#ef4444','Expired'],suspended:['#9ca3af','Suspended']};
+    var cm = m[s]||m.expired; var c=cm[0]; var l=cm[1];
+    return '<span style="background:'+c+'22;color:'+c+';font-size:10px;font-weight:700;padding:2px 8px;border-radius:99px">'+l+'</span>';
+  }
 
-    var statItems = [['🏪','Total',total],['✅','Active',active],['⏱️','Trial',trial],['⚠️','Expired',expired+(grace?'+'+grace:'')],['💰','MRR','₹'+mrr.toLocaleString('en-IN')],['📊','Collected','₹'+Math.round(totalPaid).toLocaleString('en-IN')]];
-    var statRow = '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:20px">';
-    statItems.forEach(function(item){
-      statRow += '<div style="background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center"><div style="font-size:18px;font-weight:800;color:var(--text-0)">'+item[2]+'</div><div style="font-size:11px;color:var(--text-3)">'+item[0]+' '+item[1]+'</div></div>';
-    });
-    statRow += '</div>';
+  function statBtn(filterKey, icon, label, value, color, urgent) {
+    var isActive = _billingFilter === filterKey;
+    var border = isActive ? (color||'var(--accent)') : 'var(--border)';
+    var bg = isActive ? (urgent ? 'rgba(249,115,22,0.08)' : 'rgba(212,148,15,0.06)') : 'var(--bg-2)';
+    return '<button data-filter="'+filterKey+'" onclick="mt_loadBillingData(this.dataset.filter)" style="background:'+bg+';border:2px solid '+border+';border-radius:8px;padding:10px;text-align:center;cursor:pointer;width:100%;transition:border 0.15s">'
+      + '<div style="font-size:18px;font-weight:800;color:'+(color||'var(--text-0)')+'">'+value+'</div>'
+      + '<div style="font-size:11px;color:var(--text-3);margin-top:2px">'+icon+' '+label+'</div>'
+      + (isActive ? '<div style="font-size:9px;color:'+border+';margin-top:2px;font-weight:700">● FILTERED</div>' : '')
+      + '</button>';
+  }
 
-    var planLabels = {trial:'Trial',monthly:'Monthly',quarterly:'Quarterly',halfyearly:'Half-Yearly',yearly:'Yearly'};
-    var cards = '';
-    subs.forEach(function(s) {
-      var daysLabel = s.effective_status === 'trial'
-        ? (s.trial_days_left > 0 ? s.trial_days_left+' trial days left' : 'Trial expired')
-        : (s.days_left !== null ? (s.days_left > 0 ? s.days_left+' days left' : 'Expired') : '—');
-      var urgency = s.effective_status === 'expired' ? 'rgba(239,68,68,0.4)' : (s.days_left !== null && s.days_left <= 7) ? 'rgba(249,115,22,0.4)' : 'var(--border)';
-      var planLabel = planLabels[s.plan]||s.plan||'Trial';
-      var safeName = (s.station_name||s.tenant_id||'').replace(/'/g,'');
-      cards += '<div style="background:var(--bg-2);border:1px solid '+urgency+';border-radius:10px;padding:14px;margin-bottom:12px">';
-      cards += '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">';
-      cards += '<div><div style="font-size:15px;font-weight:800;color:var(--text-0)">'+(s.station_name||s.tenant_id||'')+'</div>';
-      cards += '<div style="font-size:11px;color:var(--text-3)">'+(s.location||'')+''+(s.owner_name?' · '+s.owner_name:'')+'</div></div>';
-      cards += '<div style="text-align:right">'+statusBadge(s.effective_status)+'<div style="font-size:11px;color:var(--text-3);margin-top:3px">'+daysLabel+'</div></div></div>';
-      cards += '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;font-size:11px;margin-bottom:10px">';
-      cards += '<div style="background:var(--bg-0);border-radius:6px;padding:6px;text-align:center"><div style="font-weight:700">'+planLabel+'</div><div style="color:var(--text-3)">Plan</div></div>';
-      cards += '<div style="background:var(--bg-0);border-radius:6px;padding:6px;text-align:center"><div style="font-weight:700;font-family:var(--mono)">₹'+(s.price_monthly||0).toLocaleString('en-IN')+'</div><div style="color:var(--text-3)">Monthly</div></div>';
-      cards += '<div style="background:var(--bg-0);border-radius:6px;padding:6px;text-align:center"><div style="font-weight:700;font-family:var(--mono)">₹'+Math.round(s.total_paid||0).toLocaleString('en-IN')+'</div><div style="color:var(--text-3)">Collected</div></div>';
-      cards += '</div>';
-      cards += '<div style="display:flex;gap:8px">';
-      cards += '<button data-tid="'+s.tenant_id+'" data-name="'+safeName+'" data-price="'+(s.price_monthly||0)+'" onclick="mt_recordPaymentFromBilling(this.dataset.tid,this.dataset.name,parseFloat(this.dataset.price))" style="flex:1;background:rgba(34,197,94,0.1);border:1px solid rgba(34,197,94,0.3);color:#4ade80;border-radius:6px;padding:7px;font-size:12px;font-weight:700;cursor:pointer">💰 Record Payment</button>';
-      cards += '<button data-tid="'+s.tenant_id+'" data-name="'+safeName+'" onclick="mt_subSettingsFromBilling(this.dataset.tid,this.dataset.name)" style="flex:1;background:var(--bg-0);border:1px solid var(--border);color:var(--text-2);border-radius:6px;padding:7px;font-size:12px;font-weight:700;cursor:pointer">⚙️ Settings</button>';
-      cards += '</div></div>';
-    });
-    if (!cards) cards = '<div style="text-align:center;padding:40px;color:var(--text-3)">No stations found</div>';
+  var statRow = '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:16px">'
+    + statBtn('all',     '🏪', 'All Stations',    total,                                'var(--text-0)', false)
+    + statBtn('active',  '✅', 'Active',           active,                               '#22c55e',       false)
+    + statBtn('trial',   '⏱️', 'Trial',            trial,                                '#60a5fa',       false)
+    + statBtn('expired', '⚠️', 'Expired',          expired,                              '#ef4444',       false)
+    + statBtn('soon',    '🔔', 'Expiring ≤30 Days',expiringSoon,                         '#f97316',       true)
+    + statBtn('mrr',     '💰', 'MRR',              '₹'+mrr.toLocaleString('en-IN'),      '#22c55e',       false)
+    + '</div>';
 
-    el.innerHTML = statRow + expiryAlert + cards;
-  } catch(e) { el.innerHTML = '<div style="color:var(--red);padding:40px;text-align:center">Error: '+e.message+'</div>'; }
+  // Apply filter
+  var filtered = subs;
+  if (_billingFilter === 'active')  filtered = subs.filter(function(s){return s.effective_status==='active';});
+  if (_billingFilter === 'trial')   filtered = subs.filter(function(s){return s.effective_status==='trial';});
+  if (_billingFilter === 'expired') filtered = subs.filter(function(s){return s.effective_status==='expired'||s.effective_status==='grace';});
+  if (_billingFilter === 'soon')    filtered = subs.filter(function(s){ var dl=s.days_left!==null?s.days_left:(s.trial_days_left||0); return dl<=30&&dl>=0&&s.effective_status!=='expired'; });
+
+  // Filter label
+  var filterLabels = {all:'All Stations',active:'Active Subscriptions',trial:'Trial Accounts',expired:'Expired / Grace',soon:'Expiring within 30 Days',mrr:'All Stations'};
+  var filterBar = _billingFilter !== 'all' && _billingFilter !== 'mrr'
+    ? '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;padding:8px 12px;background:rgba(212,148,15,0.06);border:1px solid rgba(212,148,15,0.2);border-radius:8px">'
+      + '<span style="font-size:12px;font-weight:700;color:var(--accent-light)">Showing: '+filterLabels[_billingFilter]+'</span>'
+      + '<span style="font-size:11px;color:var(--text-3)">('+filtered.length+' station'+(filtered.length!==1?'s':'')+')</span>'
+      + '<button onclick="mt_loadBillingData(\'all\')" style="margin-left:auto;background:none;border:none;color:var(--text-3);cursor:pointer;font-size:11px;text-decoration:underline">Clear filter ✕</button>'
+      + '</div>'
+    : '';
+
+  var planLabels = {trial:'Trial',monthly:'Monthly',quarterly:'Quarterly',halfyearly:'Half-Yearly',yearly:'Yearly'};
+  var cards = '';
+  filtered.forEach(function(s) {
+    var daysLeft = s.days_left !== null ? s.days_left : (s.trial_days_left || 0);
+    var daysLabel = s.effective_status === 'trial'
+      ? ((s.trial_days_left||0) > 0 ? (s.trial_days_left||0)+' trial days left' : 'Trial expired')
+      : (s.days_left !== null ? (s.days_left > 0 ? s.days_left+' days left' : 'Expired') : '—');
+    var urgency = s.effective_status === 'expired' ? 'rgba(239,68,68,0.4)'
+      : daysLeft <= 7 ? 'rgba(239,68,68,0.3)'
+      : daysLeft <= 30 ? 'rgba(249,115,22,0.3)'
+      : 'var(--border)';
+    var planLabel = planLabels[s.plan]||s.plan||'Trial';
+    var safeName = (s.station_name||s.tenant_id||'').replace(/'/g,'');
+    cards += '<div style="background:var(--bg-2);border:1px solid '+urgency+';border-radius:10px;padding:14px;margin-bottom:10px">';
+    cards += '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">';
+    cards += '<div><div style="font-size:15px;font-weight:800;color:var(--text-0)">'+(s.station_name||s.tenant_id||'')+'</div>';
+    cards += '<div style="font-size:11px;color:var(--text-3)">'+(s.location||'')+(s.owner_name?' · '+s.owner_name:'')+'</div></div>';
+    cards += '<div style="text-align:right">'+statusBadge(s.effective_status)+'<div style="font-size:11px;color:'+(daysLeft<=7?'var(--red)':daysLeft<=30?'var(--orange)':'var(--text-3)')+';margin-top:3px">'+daysLabel+'</div></div></div>';
+    cards += '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;font-size:11px;margin-bottom:10px">';
+    cards += '<div style="background:var(--bg-0);border-radius:6px;padding:6px;text-align:center"><div style="font-weight:700">'+planLabel+'</div><div style="color:var(--text-3)">Plan</div></div>';
+    cards += '<div style="background:var(--bg-0);border-radius:6px;padding:6px;text-align:center"><div style="font-weight:700;font-family:monospace">₹'+(s.price_monthly||0).toLocaleString('en-IN')+'</div><div style="color:var(--text-3)">Monthly</div></div>';
+    cards += '<div style="background:var(--bg-0);border-radius:6px;padding:6px;text-align:center"><div style="font-weight:700;font-family:monospace">₹'+Math.round(s.total_paid||0).toLocaleString('en-IN')+'</div><div style="color:var(--text-3)">Collected</div></div>';
+    cards += '</div>';
+    cards += '<div style="display:flex;gap:8px">';
+    cards += '<button data-tid="'+s.tenant_id+'" data-name="'+safeName+'" data-price="'+(s.price_monthly||0)+'" onclick="mt_recordPaymentFromBilling(this.dataset.tid,this.dataset.name,parseFloat(this.dataset.price))" style="flex:1;background:rgba(34,197,94,0.1);border:1px solid rgba(34,197,94,0.3);color:#4ade80;border-radius:6px;padding:7px;font-size:12px;font-weight:700;cursor:pointer">💰 Record Payment</button>';
+    cards += '<button data-tid="'+s.tenant_id+'" data-name="'+safeName+'" onclick="mt_subSettingsFromBilling(this.dataset.tid,this.dataset.name)" style="flex:1;background:var(--bg-0);border:1px solid var(--border);color:var(--text-2);border-radius:6px;padding:7px;font-size:12px;font-weight:700;cursor:pointer">⚙️ Settings</button>';
+    cards += '</div></div>';
+  });
+  if (!cards) cards = '<div style="text-align:center;padding:40px;color:var(--text-3)">No stations match this filter</div>';
+
+  el.innerHTML = statRow + filterBar + cards;
 }
 
 async function mt_recordPaymentFromBilling(tenantId, stationName, defaultPrice) {
@@ -759,7 +798,7 @@ async function mt_recordPaymentFromBilling(tenantId, stationName, defaultPrice) 
     });
     if (!resp.ok) { const r = await resp.json(); mt_toast(r.error || 'Failed', 'error'); return; }
     mt_toast('✅ Payment recorded — subscription extended!', 'success');
-    await mt_loadBillingData();
+    _billingCache=null; await mt_loadBillingData();
   } catch(e) { mt_toast('Error: ' + e.message, 'error'); }
 }
 
@@ -801,7 +840,7 @@ async function mt_subSettingsFromBilling(tenantId, stationName) {
     });
     if (!r2.ok) { const e = await r2.json(); mt_toast(e.error||'Save failed','error'); return; }
     mt_toast('✅ Settings saved', 'success');
-    await mt_loadBillingData();
+    _billingCache=null; await mt_loadBillingData();
   } catch(e) { mt_toast('Error: ' + e.message, 'error'); }
 }
 
