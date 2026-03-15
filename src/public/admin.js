@@ -931,7 +931,7 @@ function renderStaff(D) {
   // Otherwise fall back to employees whose shift field includes this shift
   const shiftEmps = rosteredIds.length > 0
     ? D.employees.filter(e => rosteredIds.includes(String(e.id)))
-    : D.employees.filter(e => (e.shift||'').split(',').map(s=>s.trim()).includes(allocShift));
+    : D.employees.filter(e => { const sh=(e.shift||'').trim(); return !sh || sh.split(',').map(s=>s.trim()).includes(allocShift); });
   const rosterFiltered = rosteredIds.length > 0;
 
   const empOptions = shiftEmps.map(e => `<option value="${e.id}">${e.name} (${e.role})</option>`).join('')
@@ -995,7 +995,7 @@ function renderStaff(D) {
     const ids = (window._rosterData && window._rosterData[rk]) || [];
     return ids.length > 0
       ? D.employees.filter(e => ids.includes(String(e.id)))
-      : D.employees.filter(e => (e.shift||'').split(',').map(s=>s.trim()).includes(allocShift));
+      : D.employees.filter(e => { const sh=(e.shift||'').trim(); return !sh || sh.split(',').map(s=>s.trim()).includes(allocShift); });
   }
 
   // Day header row
@@ -1127,7 +1127,7 @@ function renderStaff(D) {
   _normalizeShiftTimes(D.shifts);
   const h = new Date().getHours();
   const shiftCards = sortedShifts.map(s => {
-    const emps = D.employees.filter(e => (e.shift||'').split(',').map(x=>x.trim()).includes(s.name));
+    const emps = D.employees.filter(e => { const sh=(e.shift||'').trim(); return !sh || sh.split(',').map(x=>x.trim()).includes(s.name); });
     const [sh] = (s.start||'00:00').split(':').map(Number);
     const [eh] = (s.end||'00:00').split(':').map(Number);
     const isActive = sh < eh ? (h >= sh && h < eh) : (h >= sh || h < eh);
@@ -2158,7 +2158,9 @@ function renderRoster(D) {
       // Single dropdown replaces per-employee add-buttons
       // Only show employees whose allocated shift matches this row (e.shift is comma-separated)
       const shiftMatch = emps.filter(e => {
-        const empShifts = (e.shift||'').split(',').map(s => s.trim().toLowerCase());
+        const sh = (e.shift||'').trim();
+        if (!sh) return true; // No shift assigned — show in all shifts
+        const empShifts = sh.split(',').map(s => s.trim().toLowerCase());
         return empShifts.includes(shift.name.toLowerCase()) || empShifts.includes(shift.name.trim().toLowerCase());
       });
       const unassigned = shiftMatch.filter(e => !assigned.includes(String(e.id)));
@@ -8577,7 +8579,7 @@ function openChangeAllocModal(pumpId, nozzle) {
   const rosteredIds = (window._rosterData && window._rosterData[rosterKey]) || [];
   const shiftEmps = rosteredIds.length > 0
     ? D.employees.filter(e => rosteredIds.includes(String(e.id)))
-    : D.employees.filter(e => (e.shift||'').split(',').map(s=>s.trim()).includes(allocShift));
+    : D.employees.filter(e => { const sh=(e.shift||'').trim(); return !sh || sh.split(',').map(s=>s.trim()).includes(allocShift); });
 
   const empItems = shiftEmps.map(e => {
     const isCurrent = e.id === currentEmpId;
@@ -8612,7 +8614,7 @@ function autoAssignAlloc() {
     const rosteredIds = (window._rosterData && window._rosterData[date + '_' + allocShift]) || [];
     const dayEmps = rosteredIds.length > 0
       ? D.employees.filter(e => rosteredIds.includes(String(e.id)))
-      : D.employees.filter(e => (e.shift||'').split(',').map(s=>s.trim()).includes(allocShift));
+      : D.employees.filter(e => { const sh=(e.shift||'').trim(); return !sh || sh.split(',').map(s=>s.trim()).includes(allocShift); });
     if (dayEmps.length === 0) return;
     const dk = date + '_' + allocShift;
     if (!allocations[dk]) allocations[dk] = {};
