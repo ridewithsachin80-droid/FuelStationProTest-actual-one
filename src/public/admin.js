@@ -2065,7 +2065,8 @@ function renderRoster(D) {
   // Build week header
   const dayHeaders = weekDays.map(d => {
     const isToday = fmtDate(d) === todayStr;
-    return `<th style="text-align:center;padding:8px 4px;min-width:90px;${isToday?'color:var(--accent-light);font-weight:800':''}">
+    const isPast  = fmtDate(d) < todayStr;
+    return `<th style="text-align:center;padding:8px 4px;min-width:90px;${isToday?'color:var(--accent-light);font-weight:800':isPast?'opacity:0.4':''}">
       <div style="font-size:11px;font-weight:700;text-transform:uppercase">${fmtDay(d)}</div>
       <div style="font-size:18px;font-weight:800;margin-top:2px${isToday?';color:var(--accent)':''}">${fmtNum(d)}</div>
     </th>`;
@@ -2078,9 +2079,11 @@ function renderRoster(D) {
       const key = dateStr + '_' + shift.name;
       const assigned = roster[key] || [];
       const isToday = dateStr === todayStr;
+      const isPastDay = dateStr < todayStr; // individual day is before today
+      const isReadOnly = isPastWeek || isPastDay;
       const assignedEmps = assigned.map(id => emps.find(e => String(e.id) === String(id))).filter(Boolean);
-      // Past weeks: read-only chip (no remove button). Current/future: interactive with ✕
-      const empChips = assignedEmps.map(e => isPastWeek
+      // Past days/weeks: read-only chip (no remove button). Current/future: interactive with ✕
+      const empChips = assignedEmps.map(e => isReadOnly
         ? `<div style="display:flex;align-items:center;gap:5px;background:var(--bg-1);border:1px solid var(--border-light);border-radius:6px;padding:4px 7px;margin-bottom:3px;opacity:0.72;cursor:default">
             <span style="width:20px;height:20px;border-radius:5px;background:${empColor(e)};display:grid;place-items:center;color:#fff;font-size:8px;font-weight:800;flex-shrink:0">${empInitials(e.name)}</span>
             <span style="font-size:10px;font-weight:700;color:var(--text-1)">${sanitize(e.name)}</span>
@@ -2102,7 +2105,7 @@ function renderRoster(D) {
       const unassigned = shiftMatch.filter(e => !assigned.includes(String(e.id)));
       const noEligible = shiftMatch.length === 0;
       const allAssigned = shiftMatch.length > 0 && unassigned.length === 0;
-      const addDropdown = isPastWeek ? '' : noEligible ? '' : allAssigned
+      const addDropdown = isReadOnly ? '' : noEligible ? '' : allAssigned
         ? "<div style='font-size:10px;color:var(--text-3);margin-top:4px;text-align:center'>All assigned</div>"
         :
         `<select style="margin-top:${assignedEmps.length?'5px':'0'};width:100%;background:var(--bg-1);border:1px dashed var(--border);border-radius:6px;padding:4px 6px;color:var(--text-3);font-size:11px;font-family:var(--font);cursor:pointer"
@@ -2110,7 +2113,7 @@ function renderRoster(D) {
           <option value="">+ Assign</option>
           ${unassigned.map(e => `<option value="${e.id}">${sanitize(e.name)}</option>`).join('')}
         </select>`;
-      const noStaffHint = !isPastWeek && noEligible
+      const noStaffHint = !isReadOnly && noEligible
         ? "<div style='font-size:10px;color:var(--text-3);text-align:center;padding:6px 0;opacity:0.5'>No staff</div>"
         : '';
       return `<td style="vertical-align:top;padding:6px;background:${isToday?'rgba(212,148,15,0.04)':'transparent'};border-left:1px solid var(--border-light)">
@@ -2144,7 +2147,7 @@ function renderRoster(D) {
       Week of <strong style="color:var(--text-1)">${weekStart.toLocaleDateString('en-IN',{day:'numeric',month:'long',year:'numeric'})}</strong>
       ${isPastWeek
         ? '— <span style="color:var(--text-3)">View only</span>'
-        : '— Click an employee button to assign · Click an assigned employee to remove.'}
+        : '— <span style="color:var(--text-3)">Past days are locked.</span> Assign for today and future dates.'}
     </div>
     ${isPastWeek ? `<div style="display:inline-flex;align-items:center;gap:6px;background:rgba(255,255,255,0.04);border:1px solid var(--border);border-radius:6px;padding:5px 10px;margin-bottom:14px;font-size:11px;color:var(--text-3)">
       🔒 <span>Past week — read only. Navigate to current or future week to make changes.</span>
