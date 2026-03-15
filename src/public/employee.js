@@ -3211,11 +3211,11 @@ function enterApp() {
     document.querySelector('.main-area').classList.add('emp-fullwidth');
     var eIni = 'EM';
     if (empState.user && empState.user.name) eIni = empState.user.name.split(' ').map(function(w){return w[0]}).join('');
-    if (empState.user && empState.user.name) eIni = empState.user.name.split(' ').map(function(w){return w[0]}).join('');
     var avEl2 = document.getElementById('avatarEl'); if (avEl2) avEl2.textContent = eIni;
     APP.page = 'employee';
     var ptEl2 = document.getElementById('pageTitle'); if (ptEl2) ptEl2.textContent = 'Employee Portal';
     var bcEl2 = document.getElementById('breadcrumb'); if (bcEl2) bcEl2.textContent = sanitize(empState.user ? empState.user.name : 'Employee') + ' · ' + emp_today();
+    renderPage();
   }
 }
 
