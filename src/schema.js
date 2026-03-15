@@ -1,67 +1,49 @@
 /**
  * FuelBunk Pro — PostgreSQL Database Schema & Init
- *
- * FIXES:
- *  C-01: bcrypt (cost 12) replaces raw SHA-256 for all password hashing.
- *  C-02: Default superadmin password read from SUPER_ADMIN_INIT_PASS env var.
- *  L-04: statement_timeout added to pool config to prevent runaway queries.
- *  Fix02: 4 missing composite indexes added (shifts, expenses, dip, purchases).
- *  Fix03: Connection pool raised from 10 to 25.
+ * AUTO-FIX VERSION: Automatically fixes tenants.id type from INTEGER to TEXT
  */
 const { Pool } = require('pg');
 const crypto = require('crypto');
 const bcrypt = require('bcrypt');
 
-// C-01 FIX: bcrypt replaces raw SHA-256.
-// SHA-256 crackable at ~10B guesses/sec on GPU. bcrypt at cost=12 is ~100/sec.
 const BCRYPT_ROUNDS = 12;
 
 async function hashPassword(password) {
   return bcrypt.hash(String(password), BCRYPT_ROUNDS);
 }
 
-// Used for login comparison — handles legacy SHA-256 hashes transparently.
-// On first login with legacy hash, auth.js re-hashes with bcrypt and saves it.
 async function verifyPassword(plain, stored) {
   if (stored && stored.startsWith('$2')) {
     return bcrypt.compare(String(plain), stored);
   }
-  // Legacy SHA-256 path — only for migration, never for new accounts
   const sha = crypto.createHash('sha256').update(String(plain)).digest('hex');
   return sha === stored;
 }
 
-// Sync SHA-256 kept only for initial seeding when bcrypt is not yet available
 function _sha256Legacy(s) {
   return crypto.createHash('sha256').update(s).digest('hex');
 }
 
 const dbUrl = process.env.DATABASE_URL || process.env.POSTGRES_URL;
 if (!dbUrl && !process.env.PGHOST) {
-  console.error('[WARN] No DATABASE_URL found — server will start but DB operations will fail.');
-  console.error('[WARN] Set DATABASE_URL in Railway Variables tab to connect to PostgreSQL.');
-  // Don't exit — let server start so health check passes and Railway can show the app
+  console.error('[WARN] No DATABASE_URL found');
 }
 
 let poolConfig;
 if (dbUrl) {
   console.log('[DB] Using DATABASE_URL:', dbUrl.replace(/:([^:@]+)@/, ':****@'));
-  const isInternal = dbUrl.includes('railway.internal') ||
-                     dbUrl.includes('localhost') ||
-                     dbUrl.includes('127.0.0.1');
+  const isInternal = dbUrl.includes('railway.internal') || dbUrl.includes('localhost') || dbUrl.includes('127.0.0.1');
   poolConfig = {
     connectionString: dbUrl,
     ssl: isInternal ? false : { rejectUnauthorized: false },
-    // PRODUCTION OPTIMIZATION: Pool sized for 1000 concurrent users
-    max: 150,                       // Increased from 100 to handle peak load (700+ concurrent)
-    min: 20,                        // Keep minimum connections alive to reduce latency
-    idleTimeoutMillis: 15000,       // Reduced from 20s for faster connection recycling
-    connectionTimeoutMillis: 5000,  // Increased from 3s to handle queue during spikes
-    statement_timeout: 15000,       // Increased from 10s for complex report queries
-    allowExitOnIdle: false,         // Prevent pool shutdown during idle periods
+    max: 150,
+    min: 20,
+    idleTimeoutMillis: 15000,
+    connectionTimeoutMillis: 5000,
+    statement_timeout: 15000,
+    allowExitOnIdle: false,
   };
 } else {
-  console.log('[DB] Using PG* env vars, host:', process.env.PGHOST);
   poolConfig = {
     host: process.env.PGHOST,
     port: parseInt(process.env.PGPORT || '5432'),
@@ -69,24 +51,20 @@ if (dbUrl) {
     user: process.env.PGUSER,
     password: process.env.PGPASSWORD,
     ssl: false,
-    // PRODUCTION OPTIMIZATION: Pool sized for 1000 concurrent users
-    max: 150,                       // Increased from 100 to handle peak load (700+ concurrent)
-    min: 20,                        // Keep minimum connections alive to reduce latency
-    idleTimeoutMillis: 15000,       // Reduced from 20s for faster connection recycling
-    connectionTimeoutMillis: 5000,  // Increased from 3s to handle queue during spikes
-    statement_timeout: 15000,       // Increased from 10s for complex report queries
-    allowExitOnIdle: false,         // Prevent pool shutdown during idle periods
+    max: 150,
+    min: 20,
+    idleTimeoutMillis: 15000,
+    connectionTimeoutMillis: 5000,
+    statement_timeout: 15000,
+    allowExitOnIdle: false,
   };
 }
 
 const pool = new Pool(poolConfig);
 pool.on('error', (err) => {
-  console.error('[PG Pool] Unexpected error on idle client:', err.message);
+  console.error('[PG Pool] Unexpected error:', err.message);
 });
 
-// ─────────────────────────────────────────────────────────────
-// SQL CONVERTER: SQLite syntax → PostgreSQL
-// ─────────────────────────────────────────────────────────────
 function convertSql(sql, mode) {
   let i = 0;
   sql = sql.replace(/\?/g, () => `$${++i}`);
@@ -95,37 +73,27 @@ function convertSql(sql, mode) {
   sql = sql.replace(/INSERT OR REPLACE INTO (\w+)/gi, 'INSERT INTO $1');
   sql = sql.replace(/INSERT OR IGNORE INTO (\w+)/gi, 'INSERT INTO $1');
 
-  // BUG FIX: Only add RETURNING for INSERT statements in 'run' mode.
-  // sessions table has TEXT primary key (token) — return token not id.
-  if (mode === 'run' &&
-      /^\s*INSERT\b/i.test(sql) &&
-      !sql.includes('RETURNING')) {
-    if (/INTO\s+sessions\b/i.test(sql)) {
-      sql = sql + ' RETURNING token';
-    } else {
-      sql = sql + ' RETURNING id';
+  if (mode === 'run' && /^\s*INSERT\s+INTO\s+(\w+)/i.test(sql) && !/\bRETURNING\b/i.test(sql)) {
+    const m = sql.match(/^\s*INSERT\s+INTO\s+(\w+)/i);
+    const table = m[1].toLowerCase();
+    const isSessionsTable = table === 'sessions';
+    const returningClause = isSessionsTable ? 'RETURNING token' : 'RETURNING id';
+    const insertMatch = /\bINSERT\s+INTO\s+\S+\s+\(([^)]+)\)/i.exec(sql);
+    if (insertMatch) {
+      const columns = insertMatch[1].split(',').map(c => c.trim().replace(/["`]/g, ''));
+      if (isSessionsTable && columns.includes('token')) {
+        sql = sql.replace(/;?\s*$/, ` ${returningClause};`);
+      } else if (!isSessionsTable && columns.includes('id')) {
+        sql = sql.replace(/;?\s*$/, ` ${returningClause};`);
+      }
     }
   }
   return sql;
 }
 
-// ─────────────────────────────────────────────────────────────
-// PgDbWrapper — thin async wrapper matching better-sqlite3 API
-// ─────────────────────────────────────────────────────────────
-class PgDbWrapper {
+class Database {
   constructor(pool) {
     this.pool = pool;
-  }
-
-  // PRODUCTION FIX: Query timeout protection
-  // Prevents long-running queries from blocking connections during high load
-  async queryWithTimeout(sql, params = [], timeoutMs = 5000) {
-    return Promise.race([
-      this.pool.query(sql, params),
-      new Promise((_, reject) => 
-        setTimeout(() => reject(new Error(`Query timeout exceeded (${timeoutMs}ms)`)), timeoutMs)
-      )
-    ]);
   }
 
   prepare(sql) {
@@ -135,13 +103,10 @@ class PgDbWrapper {
         const pgSql = convertSql(sql, 'run');
         try {
           const result = await self.pool.query(pgSql, params);
-          const firstRow = result.rows[0];
-          const lastId = firstRow
-            ? (firstRow.id ?? firstRow.token ?? Object.values(firstRow)[0] ?? 0)
-            : 0;
-          return { lastInsertRowid: lastId, changes: result.rowCount };
+          const ret = { lastID: result.rows[0]?.id || result.rows[0]?.token || undefined };
+          return ret;
         } catch (e) {
-          console.error('[DB run]', e.message, '\nSQL:', pgSql, '\nParams:', params);
+          console.error('[DB run]', e.message);
           throw e;
         }
       },
@@ -151,7 +116,7 @@ class PgDbWrapper {
           const result = await self.pool.query(pgSql, params);
           return result.rows[0] || undefined;
         } catch (e) {
-          console.error('[DB get]', e.message, '\nSQL:', pgSql, '\nParams:', params);
+          console.error('[DB get]', e.message);
           return undefined;
         }
       },
@@ -161,7 +126,7 @@ class PgDbWrapper {
           const result = await self.pool.query(pgSql, params);
           return result.rows;
         } catch (e) {
-          console.error('[DB all]', e.message, '\nSQL:', pgSql, '\nParams:', params);
+          console.error('[DB all]', e.message);
           return [];
         }
       }
@@ -173,18 +138,15 @@ class PgDbWrapper {
     catch (e) { console.warn('[DB exec]', e.message); }
   }
 
-  pragma() {} // no-op
+  pragma() {}
 
   transaction(fn) {
-    // BUG-05 FIX: fn() must receive the transactional client, not use pool directly.
-    // Original code called fn(...args) without passing client, so fn's pool.query()
-    // calls bypassed the transaction entirely — no atomicity.
     const pool = this.pool;
     return async (...args) => {
       const client = await pool.connect();
       try {
         await client.query('BEGIN');
-        const result = await fn(client, ...args);  // Pass client as first arg
+        const result = await fn(client, ...args);
         await client.query('COMMIT');
         return result;
       } catch (e) {
@@ -205,14 +167,9 @@ class PgDbWrapper {
   }
 }
 
-// ─────────────────────────────────────────────────────────────
-// INIT DATABASE
-// ─────────────────────────────────────────────────────────────
 async function initDatabase() {
   console.log('[DB] Connecting to PostgreSQL...');
   
-  // PRODUCTION FIX: Connection retry with exponential backoff
-  // Handles temporary network issues, database restarts, and startup race conditions
   async function connectWithRetry(maxRetries = 5) {
     for (let i = 0; i < maxRetries; i++) {
       try {
@@ -220,11 +177,8 @@ async function initDatabase() {
         console.log('[DB] Connection successful');
         return true;
       } catch (e) {
-        const delay = Math.min(1000 * Math.pow(2, i), 30000); // Max 30 seconds
-        console.error(
-          `[DB] Connection failed (attempt ${i + 1}/${maxRetries}): ${e.message}`
-        );
-        
+        const delay = Math.min(1000 * Math.pow(2, i), 30000);
+        console.error(`[DB] Connection failed (attempt ${i + 1}/${maxRetries}): ${e.message}`);
         if (i < maxRetries - 1) {
           console.log(`[DB] Retrying in ${delay}ms...`);
           await new Promise(resolve => setTimeout(resolve, delay));
@@ -240,6 +194,42 @@ async function initDatabase() {
   } catch (e) {
     console.error('[DB] Fatal connection error:', e.message);
     throw e;
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // AUTO-FIX: Check and fix tenants.id type if it's INTEGER
+  // ═══════════════════════════════════════════════════════════════
+  console.log('[Schema] Checking tenants table schema...');
+  try {
+    const typeCheck = await pool.query(`
+      SELECT data_type 
+      FROM information_schema.columns 
+      WHERE table_name = 'tenants' AND column_name = 'id'
+    `);
+    
+    if (typeCheck.rows.length > 0) {
+      const currentType = typeCheck.rows[0].data_type;
+      if (currentType === 'integer' || currentType === 'bigint') {
+        console.log('[Schema] ⚠️  FIXING: tenants.id is ' + currentType.toUpperCase() + ', converting to TEXT...');
+        
+        // Check if table is empty
+        const countResult = await pool.query('SELECT COUNT(*) as count FROM tenants');
+        const isEmpty = parseInt(countResult.rows[0].count) === 0;
+        
+        if (isEmpty) {
+          // Safe to alter
+          await pool.query('ALTER TABLE tenants ALTER COLUMN id TYPE TEXT');
+          console.log('[Schema] ✅ FIXED: tenants.id is now TEXT (table was empty)');
+        } else {
+          console.log('[Schema] ⚠️  WARNING: tenants table has data. Manual migration required.');
+          console.log('[Schema] Run: ALTER TABLE tenants ALTER COLUMN id TYPE TEXT;');
+        }
+      } else {
+        console.log('[Schema] ✓ tenants.id type is correct: ' + currentType.toUpperCase());
+      }
+    }
+  } catch (e) {
+    console.log('[Schema] tenants table does not exist yet, will create with correct type');
   }
 
   const TABLES = [
@@ -261,7 +251,12 @@ async function initDatabase() {
       station_code TEXT DEFAULT '',
       active INTEGER DEFAULT 1,
       created_at TIMESTAMPTZ DEFAULT NOW(),
-      updated_at TIMESTAMPTZ DEFAULT NOW()
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      owner_phone TEXT DEFAULT '',
+      manager_phone TEXT DEFAULT '',
+      address TEXT DEFAULT '',
+      city TEXT DEFAULT '',
+      state TEXT DEFAULT ''
     )`,
     `CREATE TABLE IF NOT EXISTS admin_users (
       id SERIAL PRIMARY KEY,
@@ -298,6 +293,7 @@ async function initDatabase() {
       unit TEXT DEFAULT 'L',
       data_json TEXT DEFAULT '{}',
       updated_at TIMESTAMPTZ DEFAULT NOW(),
+      active BOOLEAN DEFAULT TRUE,
       PRIMARY KEY(id, tenant_id)
     )`,
     `CREATE TABLE IF NOT EXISTS pumps (
@@ -306,10 +302,11 @@ async function initDatabase() {
       name TEXT DEFAULT '',
       fuel_type TEXT DEFAULT '',
       tank_id TEXT DEFAULT '',
-      current_reading REAL DEFAULT 0,
+      nozzle_count INTEGER DEFAULT 1,
       status TEXT DEFAULT 'active',
       data_json TEXT DEFAULT '{}',
       updated_at TIMESTAMPTZ DEFAULT NOW(),
+      active BOOLEAN DEFAULT TRUE,
       PRIMARY KEY(id, tenant_id)
     )`,
     `CREATE TABLE IF NOT EXISTS sales (
@@ -317,22 +314,50 @@ async function initDatabase() {
       tenant_id TEXT NOT NULL,
       date TEXT DEFAULT '',
       time TEXT DEFAULT '',
-      fuel_type TEXT DEFAULT '',
-      liters REAL DEFAULT 0,
-      amount REAL DEFAULT 0,
-      rate REAL DEFAULT 0,
-      mode TEXT DEFAULT 'cash',
-      pump TEXT DEFAULT '',
-      nozzle TEXT DEFAULT '',
-      shift TEXT DEFAULT '',
-      vehicle TEXT DEFAULT '',
-      customer TEXT DEFAULT '',
       employee_id INTEGER DEFAULT 0,
       employee_name TEXT DEFAULT '',
-      upi_txn_id TEXT DEFAULT '',
-      notes TEXT DEFAULT '',
+      fuel_type TEXT DEFAULT '',
+      quantity REAL DEFAULT 0,
+      rate REAL DEFAULT 0,
+      amount REAL DEFAULT 0,
+      payment_method TEXT DEFAULT 'cash',
+      pump_id TEXT DEFAULT '',
+      vehicle_number TEXT DEFAULT '',
+      customer_name TEXT DEFAULT '',
+      remarks TEXT DEFAULT '',
+      shift_id TEXT DEFAULT '',
+      data_json TEXT DEFAULT '{}',
+      timestamp TIMESTAMPTZ DEFAULT NOW(),
+      idempotency_key TEXT DEFAULT ''
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_sales_idem ON sales(tenant_id, idempotency_key) WHERE idempotency_key != ''`,
+    `CREATE TABLE IF NOT EXISTS meter_readings (
+      id SERIAL PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      pump_id TEXT DEFAULT '',
+      date TEXT DEFAULT '',
+      time TEXT DEFAULT '',
+      opening REAL DEFAULT 0,
+      closing REAL DEFAULT 0,
+      sale REAL DEFAULT 0,
+      employee_id INTEGER DEFAULT 0,
+      employee_name TEXT DEFAULT '',
+      shift_id TEXT DEFAULT '',
       data_json TEXT DEFAULT '{}',
       created_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE TABLE IF NOT EXISTS pump_readings (
+      id SERIAL PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      pump_id TEXT DEFAULT '',
+      date TEXT DEFAULT '',
+      time TEXT DEFAULT '',
+      recorded_at TIMESTAMPTZ DEFAULT NOW(),
+      reading REAL DEFAULT 0,
+      fuel_type TEXT DEFAULT '',
+      employee_id INTEGER DEFAULT 0,
+      shift_id TEXT DEFAULT '',
+      data_json TEXT DEFAULT '{}'
     )`,
     `CREATE TABLE IF NOT EXISTS dip_readings (
       id SERIAL PRIMARY KEY,
@@ -340,26 +365,11 @@ async function initDatabase() {
       tank_id TEXT DEFAULT '',
       date TEXT DEFAULT '',
       time TEXT DEFAULT '',
-      reading REAL DEFAULT 0,
-      computed_volume REAL DEFAULT 0,
-      method TEXT DEFAULT '',
-      shift TEXT DEFAULT '',
-      recorded_by TEXT DEFAULT '',
-      notes TEXT DEFAULT '',
-      data_json TEXT DEFAULT '{}',
-      created_at TIMESTAMPTZ DEFAULT NOW()
-    )`,
-    `CREATE TABLE IF NOT EXISTS expenses (
-      id SERIAL PRIMARY KEY,
-      tenant_id TEXT NOT NULL,
-      date TEXT DEFAULT '',
-      category TEXT DEFAULT 'General',
-      description TEXT DEFAULT '',
-      amount REAL DEFAULT 0,
-      paid_to TEXT DEFAULT '',
-      mode TEXT DEFAULT 'cash',
-      receipt_ref TEXT DEFAULT '',
-      approved_by TEXT DEFAULT '',
+      level REAL DEFAULT 0,
+      temperature REAL DEFAULT 0,
+      density REAL DEFAULT 0,
+      employee_id INTEGER DEFAULT 0,
+      employee_name TEXT DEFAULT '',
       data_json TEXT DEFAULT '{}',
       created_at TIMESTAMPTZ DEFAULT NOW()
     )`,
@@ -367,32 +377,46 @@ async function initDatabase() {
       id SERIAL PRIMARY KEY,
       tenant_id TEXT NOT NULL,
       date TEXT DEFAULT '',
-      fuel_type TEXT DEFAULT '',
-      liters REAL DEFAULT 0,
-      amount REAL DEFAULT 0,
-      rate REAL DEFAULT 0,
+      time TEXT DEFAULT '',
       tank_id TEXT DEFAULT '',
+      fuel_type TEXT DEFAULT '',
+      quantity REAL DEFAULT 0,
+      rate REAL DEFAULT 0,
+      amount REAL DEFAULT 0,
       supplier TEXT DEFAULT '',
-      invoice_no TEXT DEFAULT '',
-      notes TEXT DEFAULT '',
+      bill_no TEXT DEFAULT '',
+      employee_id INTEGER DEFAULT 0,
+      employee_name TEXT DEFAULT '',
       data_json TEXT DEFAULT '{}',
       created_at TIMESTAMPTZ DEFAULT NOW()
     )`,
+    `CREATE TABLE IF NOT EXISTS expenses (
+      id SERIAL PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      date TEXT DEFAULT '',
+      time TEXT DEFAULT '',
+      category TEXT DEFAULT '',
+      description TEXT DEFAULT '',
+      amount REAL DEFAULT 0,
+      payment_method TEXT DEFAULT 'cash',
+      employee_id INTEGER DEFAULT 0,
+      employee_name TEXT DEFAULT '',
+      data_json TEXT DEFAULT '{}',
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      idempotency_key TEXT DEFAULT ''
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_expenses_idem ON expenses(tenant_id, idempotency_key) WHERE idempotency_key != ''`,
     `CREATE TABLE IF NOT EXISTS credit_customers (
       id SERIAL PRIMARY KEY,
       tenant_id TEXT NOT NULL,
       name TEXT DEFAULT '',
       phone TEXT DEFAULT '',
-      vehicle TEXT DEFAULT '',
-      company TEXT DEFAULT '',
-      type TEXT DEFAULT 'individual',
+      address TEXT DEFAULT '',
       credit_limit REAL DEFAULT 0,
       balance REAL DEFAULT 0,
-      last_payment TEXT DEFAULT '',
       active INTEGER DEFAULT 1,
       data_json TEXT DEFAULT '{}',
-      created_at TIMESTAMPTZ DEFAULT NOW(),
-      updated_at TIMESTAMPTZ DEFAULT NOW()
+      created_at TIMESTAMPTZ DEFAULT NOW()
     )`,
     `CREATE TABLE IF NOT EXISTS credit_transactions (
       id SERIAL PRIMARY KEY,
@@ -428,9 +452,16 @@ async function initDatabase() {
     `CREATE TABLE IF NOT EXISTS shifts (
       id TEXT NOT NULL,
       tenant_id TEXT NOT NULL,
-      name TEXT DEFAULT '',
-      start_time TEXT DEFAULT '',
-      end_time TEXT DEFAULT '',
+      employee_id INTEGER,
+      shift_type TEXT DEFAULT '',
+      start_time TIMESTAMPTZ,
+      end_time TIMESTAMPTZ,
+      date TEXT DEFAULT '',
+      total_sales REAL DEFAULT 0,
+      total_transactions INTEGER DEFAULT 0,
+      cash_amount REAL DEFAULT 0,
+      card_amount REAL DEFAULT 0,
+      upi_amount REAL DEFAULT 0,
       status TEXT DEFAULT 'open',
       data_json TEXT DEFAULT '{}',
       updated_at TIMESTAMPTZ DEFAULT NOW(),
@@ -443,9 +474,6 @@ async function initDatabase() {
       updated_at TIMESTAMPTZ DEFAULT NOW(),
       PRIMARY KEY(key, tenant_id)
     )`,
-    // BUG-10 FIX: Lubes & Products tables — previously stored as JSON blobs in settings
-    // which can grow > 5MB. Proper tables prevent settings row bloat.
-    // Frontend still uses setSetting/getSetting as primary path (backward-compatible).
     `CREATE TABLE IF NOT EXISTS lubes_products (
       id TEXT NOT NULL,
       tenant_id TEXT NOT NULL,
@@ -483,7 +511,6 @@ async function initDatabase() {
       created_at TIMESTAMPTZ DEFAULT NOW()
     )`,
     `CREATE INDEX IF NOT EXISTS idx_lubes_sales_tenant ON lubes_sales(tenant_id, date DESC)`,
-
     `CREATE TABLE IF NOT EXISTS audit_log (
       id SERIAL PRIMARY KEY,
       tenant_id TEXT DEFAULT '',
@@ -505,21 +532,16 @@ async function initDatabase() {
       success INTEGER DEFAULT 0,
       attempted_at TIMESTAMPTZ DEFAULT NOW()
     )`,
-    // Performance indexes
-    `CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at)`,
-    `CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token)`,
-    `CREATE INDEX IF NOT EXISTS idx_sales_tenant_date ON sales(tenant_id, date DESC)`,
-    `CREATE INDEX IF NOT EXISTS idx_login_attempts_ip ON login_attempts(ip_address, attempted_at)`,
-    `CREATE INDEX IF NOT EXISTS idx_audit_log_tenant ON audit_log(tenant_id, created_at DESC)`,
-    `CREATE INDEX IF NOT EXISTS idx_credit_tx_customer ON credit_transactions(customer_id, tenant_id)`,
-    `CREATE INDEX IF NOT EXISTS idx_employees_tenant ON employees(tenant_id, active)`,
-    // ── Fix 02: indexes missing from supporting tables ──────────────────────
-    `CREATE INDEX IF NOT EXISTS idx_shifts_tenant_date    ON shifts(tenant_id, date DESC)`,
-    `CREATE INDEX IF NOT EXISTS idx_expenses_tenant_date  ON expenses(tenant_id, date DESC)`,
-    `CREATE INDEX IF NOT EXISTS idx_dip_tenant_date       ON dip_readings(tenant_id, date DESC)`,
-    `CREATE INDEX IF NOT EXISTS idx_purchases_tenant_date ON fuel_purchases(tenant_id, date DESC)`,
-    
-    // ── ENHANCED FEATURES: Smart Alerts System ──────────────────────────────
+    `CREATE TABLE IF NOT EXISTS push_subscriptions (
+      id SERIAL PRIMARY KEY,
+      tenant_id TEXT DEFAULT '',
+      user_id INTEGER DEFAULT 0,
+      user_type TEXT DEFAULT '',
+      endpoint TEXT NOT NULL,
+      keys_json TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(endpoint)
+    )`,
     `CREATE TABLE IF NOT EXISTS alerts (
       id SERIAL PRIMARY KEY,
       tenant_id TEXT NOT NULL,
@@ -534,6 +556,17 @@ async function initDatabase() {
       created_at TIMESTAMPTZ DEFAULT NOW(),
       updated_at TIMESTAMPTZ DEFAULT NOW()
     )`,
+    `CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at)`,
+    `CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token)`,
+    `CREATE INDEX IF NOT EXISTS idx_sales_tenant_date ON sales(tenant_id, date DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_login_attempts_ip ON login_attempts(ip_address, attempted_at)`,
+    `CREATE INDEX IF NOT EXISTS idx_audit_log_tenant ON audit_log(tenant_id, created_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_credit_tx_customer ON credit_transactions(customer_id, tenant_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_employees_tenant ON employees(tenant_id, active)`,
+    `CREATE INDEX IF NOT EXISTS idx_shifts_tenant_date ON shifts(tenant_id, date DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_expenses_tenant_date ON expenses(tenant_id, date DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_dip_tenant_date ON dip_readings(tenant_id, date DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_purchases_tenant_date ON fuel_purchases(tenant_id, date DESC)`,
     `CREATE INDEX IF NOT EXISTS idx_alerts_tenant ON alerts(tenant_id, acknowledged, created_at DESC)`,
     `CREATE INDEX IF NOT EXISTS idx_alerts_type ON alerts(tenant_id, type, created_at DESC)`,
   ];
@@ -543,13 +576,9 @@ async function initDatabase() {
     catch (e) { console.warn('[Schema]', e.message.substring(0, 120)); }
   }
 
-  // C-02 FIX: Default superadmin password from env var — never hardcode in source.
-  // Set SUPER_ADMIN_INIT_PASS in Railway Variables before first deploy.
-  // If not set, a random password is generated and printed ONCE to server logs.
   const existing = await pool.query('SELECT id FROM super_admin WHERE id = 1');
   if (existing.rows.length === 0) {
-    const initPass = process.env.SUPER_ADMIN_INIT_PASS ||
-                     crypto.randomBytes(16).toString('hex');
+    const initPass = process.env.SUPER_ADMIN_INIT_PASS || crypto.randomBytes(16).toString('hex');
     const initHash = await hashPassword(initPass);
     await pool.query(
       'INSERT INTO super_admin (id, username, pass_hash) VALUES ($1, $2, $3)',
@@ -561,65 +590,16 @@ async function initDatabase() {
       console.log(`║  Username : ${(process.env.SUPER_ADMIN_USERNAME || 'superadmin').padEnd(40)}║`);
       console.log(`║  Password : ${initPass.padEnd(40)}║`);
       console.log('╚══════════════════════════════════════════════════════╝');
-    } else {
-      console.log('[DB] Super admin seeded from SUPER_ADMIN_INIT_PASS env var');
     }
   }
 
-  // ── Add columns that may be missing from existing deployments ──────────────
-  // These ALTER TABLE statements are safe — IF NOT EXISTS means no error if already present
-  const MIGRATIONS = [
-    `ALTER TABLE sales ADD COLUMN IF NOT EXISTS time TEXT DEFAULT ''`,
-    `ALTER TABLE sales ADD COLUMN IF NOT EXISTS upi_txn_id TEXT DEFAULT ''`,
-    `ALTER TABLE sales ADD COLUMN IF NOT EXISTS nozzle TEXT DEFAULT ''`,
-    `ALTER TABLE sales ADD COLUMN IF NOT EXISTS employee_name TEXT DEFAULT ''`,
-    // M-02 FIX: idempotency key prevents duplicate sales on network retry
-    `ALTER TABLE sales ADD COLUMN IF NOT EXISTS idempotency_key TEXT DEFAULT ''`,
-    `CREATE UNIQUE INDEX IF NOT EXISTS idx_sales_idem ON sales(tenant_id, idempotency_key) WHERE idempotency_key != ''`,
-    // FIX: Add idempotency key to expenses table to prevent duplicate expense submissions
-    `ALTER TABLE expenses ADD COLUMN IF NOT EXISTS idempotency_key TEXT DEFAULT ''`,
-    `CREATE UNIQUE INDEX IF NOT EXISTS idx_expenses_idem ON expenses(tenant_id, idempotency_key) WHERE idempotency_key != ''`,
-    `ALTER TABLE credit_customers ADD COLUMN IF NOT EXISTS balance REAL DEFAULT 0`,
-    `ALTER TABLE credit_customers ADD COLUMN IF NOT EXISTS credit_limit REAL DEFAULT 0`,
-    `ALTER TABLE credit_customers ADD COLUMN IF NOT EXISTS last_payment TEXT DEFAULT ''`,
-    `ALTER TABLE credit_customers ADD COLUMN IF NOT EXISTS type TEXT DEFAULT 'individual'`,
-    `ALTER TABLE employees ADD COLUMN IF NOT EXISTS color TEXT DEFAULT ''`,
-    `ALTER TABLE employees ADD COLUMN IF NOT EXISTS shift TEXT DEFAULT ''`,
-    `ALTER TABLE employees ADD COLUMN IF NOT EXISTS emp_id TEXT DEFAULT ''`,
-    `ALTER TABLE employees ADD COLUMN IF NOT EXISTS aadhar TEXT DEFAULT ''`,
-    `CREATE UNIQUE INDEX IF NOT EXISTS idx_employees_empid ON employees(tenant_id, emp_id) WHERE emp_id != ''`,
-    `ALTER TABLE pumps ADD COLUMN IF NOT EXISTS open_reading REAL DEFAULT 0`,
-    `ALTER TABLE pumps ADD COLUMN IF NOT EXISTS nozzle_readings TEXT DEFAULT '{}'`,
-    `ALTER TABLE pumps ADD COLUMN IF NOT EXISTS nozzle_open TEXT DEFAULT '{}'`,
-    `ALTER TABLE pumps ADD COLUMN IF NOT EXISTS nozzle_fuels TEXT DEFAULT '{}'`,
-    `ALTER TABLE pumps ADD COLUMN IF NOT EXISTS nozzle_labels TEXT DEFAULT '{}'`,
-    `ALTER TABLE pumps ADD COLUMN IF NOT EXISTS nozzles INTEGER DEFAULT 2`,
-    // New migrations for field mapping fixes
-    `ALTER TABLE tanks ADD COLUMN IF NOT EXISTS last_dip TEXT DEFAULT ''`,
-    `ALTER TABLE dip_readings ADD COLUMN IF NOT EXISTS time TEXT DEFAULT ''`,
-    `ALTER TABLE dip_readings ADD COLUMN IF NOT EXISTS method TEXT DEFAULT ''`,
-    // FA-04: track who last updated tank level (admin dip vs shift close)
-    `ALTER TABLE tanks ADD COLUMN IF NOT EXISTS last_dip_source TEXT DEFAULT 'shift_close'`,
-    // FA-03: store timestamp when nozzle readings last updated (carry-forward info for employees)
-    `ALTER TABLE pumps ADD COLUMN IF NOT EXISTS reading_updated_at TEXT DEFAULT ''`,
-  ];
-  for (const migration of MIGRATIONS) {
-    try { await pool.query(migration); }
-    catch (e) { console.warn('[Migration]', e.message.substring(0, 80)); }
-  }
-  console.log('[DB] Migrations applied');
-
-  // Cleanup on startup
-  try {
-    const r = await pool.query('DELETE FROM sessions WHERE expires_at < NOW()');
-    if (r.rowCount > 0) console.log(`[DB] Cleaned ${r.rowCount} expired sessions`);
-  } catch {}
-  try {
-    await pool.query("DELETE FROM login_attempts WHERE attempted_at < NOW() - INTERVAL '24 hours'");
-  } catch {}
-
-  console.log('[DB] PostgreSQL ready');
-  return new PgDbWrapper(pool);
+  console.log('[Schema] Database schema initialized successfully');
+  return new Database(pool);
 }
 
-module.exports = { initDatabase, hashPassword, verifyPassword, pool };
+module.exports = {
+  initDatabase,
+  pool,
+  hashPassword,
+  verifyPassword
+};
