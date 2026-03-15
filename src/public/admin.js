@@ -256,8 +256,41 @@ function renderDashboard(D) {
       </div>`
     : '';
 
+  // Subscription status badge — fetch async if not loaded
+  if (!window._subStatus) {
+    const tid = APP.tenant?.id;
+    if (tid) {
+      fetch('/api/public/subscription/' + encodeURIComponent(tid))
+        .then(r => r.json()).then(s => { window._subStatus = s; renderPage(); }).catch(()=>{});
+    }
+  }
+  const sub = window._subStatus;
+  const subBadge = sub ? (() => {
+    const STATUS_MAP = {
+      trial:     { bg:'rgba(59,130,246,0.12)', col:'#60a5fa', icon:'⏱️', label: sub.trial_days_left > 0 ? `Trial — ${sub.trial_days_left} days left` : 'Trial Expired' },
+      active:    { bg:'rgba(34,197,94,0.12)',  col:'var(--green)', icon:'✅', label: sub.days_left > 7 ? `Active — expires ${new Date(sub.sub_end).toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'})}` : `Active — ${sub.days_left} days left` },
+      grace:     { bg:'rgba(249,115,22,0.12)', col:'var(--orange)', icon:'⚠️', label: `Grace period — renew now` },
+      expired:   { bg:'rgba(239,68,68,0.12)',  col:'var(--red)', icon:'🔒', label: 'Subscription expired — Read only mode' },
+      suspended: { bg:'rgba(148,163,184,0.12)',col:'var(--text-3)', icon:'⏸️', label: 'Subscription suspended' },
+    };
+    const s = STATUS_MAP[sub.status] || STATUS_MAP.expired;
+    return `<div style="padding:8px 14px;background:${s.bg};border-radius:8px;margin-bottom:16px;display:flex;align-items:center;gap:8px;font-size:12px">
+      <span>${s.icon}</span>
+      <span style="color:${s.col};font-weight:700">${s.label}</span>
+      ${sub.status === 'expired' || sub.status === 'grace' ? '<span style="margin-left:auto;font-size:11px;color:var(--text-3)">Contact support to renew</span>' : ''}
+    </div>`;
+  })() : '';
+
+  const readOnlyBanner = (sub && sub.is_read_only) ? `
+    <div style="padding:12px 16px;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.3);border-radius:10px;margin-bottom:16px;text-align:center">
+      <div style="font-size:15px;font-weight:700;color:var(--red);margin-bottom:4px">🔒 Subscription Expired — Read Only Mode</div>
+      <div style="font-size:12px;color:var(--text-3)">You can view all your data but cannot add new sales, purchases or records. Please renew your subscription to continue.</div>
+    </div>` : '';
+
   return `
+    ${readOnlyBanner}
     ${nmlAlert}
+    ${subBadge}
     <div class="g g-auto-sm mb-24 gap-16">
       ${statCard('Today\'s Revenue', cur(totalRevenue), 'all pumps today', '💰')}
       ${statCard('Petrol Sold', fmt(petrolLiters) + ' L', 'today', '🔴')}
@@ -6131,6 +6164,7 @@ const PAGES = [
   { id: 'reports', label: 'Reports', icon: '📄', group: 'reports' },
   { id: 'analytics', label: 'Analytics', icon: '🔍', group: 'reports' },
   { id: 'compare', label: 'Compare Stations', icon: '🏢', group: 'reports', superAdminOnly: true },
+  { id: 'billing', label: 'Subscriptions', icon: '💳', group: 'reports', superAdminOnly: true },
   { id: 'insights', label: 'AI Insights', icon: '🤖', group: 'reports' },
   { id: 'settings', label: 'Settings', icon: '⚙️', group: 'reports' },
 ];
@@ -6287,6 +6321,7 @@ function renderPage() {
       case 'reports': html = renderReports(D); break;
       case 'analytics': html = renderAnalytics(D); break;
       case 'compare': html = renderCompare(D); break;
+      case 'billing': html = renderBilling(D); break;
       case 'insights': html = renderInsights(D); break;
       case 'employee': html = renderEmployeePortal(); break;
       case 'settings': html = renderSettings(D); break;
@@ -9235,6 +9270,289 @@ function renderCompare(D) {
     ${isSuperUser ? superTable : ownerCards}`;
 }
 window.renderCompare = renderCompare;
+
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ── SUBSCRIPTION BILLING DASHBOARD (Super Admin only) ────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+
+let _billingData = null;
+let _billingLastFetch = 0;
+
+async function _fetchBilling() {
+  try {
+    const resp = await fetch('/api/subscriptions', { headers: { 'Authorization': 'Bearer ' + (APP.token||'') } });
+    if (!resp.ok) return;
+    _billingData = await resp.json();
+    _billingLastFetch = Date.now();
+    if (APP.page === 'billing') renderPage();
+  } catch(e) { console.warn('[Billing]', e.message); }
+}
+
+function renderBilling(D) {
+  if (!_billingData || (Date.now() - _billingLastFetch > 60000)) {
+    _fetchBilling();
+  }
+
+  const PLAN_MONTHS = { trial:0, monthly:1, quarterly:3, halfyearly:6, yearly:12 };
+  const PLAN_LABELS = { trial:'Trial', monthly:'Monthly', quarterly:'3 Months', halfyearly:'6 Months', yearly:'Yearly' };
+
+  const statusBadge = s => {
+    const map = {
+      trial:   ['rgba(59,130,246,0.15)','#60a5fa','Trial'],
+      active:  ['rgba(34,197,94,0.15)','var(--green)','Active'],
+      grace:   ['rgba(249,115,22,0.15)','var(--orange)','Grace Period'],
+      expired: ['rgba(239,68,68,0.15)','var(--red)','Expired'],
+      suspended:['rgba(148,163,184,0.15)','var(--text-3)','Suspended'],
+    };
+    const [bg, col, lbl] = map[s] || map.expired;
+    return `<span style="background:${bg};color:${col};font-size:10px;font-weight:700;padding:2px 8px;border-radius:99px">${lbl}</span>`;
+  };
+
+  if (!_billingData) return `<div class="page-hdr"><h3>💳 Subscriptions</h3></div>
+    <div class="card card-pad" style="text-align:center;padding:60px">
+      <div style="font-size:36px;margin-bottom:12px">⏳</div>
+      <div class="fw-700">Loading subscription data…</div>
+    </div>`;
+
+  // Summary stats
+  const total = _billingData.length;
+  const active = _billingData.filter(s => s.effective_status === 'active').length;
+  const trial  = _billingData.filter(s => s.effective_status === 'trial').length;
+  const expired= _billingData.filter(s => s.effective_status === 'expired').length;
+  const grace  = _billingData.filter(s => s.effective_status === 'grace').length;
+  const mrr    = _billingData.filter(s => s.effective_status === 'active').reduce((a,s) => a+(s.price_monthly||0), 0);
+  const totalPaid = _billingData.reduce((a,s) => a+(s.total_paid||0), 0);
+  const expiringSoon = _billingData.filter(s => s.effective_status === 'active' && s.days_left !== null && s.days_left <= 7).length;
+
+  const statCards = `
+    <div class="g" style="grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;margin-bottom:20px">
+      ${statCard('Total Stations', total, 'all tenants', '🏪')}
+      ${statCard('Active', active, 'paid subscriptions', '✅')}
+      ${statCard('Trial', trial, 'in trial period', '⏱️')}
+      ${statCard('Expired', expired + (grace?' + '+grace+' grace':''), 'need renewal', '⚠️')}
+      ${statCard('MRR', '₹'+mrr.toLocaleString('en-IN'), 'monthly recurring', '💰')}
+      ${statCard('Total Collected', '₹'+totalPaid.toLocaleString('en-IN'), 'all time', '📊')}
+    </div>`;
+
+  const expiryAlert = expiringSoon > 0 ? `
+    <div style="padding:10px 16px;background:rgba(249,115,22,0.08);border:1px solid rgba(249,115,22,0.3);border-radius:8px;margin-bottom:16px;font-size:13px;color:var(--orange)">
+      ⚠️ <strong>${expiringSoon} station${expiringSoon>1?'s':''}</strong> expiring within 7 days — contact them for renewal
+    </div>` : '';
+
+  // Station cards
+  const cards = _billingData.map(s => {
+    const daysLabel = s.effective_status === 'trial'
+      ? (s.trial_days_left > 0 ? `${s.trial_days_left} trial days left` : 'Trial expired')
+      : s.days_left !== null ? (s.days_left > 0 ? `${s.days_left} days left` : 'Expired') : '—';
+    const urgency = (s.effective_status === 'expired') ? 'rgba(239,68,68,0.3)'
+      : (s.days_left !== null && s.days_left <= 7) ? 'rgba(249,115,22,0.3)' : 'var(--border)';
+
+    return `<div class="card card-pad mb-12" style="border-left:3px solid ${urgency}">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">
+        <div>
+          <div class="fw-800" style="font-size:15px;color:var(--text-0)">${sanitize(s.station_name)}</div>
+          <div style="font-size:11px;color:var(--text-3)">${sanitize(s.location||'')} · ${sanitize(s.owner_name||'')}</div>
+        </div>
+        <div style="text-align:right">
+          ${statusBadge(s.effective_status)}
+          <div style="font-size:11px;color:var(--text-3);margin-top:4px">${daysLabel}</div>
+        </div>
+      </div>
+      <div class="g" style="grid-template-columns:repeat(3,1fr);gap:8px;font-size:11px;margin-bottom:12px">
+        <div class="dbox text-center" style="padding:6px">
+          <div class="fw-700">${PLAN_LABELS[s.plan]||s.plan}</div>
+          <div style="color:var(--text-3)">Plan</div>
+        </div>
+        <div class="dbox text-center" style="padding:6px">
+          <div class="fw-700 mono">₹${(s.price_monthly||0).toLocaleString('en-IN')}</div>
+          <div style="color:var(--text-3)">Monthly</div>
+        </div>
+        <div class="dbox text-center" style="padding:6px">
+          <div class="fw-700 mono">₹${(s.total_paid||0).toLocaleString('en-IN')}</div>
+          <div style="color:var(--text-3)">Total Paid</div>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-accent btn-sm" style="flex:1;min-width:100px" onclick="openRecordPaymentModal('${s.tenant_id}','${sanitize(s.station_name)}',${s.price_monthly||0})">💰 Record Payment</button>
+        <button class="btn btn-ghost btn-sm" style="flex:1;min-width:100px" onclick="openSubSettingsModal('${s.tenant_id}','${sanitize(s.station_name)}')">⚙️ Settings</button>
+        <button class="btn btn-ghost btn-sm" style="flex:1;min-width:100px" onclick="openPaymentHistoryModal('${s.tenant_id}','${sanitize(s.station_name)}')">📋 History</button>
+      </div>
+    </div>`;
+  }).join('') || `<div class="card card-pad" style="text-align:center;padding:40px;color:var(--text-3)">No stations found</div>`;
+
+  return `<div class="page-hdr"><h3>💳 Subscriptions</h3>
+    <button class="btn btn-ghost btn-sm" onclick="_fetchBilling()">🔄 Refresh</button>
+  </div>
+  ${statCards}${expiryAlert}
+  <div id="billing-cards">${cards}</div>`;
+}
+window.renderBilling = renderBilling;
+
+function openRecordPaymentModal(tenantId, stationName, defaultPrice) {
+  const planOpts = [
+    ['monthly','Monthly (1 month)'],
+    ['quarterly','Quarterly (3 months)'],
+    ['halfyearly','Half-yearly (6 months)'],
+    ['yearly','Yearly (12 months)'],
+  ].map(([v,l]) => `<option value="${v}">${l}</option>`).join('');
+
+  const monthsMap = { monthly:1, quarterly:3, halfyearly:6, yearly:12 };
+
+  openModal(`💰 Record Payment — ${sanitize(stationName)}`, `
+    <div class="g g-2 gap-12 mb-12">
+      <div class="form-group"><label class="form-label">Plan *</label>
+        <select class="form-input" id="rp_plan" onchange="
+          const m={monthly:1,quarterly:3,halfyearly:6,yearly:12};
+          document.getElementById('rp_months').value=m[this.value]||1;
+          document.getElementById('rp_amount').value=(${defaultPrice||0}*m[this.value]).toFixed(0);
+        ">${planOpts}</select>
+      </div>
+      <div class="form-group"><label class="form-label">Months</label>
+        <input class="form-input mono" type="number" id="rp_months" value="1" min="1" max="24" />
+      </div>
+    </div>
+    <div class="g g-2 gap-12 mb-12">
+      <div class="form-group"><label class="form-label">Amount (₹) *</label>
+        <input class="form-input mono" type="number" id="rp_amount" value="${defaultPrice||0}" min="0" />
+      </div>
+      <div class="form-group"><label class="form-label">Payment Mode</label>
+        <select class="form-input" id="rp_mode">
+          <option value="upi">UPI</option>
+          <option value="cash">Cash</option>
+          <option value="bank">Bank Transfer</option>
+          <option value="cheque">Cheque</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-group"><label class="form-label">Reference / UTR</label>
+      <input class="form-input" id="rp_ref" placeholder="UPI ref, UTR, cheque no..." />
+    </div>
+    <div class="form-group"><label class="form-label">Notes</label>
+      <input class="form-input" id="rp_notes" placeholder="Optional notes" />
+    </div>
+    <input type="hidden" id="rp_tid" value="${tenantId}" />
+  `, `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+     <button class="btn btn-accent" onclick="savePayment()">💾 Record Payment</button>`);
+}
+window.openRecordPaymentModal = openRecordPaymentModal;
+
+async function savePayment() {
+  const tid    = document.getElementById('rp_tid')?.value;
+  const plan   = document.getElementById('rp_plan')?.value;
+  const months = parseInt(document.getElementById('rp_months')?.value) || 1;
+  const amount = parseFloat(document.getElementById('rp_amount')?.value) || 0;
+  const mode   = document.getElementById('rp_mode')?.value || 'upi';
+  const ref    = document.getElementById('rp_ref')?.value?.trim() || '';
+  const notes  = document.getElementById('rp_notes')?.value?.trim() || '';
+  if (!amount || amount <= 0) { toast('Enter a valid amount', 'error'); return; }
+  try {
+    const resp = await fetch('/api/subscriptions/' + encodeURIComponent(tid) + '/payments', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + (APP.token||'') },
+      body: JSON.stringify({ plan, amount, payment_mode: mode, reference: ref, months, notes })
+    });
+    const result = await resp.json();
+    if (!resp.ok) { toast(result.error || 'Payment failed', 'error'); return; }
+    closeModal();
+    toast('✅ Payment recorded — subscription extended!', 'success');
+    _billingData = null;
+    _fetchBilling();
+  } catch(e) { toast('Network error: ' + e.message, 'error'); }
+}
+window.savePayment = savePayment;
+
+function openSubSettingsModal(tenantId, stationName) {
+  const sub = _billingData?.find(s => s.tenant_id === tenantId) || {};
+  openModal(`⚙️ Subscription Settings — ${sanitize(stationName)}`, `
+    <div class="g g-2 gap-12 mb-12">
+      <div class="form-group"><label class="form-label">Status</label>
+        <select class="form-input" id="ss_status">
+          <option value="trial" ${sub.status==='trial'?'selected':''}>Trial</option>
+          <option value="active" ${sub.status==='active'?'selected':''}>Active</option>
+          <option value="suspended" ${sub.status==='suspended'?'selected':''}>Suspended</option>
+        </select>
+      </div>
+      <div class="form-group"><label class="form-label">Trial Days</label>
+        <input class="form-input mono" type="number" id="ss_trial" value="${sub.trial_days||30}" min="1" max="365" />
+      </div>
+    </div>
+    <div class="g g-2 gap-12 mb-12">
+      <div class="form-group"><label class="form-label">Monthly Price (₹)</label>
+        <input class="form-input mono" type="number" id="ss_price" value="${sub.price_monthly||0}" min="0" />
+      </div>
+      <div class="form-group"><label class="form-label">Grace Period (days)</label>
+        <input class="form-input mono" type="number" id="ss_grace" value="${sub.grace_days||3}" min="0" max="30" />
+      </div>
+    </div>
+    <div class="form-group"><label class="form-label">Owner Phone (for reminders)</label>
+      <input class="form-input" id="ss_phone" value="${sanitize(sub.owner_phone||'')}" placeholder="+91XXXXXXXXXX" />
+    </div>
+    <div class="form-group"><label class="form-label">Notes</label>
+      <input class="form-input" id="ss_notes" value="${sanitize(sub.notes||'')}" placeholder="Internal notes" />
+    </div>
+    <input type="hidden" id="ss_tid" value="${tenantId}" />
+  `, `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+     <button class="btn btn-accent" onclick="saveSubSettings()">💾 Save Settings</button>`);
+}
+window.openSubSettingsModal = openSubSettingsModal;
+
+async function saveSubSettings() {
+  const tid      = document.getElementById('ss_tid')?.value;
+  const status   = document.getElementById('ss_status')?.value;
+  const trial_days= parseInt(document.getElementById('ss_trial')?.value)||30;
+  const price    = parseFloat(document.getElementById('ss_price')?.value)||0;
+  const grace    = parseInt(document.getElementById('ss_grace')?.value)||3;
+  const phone    = document.getElementById('ss_phone')?.value?.trim()||'';
+  const notes    = document.getElementById('ss_notes')?.value?.trim()||'';
+  try {
+    const resp = await fetch('/api/subscriptions/' + encodeURIComponent(tid), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + (APP.token||'') },
+      body: JSON.stringify({ status, trial_days, price_monthly: price, grace_days: grace, owner_phone: phone, notes })
+    });
+    if (!resp.ok) { const r=await resp.json(); toast(r.error||'Save failed','error'); return; }
+    closeModal();
+    toast('✅ Settings saved', 'success');
+    _billingData = null;
+    _fetchBilling();
+  } catch(e) { toast('Network error: '+e.message,'error'); }
+}
+window.saveSubSettings = saveSubSettings;
+
+async function openPaymentHistoryModal(tenantId, stationName) {
+  try {
+    const resp = await fetch('/api/subscriptions/' + encodeURIComponent(tenantId) + '/payments', {
+      headers: { 'Authorization': 'Bearer ' + (APP.token||'') }
+    });
+    const payments = await resp.json();
+    const rows = payments.length > 0 ? payments.map(p => {
+      const d = new Date(p.payment_date).toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'});
+      const end = p.period_end ? new Date(p.period_end).toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'}) : '—';
+      return `<tr>
+        <td style="font-size:12px">${d}</td>
+        <td style="font-size:12px">${p.plan}</td>
+        <td class="r mono fw-700" style="color:var(--green)">₹${(p.amount||0).toLocaleString('en-IN')}</td>
+        <td style="font-size:11px">${p.payment_mode}</td>
+        <td style="font-size:11px;color:var(--text-3)">${sanitize(p.reference||'—')}</td>
+        <td style="font-size:11px;color:var(--text-3)">${end}</td>
+      </tr>`;
+    }).join('') : '<tr><td colspan="6" style="text-align:center;padding:20px;color:var(--text-3)">No payments recorded</td></tr>';
+
+    const total = payments.reduce((a,p) => a+(p.amount||0), 0);
+    openModal(`📋 Payment History — ${sanitize(stationName)}`,
+      `<div class="tbl-wrap"><table>
+        <thead><tr><th>Date</th><th>Plan</th><th class="r">Amount</th><th>Mode</th><th>Ref</th><th>Valid Until</th></tr></thead>
+        <tbody>${rows}</tbody>
+        ${payments.length > 0 ? `<tfoot><tr style="font-weight:700;border-top:2px solid var(--border)">
+          <td colspan="2">TOTAL</td><td class="r mono" style="color:var(--green)">₹${total.toLocaleString('en-IN')}</td><td colspan="3"></td>
+        </tr></tfoot>` : ''}
+      </table></div>`,
+      `<button class="btn btn-accent" onclick="closeModal()">Close</button>`
+    );
+  } catch(e) { toast('Could not load payment history','error'); }
+}
+window.openPaymentHistoryModal = openPaymentHistoryModal;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ── AI INSIGHTS — Rules Engine ───────────────────────────────────────────────
