@@ -893,8 +893,8 @@ function mt_confirmDialog(title, bodyHtml, confirmLabel) {
       + '<div style="font-size:15px;font-weight:800;color:var(--text-0);margin-bottom:16px">'+title+'</div>'
       + bodyHtml
       + '<div style="display:flex;gap:8px;margin-top:16px">'
-      + '<button onclick="this.closest('[data-mtconfirm]').remove();window._mtConfirmResolve(false)" style="flex:1;background:var(--bg-2);border:1px solid var(--border);color:var(--text-2);border-radius:6px;padding:10px;font-size:13px;font-weight:700;cursor:pointer">Cancel</button>'
-      + '<button onclick="this.closest('[data-mtconfirm]').remove();window._mtConfirmResolve(true)" style="flex:1;background:var(--accent);border:none;color:#000;border-radius:6px;padding:10px;font-size:13px;font-weight:700;cursor:pointer">'+confirmLabel+'</button>'
+      + '<button onclick="this.closest(\'[data-mtconfirm]\').remove();window._mtConfirmResolve(false)" style="flex:1;background:var(--bg-2);border:1px solid var(--border);color:var(--text-2);border-radius:6px;padding:10px;font-size:13px;font-weight:700;cursor:pointer">Cancel</button>'
+      + '<button onclick="this.closest(\'[data-mtconfirm]\').remove();window._mtConfirmResolve(true)" style="flex:1;background:var(--accent);border:none;color:#000;border-radius:6px;padding:10px;font-size:13px;font-weight:700;cursor:pointer">'+confirmLabel+'</button>'
       + '</div></div>';
 
     window._mtConfirmResolve = resolve;
