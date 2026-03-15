@@ -456,15 +456,16 @@ async function mt_saveTenant(isEdit) {
         await TenantAPI.update(id, { name, location, ownerName, phone, icon });
         mt_toast(name + ' updated', 'success');
       } else {
-        const result = await TenantAPI.create({ name, location, ownerName, phone, icon, adminUser, adminPass });
-        // Create subscription record for the new station
+        // Read and validate subscription settings BEFORE creating station
         const trialEnabled = document.getElementById('tTrialEnabled')?.value !== '0';
         const trialDays    = trialEnabled ? (parseInt(document.getElementById('tTrialDays')?.value) || 30) : 0;
         const graceDays    = parseInt(document.getElementById('tGraceDays')?.value) || 3;
         const ownerWA      = (document.getElementById('tOwnerWA')?.value || '').trim();
-        // Read individual plan prices
         const selectedPlan = document.getElementById('tSelectedPlan')?.value || '';
         if (!selectedPlan) { mt_toast('Please select a subscription plan before creating the station', 'error'); return; }
+
+        const result = await TenantAPI.create({ name, location, ownerName, phone, icon, adminUser, adminPass });
+        // Create subscription record for the new station
         const isTrialOnly  = selectedPlan === 'trialonly';
         const planPrices = {
           monthly:    parseFloat(document.getElementById('tPrice_monthly')?.value)    || 999,
