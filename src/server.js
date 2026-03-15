@@ -864,6 +864,30 @@ async function startServer() {
         } catch (e2) { console.warn('[Tenant] Admin creation failed:', e2.message); }
       }
       await auLog(req, 'CREATE_TENANT', 'tenants', tenantId, name);
+
+      // Auto-create subscription record from request body if provided
+      const { trialDays, trialEnabled, selectedPlan, graceDays, ownerWA,
+              planPrices, subStatus, subStart, subEnd, priceMonthly } = req.body;
+      if (selectedPlan || trialDays !== undefined) {
+        try {
+          const td   = trialEnabled === false ? 0 : (parseInt(trialDays) || 30);
+          const st   = subStatus || (selectedPlan && selectedPlan !== 'trialonly' && !trialEnabled ? 'active' : 'trial');
+          const plan = (!selectedPlan || selectedPlan === 'trialonly') ? 'trial' : selectedPlan;
+          const pm   = parseFloat(priceMonthly) || 0;
+          const gd   = parseInt(graceDays) || 3;
+          const op   = ownerWA || '';
+          await pool.query(`
+            INSERT INTO subscriptions (tenant_id, plan, status, trial_days, price_monthly, grace_days, owner_phone, sub_start, sub_end, trial_start, updated_at)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW(),NOW())
+            ON CONFLICT(tenant_id) DO UPDATE SET
+              plan=$2, status=$3, trial_days=$4, price_monthly=$5, grace_days=$6,
+              owner_phone=$7, sub_start=COALESCE($8,subscriptions.sub_start),
+              sub_end=COALESCE($9,subscriptions.sub_end), updated_at=NOW()
+          `, [tenantId, plan, st, td, pm, gd, op, subStart||null, subEnd||null]);
+          console.log('[Tenant] Subscription created:', tenantId, plan, st);
+        } catch(se) { console.warn('[Tenant] Subscription creation failed:', se.message); }
+      }
+
       res.json({ success: true, id: tenantId });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
