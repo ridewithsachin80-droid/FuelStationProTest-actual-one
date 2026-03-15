@@ -233,15 +233,14 @@ function mt_showTenantForm(existing) {
   document.documentElement.scrollTop = 0;
   document.body.scrollTop = 0;
   app.innerHTML = `
-    <div style="position:fixed;inset:0;background:var(--bg-0);display:flex;align-items:center;justify-content:center;padding:20px;overflow-y:auto;z-index:9999">
-      <div style="width:100%;max-width:480px">
-        <div style="display:flex;align-items:center;gap:12px;margin-bottom:24px">
-          <button onclick="mt_showSelector()" style="background:var(--bg-2);border:1px solid var(--border);color:var(--text-1);border-radius:var(--radius-sm);padding:8px 14px;cursor:pointer;font-size:13px;font-weight:600">← Back</button>
-          <h2 style="font-size:20px;font-weight:800;color:var(--text-0)">${isEdit ? '✏️ Edit Station' : '➕ Add New Station'}</h2>
+    <div style="background:var(--bg-0);padding:10px 14px 80px;min-height:100vh">
+      <div style="width:100%;max-width:460px;margin:0 auto">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+          <button onclick="mt_showSelector()" style="background:var(--bg-2);border:1px solid var(--border);color:var(--text-1);border-radius:var(--radius-sm);padding:5px 10px;cursor:pointer;font-size:12px;font-weight:600">← Back</button>
+          <h2 style="font-size:16px;font-weight:800;color:var(--text-0)">${isEdit ? '✏️ Edit Station' : '➕ Add New Station'}</h2>
         </div>
-        <div style="background:var(--bg-2);border-radius:var(--radius);border:1px solid var(--border);padding:14px;margin-bottom:10px">
+        <div style="background:var(--bg-2);border-radius:var(--radius);border:1px solid var(--border);padding:12px;margin-bottom:8px">
           <div class="form-group"><label class="form-label">Station Name *</label>
-            <input class="form-input" id="tName" placeholder="e.g. Sri Lakshmi Fuel Station" value="${existing?.name||''}" />
           </div>
           <div class="form-group"><label class="form-label">Location</label>
             <input class="form-input" id="tLocation" placeholder="e.g. Tumakuru, Karnataka" value="${existing?.location||''}" />
