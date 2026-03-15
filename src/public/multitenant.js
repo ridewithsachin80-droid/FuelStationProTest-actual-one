@@ -234,15 +234,15 @@ function mt_showTenantForm(existing) {
   document.body.scrollTop = 0;
   app.innerHTML = `
     <div style="background:var(--bg-0);padding:10px 14px 80px;min-height:100vh">
-      <div style="width:100%;max-width:460px;margin:0 auto">
-        <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
-          <button onclick="mt_showSelector()" style="background:var(--bg-2);border:1px solid var(--border);color:var(--text-1);border-radius:var(--radius-sm);padding:5px 10px;cursor:pointer;font-size:12px;font-weight:600">← Back</button>
+    <div style="position:fixed;inset:0;background:var(--bg-0);overflow-y:auto;z-index:9999">
+      <div style="width:100%;max-width:460px;margin:0 auto;padding:12px 16px 80px">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;padding:4px 0">
           <h2 style="font-size:16px;font-weight:800;color:var(--text-0)">${isEdit ? '✏️ Edit Station' : '➕ Add New Station'}</h2>
         </div>
         <div style="background:var(--bg-2);border-radius:var(--radius);border:1px solid var(--border);padding:12px;margin-bottom:8px">
           <div class="form-group"><label class="form-label">Station Name *</label>
-          </div>
-          <div class="form-group"><label class="form-label">Location</label>
+          <div class="form-group"><label class="form-label">Station Name *</label>
+            <input class="form-input" id="tName" placeholder="e.g. Sri Lakshmi Fuel Station" value="${existing?.name||''}" />
             <input class="form-input" id="tLocation" placeholder="e.g. Tumakuru, Karnataka" value="${existing?.location||''}" />
           </div>
           <div class="form-group"><label class="form-label">Owner Name</label>
