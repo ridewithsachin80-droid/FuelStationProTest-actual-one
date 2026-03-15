@@ -10,7 +10,7 @@
  *   - Push notifications: Fully wired — requires VAPID subscription from server
  */
 
-const CACHE_VERSION = 'v13';
+const CACHE_VERSION = 'v15';
 const CACHE_NAME    = `fuelbunk-${CACHE_VERSION}`;
 const SHELL_CACHE   = `fuelbunk-shell-${CACHE_VERSION}`;
 const API_CACHE     = `fuelbunk-api-${CACHE_VERSION}`;
@@ -19,10 +19,10 @@ const API_CACHE     = `fuelbunk-api-${CACHE_VERSION}`;
 // FIX F-07: Added /chart.min.js (self-hosted Chart.js) so charts work offline
 const SHELL_ASSETS = [
   '/',
-  '/multitenant.js',
+  '/multitenant.js?v=15',
   '/utils.js',
-  '/admin.js',
-  '/employee.js',
+  '/admin.js?v=15',
+  '/employee.js?v=15',
   '/app.js',
   '/api-client.js',
   '/bridge.js',
