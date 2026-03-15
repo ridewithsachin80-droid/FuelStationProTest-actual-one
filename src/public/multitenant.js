@@ -274,9 +274,19 @@ function mt_showTenantForm(existing) {
           <div style="background:var(--bg-0);border-radius:var(--radius-sm);border:1px solid rgba(212,148,15,0.3);padding:14px;margin-top:12px">
             <div style="font-size:11px;font-weight:700;color:var(--accent-light);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px">💳 Subscription Settings</div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
-              <div class="form-group mb-0">
-                <label class="form-label">Trial Period (days)</label>
-                <input class="form-input mono" id="tTrialDays" type="number" value="30" min="1" max="365" placeholder="30" />
+              <div id="tTrialCard" onclick="mt_toggleTrial()" style="background:var(--bg-2);border:2px solid var(--accent);border-radius:8px;padding:10px;cursor:pointer;transition:border 0.15s">
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+                  <div id="tTrialDot" style="width:16px;height:16px;border-radius:50%;background:var(--accent);border:2px solid var(--accent);flex-shrink:0"></div>
+                  <div>
+                    <div style="font-size:12px;font-weight:700;color:var(--text-0)">Trial Period</div>
+                    <div style="font-size:10px;color:var(--text-3)">Free access before plan</div>
+                  </div>
+                </div>
+                <div style="display:flex;align-items:center;gap:4px">
+                  <input class="form-input mono" id="tTrialDays" type="number" value="30" min="1" max="365" placeholder="30"
+                    onclick="event.stopPropagation()" style="font-size:14px;font-weight:700;padding:5px 8px" />
+                  <span style="font-size:10px;color:var(--text-3);white-space:nowrap">days</span>
+                </div>
               </div>
               <div class="form-group mb-0">
                 <label class="form-label">Grace Period (days)
@@ -285,6 +295,7 @@ function mt_showTenantForm(existing) {
                 <input class="form-input mono" id="tGraceDays" type="number" value="3" min="0" max="30" placeholder="3" />
               </div>
             </div>
+            <input type="hidden" id="tTrialEnabled" value="1" />
             <div class="form-group mb-0">
               <label class="form-label" style="margin-bottom:8px;display:block">Subscription Plans — select one plan type & set price</label>
               <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
@@ -330,7 +341,14 @@ function mt_showTenantForm(existing) {
                   </div>
                 </label>
               </div>
-              <div style="font-size:10px;color:var(--text-3);margin-top:6px">Select one plan for this station. Trial period runs before the selected plan starts.</div>
+              <label id="tPlanCard_trialonly" onclick="mt_selectPlan('trialonly')" style="display:flex;align-items:center;gap:10px;background:var(--bg-2);border:2px solid var(--border);border-radius:8px;padding:10px;cursor:pointer;transition:border 0.15s;margin-top:8px;grid-column:1/-1">
+                <div id="tPlanDot_trialonly" style="width:16px;height:16px;border-radius:50%;border:2px solid var(--text-3);flex-shrink:0"></div>
+                <div>
+                  <div style="font-size:12px;font-weight:700;color:var(--text-0)">Trial Only</div>
+                  <div style="font-size:10px;color:var(--text-3)">No paid plan — trial access only, decide plan later</div>
+                </div>
+              </label>
+              <div style="font-size:10px;color:var(--text-3);margin-top:6px">Select one plan (or Trial Only). Trial period runs before the paid plan starts.</div>
               <input type="hidden" id="tSelectedPlan" value="" />
             </div>
             <div class="form-group mt-10 mb-0"><label class="form-label">Owner WhatsApp (for reminders)</label>
@@ -350,8 +368,48 @@ function mt_showTenantForm(existing) {
 
 }
 
+function mt_toggleTrial() {
+  var card = document.getElementById('tTrialCard');
+  var dot  = document.getElementById('tTrialDot');
+  var hidden = document.getElementById('tTrialEnabled');
+  var input = document.getElementById('tTrialDays');
+  if (!card || !dot || !hidden) return;
+  var enabled = hidden.value === '1';
+  if (enabled) {
+    // Disable trial
+    hidden.value = '0';
+    card.style.border = '2px solid var(--border)';
+    card.style.background = 'var(--bg-2)';
+    dot.style.background = 'transparent';
+    dot.style.border = '2px solid var(--text-3)';
+    if (input) { input.disabled = true; input.style.opacity = '0.4'; }
+  } else {
+    // Enable trial
+    hidden.value = '1';
+    card.style.border = '2px solid var(--accent)';
+    card.style.background = 'rgba(212,148,15,0.06)';
+    dot.style.background = 'var(--accent)';
+    dot.style.border = '2px solid var(--accent)';
+    if (input) { input.disabled = false; input.style.opacity = '1'; }
+  }
+}
+
 function mt_selectPlan(planId) {
-  var plans = ['monthly','quarterly','halfyearly','yearly'];
+  var plans = ['monthly','quarterly','halfyearly','yearly','trialonly'];
+  // If trial only selected, auto-enable trial toggle
+  if (planId === 'trialonly') {
+    var trialCard = document.getElementById('tTrialCard');
+    var trialDot  = document.getElementById('tTrialDot');
+    var trialHidden = document.getElementById('tTrialEnabled');
+    var trialInput = document.getElementById('tTrialDays');
+    if (trialHidden && trialHidden.value === '0') {
+      // Re-enable trial
+      trialHidden.value = '1';
+      if (trialCard) { trialCard.style.border='2px solid var(--accent)'; trialCard.style.background='rgba(212,148,15,0.06)'; }
+      if (trialDot)  { trialDot.style.background='var(--accent)'; trialDot.style.border='2px solid var(--accent)'; }
+      if (trialInput){ trialInput.disabled=false; trialInput.style.opacity='1'; }
+    }
+  }
   plans.forEach(function(p) {
     var card = document.getElementById('tPlanCard_'+p);
     var dot  = document.getElementById('tPlanDot_'+p);
@@ -394,18 +452,20 @@ async function mt_saveTenant(isEdit) {
       } else {
         const result = await TenantAPI.create({ name, location, ownerName, phone, icon, adminUser, adminPass });
         // Create subscription record for the new station
-        const trialDays    = parseInt(document.getElementById('tTrialDays')?.value) || 30;
+        const trialEnabled = document.getElementById('tTrialEnabled')?.value !== '0';
+        const trialDays    = trialEnabled ? (parseInt(document.getElementById('tTrialDays')?.value) || 30) : 0;
         const graceDays    = parseInt(document.getElementById('tGraceDays')?.value) || 3;
         const ownerWA      = (document.getElementById('tOwnerWA')?.value || '').trim();
         // Read individual plan prices
-        const selectedPlan = document.getElementById('tSelectedPlan')?.value || 'monthly';
+        const selectedPlan = document.getElementById('tSelectedPlan')?.value || 'trialonly';
+        const isTrialOnly  = !selectedPlan || selectedPlan === 'trialonly';
         const planPrices = {
           monthly:    parseFloat(document.getElementById('tPrice_monthly')?.value)    || 999,
           quarterly:  parseFloat(document.getElementById('tPrice_quarterly')?.value)  || 2800,
           halfyearly: parseFloat(document.getElementById('tPrice_halfyearly')?.value) || 5400,
           yearly:     parseFloat(document.getElementById('tPrice_yearly')?.value)     || 10000,
         };
-        const priceMonthly = planPrices[selectedPlan] || planPrices.monthly;
+        const priceMonthly = isTrialOnly ? 0 : (planPrices[selectedPlan] || planPrices.monthly);
         const newTenantId  = result?.id || id;
         if (newTenantId) {
           try {
@@ -416,7 +476,7 @@ async function mt_saveTenant(isEdit) {
                 plan: 'trial', status: 'trial', trial_days: trialDays,
                 price_monthly: priceMonthly, grace_days: graceDays,
                 owner_phone: ownerWA ? '+91' + ownerWA : '',
-                plan: selectedPlan,
+                plan: isTrialOnly ? 'trial' : selectedPlan,
                 notes: 'Prices: ' + JSON.stringify(planPrices)
               })
             });
