@@ -241,12 +241,12 @@ function mt_showTenantForm(existing) {
         </div>
         <div style="background:var(--bg-2);border-radius:var(--radius);border:1px solid var(--border);padding:12px;margin-bottom:8px">
           <div class="form-group"><label class="form-label">Station Name *</label>
-          <div class="form-group"><label class="form-label">Station Name *</label>
             <input class="form-input" id="tName" placeholder="e.g. Sri Lakshmi Fuel Station" value="${existing?.name||''}" />
           </div>
           <div class="form-group"><label class="form-label">Location</label>
             <input class="form-input" id="tLocation" placeholder="e.g. Tumakuru, Karnataka" value="${existing?.location||''}" />
           </div>
+          <div class="form-group"><label class="form-label">Owner Name</label>
             <input class="form-input" id="tOwner" placeholder="e.g. Ramesh Kumar" value="${existing?.ownerName||''}" />
           </div>
           <div class="form-row">
@@ -507,6 +507,7 @@ async function mt_saveTenant(isEdit) {
             }
 
             // Create subscription record
+            console.log('[Sub] Creating subscription:', {plan: isTrialOnly?'trial':selectedPlan, status: subStatus, trialDays, trialEnabled, sub_start: subStart, sub_end: subEnd});
             await fetch('/api/subscriptions/' + encodeURIComponent(newTenantId), {
               method: 'PUT',
               headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + tok },
