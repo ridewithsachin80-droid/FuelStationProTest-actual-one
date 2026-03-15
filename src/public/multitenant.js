@@ -300,46 +300,46 @@ function mt_showTenantForm(existing) {
               <label class="form-label" style="margin-bottom:8px;display:block">Subscription Plans — select one plan type & set price</label>
               <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
                 
-                <label id="tPlanCard_monthly" onclick="mt_selectPlan('monthly')" style="display:flex;flex-direction:column;gap:6px;background:var(--bg-2);border:2px solid var(--border);border-radius:8px;padding:10px;cursor:pointer;transition:border 0.15s">
+                <div id="tPlanCard_monthly" onclick="mt_selectPlan('monthly')" style="display:flex;flex-direction:column;gap:6px;background:var(--bg-2);border:2px solid var(--border);border-radius:8px;padding:10px;cursor:pointer;transition:border 0.15s">
                   <div style="display:flex;align-items:center;gap:8px">
                     <div id="tPlanDot_monthly" style="width:16px;height:16px;border-radius:50%;border:2px solid var(--text-3);flex-shrink:0"></div>
                     <div><div style="font-size:12px;font-weight:700;color:var(--text-0)">Monthly</div><div style="font-size:10px;color:var(--text-3)">1 month</div></div>
                   </div>
                   <div style="display:flex;align-items:center;gap:4px">
                     <span style="font-size:12px;color:var(--text-3)">₹</span>
-                    <input class="form-input mono" id="tPrice_monthly" type="number" value="" min="0" placeholder="Enter price" onfocus="mt_selectPlan('monthly')" style="font-size:14px;font-weight:700;padding:5px 8px" />
+                    <input class="form-input mono" id="tPrice_monthly" type="number" value="" min="0" placeholder="Enter price" style="font-size:14px;font-weight:700;padding:5px 8px" onclick="event.stopPropagation();mt_selectPlan('monthly')" />
                   </div>
-                </label>
-                <label id="tPlanCard_quarterly" onclick="mt_selectPlan('quarterly')" style="display:flex;flex-direction:column;gap:6px;background:var(--bg-2);border:2px solid var(--border);border-radius:8px;padding:10px;cursor:pointer;transition:border 0.15s">
+                </div>
+                <div id="tPlanCard_quarterly" onclick="mt_selectPlan('quarterly')" style="display:flex;flex-direction:column;gap:6px;background:var(--bg-2);border:2px solid var(--border);border-radius:8px;padding:10px;cursor:pointer;transition:border 0.15s">
                   <div style="display:flex;align-items:center;gap:8px">
                     <div id="tPlanDot_quarterly" style="width:16px;height:16px;border-radius:50%;border:2px solid var(--text-3);flex-shrink:0"></div>
                     <div><div style="font-size:12px;font-weight:700;color:var(--text-0)">Quarterly</div><div style="font-size:10px;color:var(--text-3)">3 months</div></div>
                   </div>
                   <div style="display:flex;align-items:center;gap:4px">
                     <span style="font-size:12px;color:var(--text-3)">₹</span>
-                    <input class="form-input mono" id="tPrice_quarterly" type="number" value="" min="0" placeholder="Enter price" onfocus="mt_selectPlan('quarterly')" style="font-size:14px;font-weight:700;padding:5px 8px" />
+                    <input class="form-input mono" id="tPrice_quarterly" type="number" value="" min="0" placeholder="Enter price" style="font-size:14px;font-weight:700;padding:5px 8px" onclick="event.stopPropagation();mt_selectPlan('quarterly')" />
                   </div>
-                </label>
-                <label id="tPlanCard_halfyearly" onclick="mt_selectPlan('halfyearly')" style="display:flex;flex-direction:column;gap:6px;background:var(--bg-2);border:2px solid var(--border);border-radius:8px;padding:10px;cursor:pointer;transition:border 0.15s">
+                </div>
+                <div id="tPlanCard_halfyearly" onclick="mt_selectPlan('halfyearly')" style="display:flex;flex-direction:column;gap:6px;background:var(--bg-2);border:2px solid var(--border);border-radius:8px;padding:10px;cursor:pointer;transition:border 0.15s">
                   <div style="display:flex;align-items:center;gap:8px">
                     <div id="tPlanDot_halfyearly" style="width:16px;height:16px;border-radius:50%;border:2px solid var(--text-3);flex-shrink:0"></div>
                     <div><div style="font-size:12px;font-weight:700;color:var(--text-0)">Half-Yearly</div><div style="font-size:10px;color:var(--text-3)">6 months</div></div>
                   </div>
                   <div style="display:flex;align-items:center;gap:4px">
                     <span style="font-size:12px;color:var(--text-3)">₹</span>
-                    <input class="form-input mono" id="tPrice_halfyearly" type="number" value="" min="0" placeholder="Enter price" onfocus="mt_selectPlan('halfyearly')" style="font-size:14px;font-weight:700;padding:5px 8px" />
+                    <input class="form-input mono" id="tPrice_halfyearly" type="number" value="" min="0" placeholder="Enter price" style="font-size:14px;font-weight:700;padding:5px 8px" onclick="event.stopPropagation();mt_selectPlan('halfyearly')" />
                   </div>
-                </label>
-                <label id="tPlanCard_yearly" onclick="mt_selectPlan('yearly')" style="display:flex;flex-direction:column;gap:6px;background:var(--bg-2);border:2px solid var(--border);border-radius:8px;padding:10px;cursor:pointer;transition:border 0.15s">
+                </div>
+                <div id="tPlanCard_yearly" onclick="mt_selectPlan('yearly')" style="display:flex;flex-direction:column;gap:6px;background:var(--bg-2);border:2px solid var(--border);border-radius:8px;padding:10px;cursor:pointer;transition:border 0.15s">
                   <div style="display:flex;align-items:center;gap:8px">
                     <div id="tPlanDot_yearly" style="width:16px;height:16px;border-radius:50%;border:2px solid var(--text-3);flex-shrink:0"></div>
                     <div><div style="font-size:12px;font-weight:700;color:var(--text-0)">Yearly</div><div style="font-size:10px;color:var(--text-3)">12 months</div></div>
                   </div>
                   <div style="display:flex;align-items:center;gap:4px">
                     <span style="font-size:12px;color:var(--text-3)">₹</span>
-                    <input class="form-input mono" id="tPrice_yearly" type="number" value="" min="0" placeholder="Enter price" onfocus="mt_selectPlan('yearly')" style="font-size:14px;font-weight:700;padding:5px 8px" />
+                    <input class="form-input mono" id="tPrice_yearly" type="number" value="" min="0" placeholder="Enter price" style="font-size:14px;font-weight:700;padding:5px 8px" onclick="event.stopPropagation();mt_selectPlan('yearly')" />
                   </div>
-                </label>
+                </div>
               </div>
               <label id="tPlanCard_trialonly" onclick="mt_selectPlan('trialonly')" style="display:flex;align-items:center;gap:10px;background:var(--bg-2);border:2px solid var(--border);border-radius:8px;padding:10px;cursor:pointer;transition:border 0.15s;margin-top:8px;grid-column:1/-1">
                 <div id="tPlanDot_trialonly" style="width:16px;height:16px;border-radius:50%;border:2px solid var(--text-3);flex-shrink:0"></div>
@@ -394,7 +394,13 @@ function mt_toggleTrial() {
   }
 }
 
+var _planSelectLock = 0;
 function mt_selectPlan(planId) {
+  // Debounce: ignore calls within 150ms of each other (label+input double-fire)
+  var now = Date.now();
+  if (now - _planSelectLock < 150) return;
+  _planSelectLock = now;
+
   var plans = ['monthly','quarterly','halfyearly','yearly','trialonly'];
   var hidden = document.getElementById('tSelectedPlan');
   var current = hidden ? hidden.value : '';
