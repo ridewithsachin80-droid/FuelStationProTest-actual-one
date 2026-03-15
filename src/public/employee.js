@@ -99,35 +99,33 @@ function getEmpPinHash(empId) {
 // Build EMP_LIST dynamically from APP.data.employees + stored pins
 function getEmpList() {
   const emps = APP.data?.employees;
-  // Build from live data when available (admin is logged in)
   if (emps && emps.length > 0) {
-    return emps.map(e => ({
-      id: e.id,
-      name: e.name,
-      role: e.role,
-      shift: e.shift,
+    const withPin = emps.map(e => ({
+      id: e.id, name: e.name, role: e.role, shift: e.shift,
       permissions: e.permissions || {},
       pinHash: getEmpPinHash(e.id),
     })).filter(e => e.pinHash);
+    // If we got employees with local pinHash, use them (admin session)
+    if (withPin.length > 0) return withPin;
+    // No local pinHash but employees exist — they have PINs on server (stripped for security)
+    // Trust server data: return all active employees so login screen is usable
+    // doEmpLogin() will verify PIN online via /api/public/verify-pin
+    return emps.map(e => ({
+      id: e.id, name: e.name, role: e.role, shift: e.shift,
+      permissions: e.permissions || {},
+      pinHash: '__server__', // sentinel: PIN verified server-side, not locally
+    }));
   }
-  // APP.data not loaded (employee login screen after cache clear)
-  // Use cache written by fetchPublicEmployees() which comes from server
-  // Server already filters to employees with pin_hash set — trust that filter
+  // APP.data not loaded — use fb_emp_cache from fetchPublicEmployees()
+  // Server already filters WHERE pin_hash IS NOT NULL so all entries have PINs
   try {
     const cached = JSON.parse(localStorage.getItem('fb_emp_cache') || '[]');
     if (cached.length > 0) {
       return cached.map(e => ({
-        id: e.id,
-        name: e.name,
-        role: e.role,
-        shift: e.shift || '',
+        id: e.id, name: e.name, role: e.role, shift: e.shift || '',
         permissions: e.permissions || {},
-        // pinHash may be null when sourced from server (intentionally stripped for security)
-        // local fb_emp_pins may have it if admin cached it during authenticated session
-        pinHash: e.pinHash || getEmpPinHash(e.id),
+        pinHash: e.pinHash || getEmpPinHash(e.id) || '__server__',
       }));
-      // NOTE: do NOT filter by pinHash here — server-sourced cache means PIN exists on server
-      // even if pinHash is null locally. doEmpLogin() handles online verification via /verify-pin
     }
   } catch {}
   return [];
@@ -1026,7 +1024,7 @@ function emp_renderSales() {
       <div id="empVoiceWrap" style="display:none;margin-bottom:8px">
         <button id="empVoiceBtn" class="btn btn-ghost btn-block" style="padding:10px;font-size:13px;border:1px dashed rgba(212,148,15,0.5);color:var(--accent-light);position:relative" onclick="emp_voiceEntry()">
           🎤 <span id="empVoiceBtnLabel">Voice Entry</span>
-          <span style="font-size:10px;color:var(--text-3);margin-left:8px">say "petrol 500 rupees" or "diesel 20 litres"</span>
+          <span style="font-size:10px;color:var(--text-3);margin-left:8px">say "petrol Rs 500" or "diesel 20 litres"</span>
         </button>
         <div id="empVoiceStatus" style="font-size:11px;color:var(--text-3);text-align:center;margin-top:4px;min-height:16px"></div>
       </div>
@@ -1540,16 +1538,16 @@ async function emp_doLogin() {
         const result = await verifyResp.json();
         pinValid = result.valid === true;
       } else {
-        // Server error — fall back to cached hash
-        pinValid = emp.pinHash ? pinHash === emp.pinHash : false;
+        // Server error — fall back to cached hash (only if real hash, not sentinel)
+        pinValid = (emp.pinHash && emp.pinHash !== '__server__') ? pinHash === emp.pinHash : false;
       }
     } else {
       // Offline — use locally cached hash (populated from IDB during app init)
-      pinValid = emp.pinHash ? pinHash === emp.pinHash : false;
+      pinValid = (emp.pinHash && emp.pinHash !== '__server__') ? pinHash === emp.pinHash : false;
     }
   } catch {
     // Network failure — offline fallback
-    pinValid = emp.pinHash ? pinHash === emp.pinHash : false;
+    pinValid = (emp.pinHash && emp.pinHash !== '__server__') ? pinHash === emp.pinHash : false;
   }
   if (!pinValid) { recordFailedLogin('emp_' + id); toast('Incorrect PIN','error'); return; }
   // PIN success — clear bio fail counter so they get fresh 3 attempts next time
@@ -2216,8 +2214,8 @@ function emp_voiceEntry() {
       emp_applyVoiceParsed(parsed);
     } else {
       const raw = event.results[0][0].transcript;
-      if (status) status.textContent = '❓ Could not parse: "' + raw + '" — try "petrol 500 rupees"';
-      toast('Could not parse: "' + raw + '" — try "petrol 500 rupees"', 'warning');
+      if (status) status.textContent = '❓ Could not parse: "' + raw + '" — try "petrol Rs 500" or "diesel 20 litres"';
+      toast('Could not parse: "' + raw + '" — try "petrol Rs 500" or "diesel 20 litres"', 'warning');
     }
   };
 
@@ -2276,13 +2274,18 @@ function emp_parseVoiceCommand(text) {
   if (/premium|speed|power/.test(normalized))   result.fuel = 'premium_petrol';
 
   // Amount (rupees)
-  const amtMatch = normalized.match(/(\d+(?:\.\d+)?)\s*(?:rupee|rs|rupe|₹|inr)?s?(?!\s*li)/i);
-  if (amtMatch) result.amount = parseFloat(amtMatch[1]);
-
+  // Amount — handles "Rs 500", "petrol Rs 500", "500 rupees", "500 rs", plain "500"
+  const amtPre   = normalized.match(/(?:rs|rupe(?:e)?|\u20b9|inr)\.?\s*(\d+(?:\.\d+)?)/i);
+  const amtSuf   = normalized.match(/(\d+(?:\.\d+)?)\s*(?:rupe(?:e)?|\u20b9|inr)s?/i);
+  const amtPlain = normalized.match(/(\d+(?:\.\d+)?)/);
   // Litres
-  const litMatch = normalized.match(/(\d+(?:\.\d+)?)\s*(?:litr|liter|litre|lit|l)/i);
-  if (litMatch) result.liters = parseFloat(litMatch[1]);
-
+  const litMatch = normalized.match(/(\d+(?:\.\d+)?)\s*(?:liter|litre|liters|litres|lit(?:\b|$)|l(?:\b|$))/i);
+  if (litMatch)       result.liters = parseFloat(litMatch[1]);
+  if (!result.liters) {
+    if (amtPre)       result.amount = parseFloat(amtPre[1]);
+    else if (amtSuf)  result.amount = parseFloat(amtSuf[1]);
+    else if (amtPlain) result.amount = parseFloat(amtPlain[1]);
+  }
   // Must have at least fuel type and one of amount/liters
   if (!result.fuel) return null;
   if (!result.amount && !result.liters) return null;
@@ -2855,6 +2858,28 @@ async function fetchPublicEmployees() {
         // Remove the "No employees" message if present
         const noEmpMsg = document.getElementById('noEmpMsg');
         if (noEmpMsg) noEmpMsg.style.display = 'none';
+      }
+      // If login screen is showing the "no employees" error, re-render it now
+      // This happens when cache was cleared and fetchPublicEmployees completed after initial render
+      const loginScreen = document.getElementById('loginScreen');
+      const noEmpError = loginScreen && loginScreen.querySelector('[style*="color:var(--red)"]');
+      if (loginScreen && loginScreen.style.display !== 'none' && !APP.loggedIn) {
+        const empTab = document.getElementById('empLoginTab') || loginScreen.querySelector('[onclick*="empLogin"]');
+        // Re-render employee login section to pick up the now-populated cache
+        const empLoginPanel = document.getElementById('empLoginPanel');
+        if (empLoginPanel && EMP_LIST.length > 0) {
+          const opts = EMP_LIST.map(e => '<option value="'+e.id+'">'+sanitize(e.name)+' — '+sanitize(e.role)+'</option>').join('');
+          const selEl = empLoginPanel.querySelector('select');
+          if (selEl) selEl.innerHTML = opts;
+          const errEl = empLoginPanel.querySelector('.emp-no-pin-msg');
+          if (errEl) errEl.style.display = 'none';
+          // Remove the red error text nodes
+          empLoginPanel.querySelectorAll('div').forEach(d => {
+            if (d.textContent.includes('No employees with PIN')) d.style.display = 'none';
+          });
+          const btn = empLoginPanel.querySelector('button[disabled]');
+          if (btn) { btn.disabled = false; btn.style.opacity = '1'; btn.style.cursor = 'pointer'; }
+        }
       }
     }
   } catch {}
