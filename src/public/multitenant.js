@@ -239,7 +239,7 @@ function mt_showTenantForm(existing) {
           <button onclick="mt_showSelector()" style="background:var(--bg-2);border:1px solid var(--border);color:var(--text-1);border-radius:var(--radius-sm);padding:8px 14px;cursor:pointer;font-size:13px;font-weight:600">← Back</button>
           <h2 style="font-size:20px;font-weight:800;color:var(--text-0)">${isEdit ? '✏️ Edit Station' : '➕ Add New Station'}</h2>
         </div>
-        <div style="background:var(--bg-2);border-radius:var(--radius);border:1px solid var(--border);padding:24px;margin-bottom:16px">
+        <div style="background:var(--bg-2);border-radius:var(--radius);border:1px solid var(--border);padding:14px;margin-bottom:10px">
           <div class="form-group"><label class="form-label">Station Name *</label>
             <input class="form-input" id="tName" placeholder="e.g. Sri Lakshmi Fuel Station" value="${existing?.name||''}" />
           </div>
