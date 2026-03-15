@@ -464,8 +464,17 @@ async function mt_saveTenant(isEdit) {
         const selectedPlan = document.getElementById('tSelectedPlan')?.value || '';
         if (!selectedPlan) { mt_toast('Please select a subscription plan before creating the station', 'error'); return; }
 
-        const result = await TenantAPI.create({ name, location, ownerName, phone, icon, adminUser, adminPass });
-        // Create subscription record for the new station
+        // Include subscription data in station creation (server creates both atomically)
+        const result = await TenantAPI.create({
+          name, location, ownerName, phone, icon, adminUser, adminPass,
+          // Subscription fields — server creates subscription record in same request
+          selectedPlan, trialDays, trialEnabled, graceDays,
+          ownerWA: ownerWA ? '+91' + ownerWA : '',
+          subStatus, subStart, subEnd,
+          priceMonthly,
+          planPrices
+        });
+        // Subscription record already created server-side (backup client-side call)
         const isTrialOnly  = selectedPlan === 'trialonly';
         const planPrices = {
           monthly:    parseFloat(document.getElementById('tPrice_monthly')?.value)    || 999,
@@ -507,7 +516,8 @@ async function mt_saveTenant(isEdit) {
             }
 
             // Create subscription record
-            console.log('[Sub] Creating subscription:', {plan: isTrialOnly?'trial':selectedPlan, status: subStatus, trialDays, trialEnabled, sub_start: subStart, sub_end: subEnd});
+            // Backup: also call subscription API directly (handles auth token correctly)
+            console.log('[Sub] Backup subscription update:', {plan: isTrialOnly?'trial':selectedPlan, status: subStatus, trialDays, trialEnabled, sub_start: subStart, sub_end: subEnd});
             await fetch('/api/subscriptions/' + encodeURIComponent(newTenantId), {
               method: 'PUT',
               headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + tok },
