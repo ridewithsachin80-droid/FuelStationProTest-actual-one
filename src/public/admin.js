@@ -1586,8 +1586,42 @@ function renderSettings(D) {
     <span style="color:var(--text-3)">${l}</span><span class="fw-600" style="color:var(--text-1)">${v}</span>
   </div>`).join('');
 
+  // Build subscription info card
+  const sub = window._subStatus;
+  const subCard = sub ? (function() {
+    var statusMap = {
+      trial:    { col:'#60a5fa', icon:'⏱️', label:'Trial Period' },
+      active:   { col:'var(--green)', icon:'✅', label:'Active Subscription' },
+      grace:    { col:'var(--orange)', icon:'⚠️', label:'Grace Period' },
+      expired:  { col:'var(--red)', icon:'🔒', label:'Expired' },
+      suspended:{ col:'var(--text-3)', icon:'⏸️', label:'Suspended' },
+    };
+    var s = statusMap[sub.status] || statusMap.expired;
+    var dateInfo = '';
+    if (sub.status === 'trial') {
+      var trialEnd = sub.trial_end ? new Date(sub.trial_end).toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'}) : '—';
+      var dLeft = sub.trial_days_left !== undefined ? sub.trial_days_left : (sub.days_left || 0);
+      dateInfo = '<div style="margin-top:8px;font-size:12px;color:var(--text-2)">Trial ends: <strong>' + trialEnd + '</strong> · <span style="color:' + (dLeft <= 7 ? 'var(--orange)' : '#60a5fa') + '">' + dLeft + ' days remaining</span></div>';
+    } else if (sub.sub_end) {
+      var endDate = new Date(sub.sub_end).toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'});
+      var dLeft2 = sub.days_left !== null ? sub.days_left : 0;
+      var planLabel = {monthly:'Monthly',quarterly:'Quarterly',halfyearly:'Half-Yearly',yearly:'Yearly'}[sub.plan] || sub.plan || '';
+      dateInfo = '<div style="margin-top:8px;font-size:12px;color:var(--text-2)">Plan: <strong>' + planLabel + '</strong> · Valid until: <strong>' + endDate + '</strong>'
+        + (dLeft2 !== null ? ' · <span style="color:' + (dLeft2 <= 7 ? 'var(--orange)' : 'var(--green)') + '">' + dLeft2 + ' days remaining</span>' : '') + '</div>';
+    }
+    return '<div class="card card-pad mb-16" style="border-left:3px solid ' + s.col + '">'
+      + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">'
+      + '<span style="font-size:16px">' + s.icon + '</span>'
+      + '<span style="font-weight:700;font-size:14px;color:' + s.col + '">' + s.label + '</span>'
+      + '</div>'
+      + dateInfo
+      + (sub.is_read_only ? '<div style="margin-top:8px;padding:6px 10px;background:rgba(239,68,68,0.08);border-radius:6px;font-size:11px;color:var(--red)">🔒 Read-only mode active — contact your FuelBunk Pro admin to renew</div>' : '')
+      + '</div>';
+  })() : '';
+
   return `
     <div class="page-hdr"><h3>⚙️ Settings</h3></div>
+    ${subCard}
     <div class="g g-auto gap-16 mb-24">
       <div class="card card-pad">
         <h4 class="mb-16 fw-700" style="color:var(--text-0);font-size:13px">⛽ Fuel Prices</h4>
