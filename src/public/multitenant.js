@@ -744,58 +744,134 @@ async function mt_recordPaymentFromBilling(tenantId, stationName, defaultPrice) 
 
 async function mt_subSettingsFromBilling(tenantId, stationName) {
   try {
-    const token = typeof getAuthToken === 'function' ? getAuthToken() : '';
-    const resp = await fetch('/api/subscriptions/' + encodeURIComponent(tenantId), { headers: { 'Authorization': 'Bearer ' + token } });
-    const sub = await resp.json();
-    // Parse saved plan prices from notes
-    var _sp = {}; try { var _m=(sub.notes||'').match(/Prices: ({.*})/); if(_m) _sp=JSON.parse(_m[1]); } catch(e2){}
-    var _inp = function(id,val,type,ph){return '<input id="'+id+'" type="'+(type||'number')+'" value="'+(val||0)+'" placeholder="'+(ph||'')+' " style="width:100%;padding:6px 8px;background:var(--bg-2);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px" />';};
-    var _lbl = function(t){return '<label style="font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase">'+t+'</label>';};
-    var _g2 = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">';
-    var _subEndVal = sub.sub_end ? new Date(sub.sub_end).toISOString().slice(0,10) : '';
-    var html = _g2
-      + '<div>'+_lbl('Status')+'<select id="ss2_status" style="width:100%;margin-top:4px;padding:7px;background:var(--bg-2);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px">'
-      + ['trial','active','suspended'].map(s => '<option value="'+s+'" '+(sub.status===s?'selected':'')+'>'+{trial:'Trial',active:'Active',suspended:'Suspended'}[s]+'</option>').join('')
-      + '</select></div>'
-      + '<div>'+_lbl('Plan')+'<select id="ss2_plan" style="width:100%;margin-top:4px;padding:7px;background:var(--bg-2);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px">'
-      + ['trial','monthly','quarterly','halfyearly','yearly'].map(p=>{var l={trial:'Trial Only',monthly:'Monthly',quarterly:'Quarterly',halfyearly:'Half-Yearly',yearly:'Yearly'}[p];return '<option value="'+p+'" '+(sub.plan===p?'selected':'')+'>'+l+'</option>';}).join('')
-      + '</select></div></div>'
-      + _g2
-      + '<div>'+_lbl('Trial Days')+_inp('ss2_trial',sub.trial_days||30,'number')+'</div>'
-      + '<div>'+_lbl('Grace Days')+_inp('ss2_grace',sub.grace_days||3,'number')+'</div></div>'
-      + _g2
-      + '<div>'+_lbl('Sub End Date')+'<input id="ss2_subend" type="date" value="'+_subEndVal+'" style="width:100%;padding:6px 8px;background:var(--bg-2);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px" /></div>'
-      + '<div>'+_lbl('Owner WhatsApp')+'<input id="ss2_phone" type="tel" value="'+(sub.owner_phone||'')+'" placeholder="+91XXXXXXXXXX" style="width:100%;padding:6px 8px;background:var(--bg-2);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px" /></div></div>'
-      + '<div style="margin-bottom:6px">'+_lbl('Plan Prices (₹)')+'<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:5px">'
-      + ['monthly','quarterly','halfyearly','yearly'].map(p=>{
-          var lb={monthly:'Monthly/1mo',quarterly:'Quarterly/3mo',halfyearly:'Half-Yearly/6mo',yearly:'Yearly/12mo'}[p];
-          var pv=_sp[p]||sub.price_monthly||0;
-          return '<div><div style="font-size:10px;color:var(--text-3);margin-bottom:2px">'+lb+'</div><div style="display:flex;align-items:center;gap:3px"><span style="color:var(--text-3);font-size:11px">₹</span><input id="ss2_price_'+p+'" type="number" value="'+pv+'" min="0" style="width:100%;padding:5px 7px;background:var(--bg-2);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px" /></div></div>';
-        }).join('')
-      + '</div></div>';
+    var token = typeof getAuthToken === 'function' ? getAuthToken() : '';
+    var resp = await fetch('/api/subscriptions/' + encodeURIComponent(tenantId), { headers: { 'Authorization': 'Bearer ' + token } });
+    var sub = await resp.json();
+    var sp = {}; try { var m2=(sub.notes||'').match(/Prices: ({.*})/); if(m2) sp=JSON.parse(m2[1]); } catch(e2){}
+    var graceDays = sub.grace_days || 3;
+    var PLANS = [
+      {id:'monthly',    label:'Monthly',     dur:'1 month',   months:1},
+      {id:'quarterly',  label:'Quarterly',   dur:'3 months',  months:3},
+      {id:'halfyearly', label:'Half-Yearly', dur:'6 months',  months:6},
+      {id:'yearly',     label:'Yearly',      dur:'12 months', months:12},
+      {id:'trial',      label:'Trial Only',  dur:'no billing',months:0},
+    ];
+    var activePlan = sub.plan || 'trial';
 
-    const confirmed = await mt_confirmDialog('⚙️ Settings — ' + stationName, html, 'Save Settings');
-    if (!confirmed) return;
-    const token2 = typeof getAuthToken === 'function' ? getAuthToken() : '';
-    const r2 = await fetch('/api/subscriptions/' + encodeURIComponent(tenantId), {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token2 },
-      body: JSON.stringify({
-        status: document.getElementById('ss2_status')?.value,
-        plan: document.getElementById('ss2_plan')?.value,
-        trial_days: parseInt(document.getElementById('ss2_trial')?.value)||30,
-        price_monthly: parseFloat(document.getElementById('ss2_price_monthly')?.value)||0,
-        grace_days: parseInt(document.getElementById('ss2_grace')?.value)||3,
-        sub_end: document.getElementById('ss2_subend')?.value || null,
-        owner_phone: document.getElementById('ss2_phone')?.value?.trim()||'',
-        notes: 'Prices: ' + JSON.stringify({monthly:parseFloat(document.getElementById('ss2_price_monthly')?.value)||0,quarterly:parseFloat(document.getElementById('ss2_price_quarterly')?.value)||0,halfyearly:parseFloat(document.getElementById('ss2_price_halfyearly')?.value)||0,yearly:parseFloat(document.getElementById('ss2_price_yearly')?.value)||0})
-      })
-    });
-    if (!r2.ok) { const e = await r2.json(); mt_toast(e.error||'Save failed','error'); return; }
-    mt_toast('✅ Settings saved', 'success');
-    _billingCache=null; await mt_loadBillingData();
+    function calcEnd(planId, gd) {
+      var p = PLANS.find(function(x){return x.id===planId;});
+      if (!p || p.months === 0) return '';
+      var d = new Date(); d.setMonth(d.getMonth()+p.months); d.setDate(d.getDate()+(parseInt(gd)||0));
+      return d.toISOString().slice(0,10);
+    }
+    function fmtDate(iso) {
+      if (!iso) return 'No end date';
+      return new Date(iso).toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'});
+    }
+
+    var planCards = PLANS.map(function(p) {
+      var active = activePlan === p.id;
+      var priceField = p.id !== 'trial'
+        ? '<div style="display:flex;align-items:center;gap:4px;margin-top:6px"><span style="color:var(--text-3);font-size:12px">\u20b9</span><input id="ss_price_'+p.id+'" type="number" value="'+(sp[p.id]||0)+'" min="0" placeholder="0" onclick="event.stopPropagation()" style="font-size:13px;font-weight:700;padding:5px 8px;background:var(--bg-0);border:1px solid var(--border);border-radius:6px;color:var(--text-1);width:100%" /></div>'
+        : '';
+      return '<div id="ss_card_'+p.id+'" data-plan="'+p.id+'" onclick="mt_ssSelectPlan(this.dataset.plan)" style="display:flex;flex-direction:column;background:var(--bg-2);border:2px solid '+(active?'var(--accent)':'var(--border)')+';border-radius:8px;padding:10px;cursor:pointer;transition:border 0.15s"><div style="display:flex;align-items:center;gap:8px"><div id="ss_dot_'+p.id+'" style="width:16px;height:16px;border-radius:50%;background:'+(active?'var(--accent)':'transparent')+';border:2px solid '+(active?'var(--accent)':'var(--text-3)')+';flex-shrink:0"></div><div><div style="font-size:12px;font-weight:700;color:var(--text-0)">'+p.label+'</div><div style="font-size:10px;color:var(--text-3)">'+p.dur+'</div></div></div>'+priceField+'</div>';
+    }).join('');
+
+    var endDate = calcEnd(activePlan, graceDays);
+    var existing = document.getElementById('settingsOverlay');
+    if (existing) existing.remove();
+    var ov = document.createElement('div');
+    ov.id = 'settingsOverlay';
+    ov.style.cssText = 'position:fixed;inset:0;background:var(--bg-0);z-index:10025;overflow-y:auto';
+    ov.innerHTML = '<div style="max-width:500px;margin:0 auto;padding:16px">'
+      + '<div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;position:sticky;top:0;background:var(--bg-0);padding:8px 0;border-bottom:1px solid var(--border-light)">'
+      + '<button onclick="mt_ssClose()" style="background:var(--bg-2);border:1px solid var(--border);color:var(--text-2);border-radius:8px;padding:6px 12px;cursor:pointer;font-size:13px;font-weight:600">← Back</button>'
+      + '<h2 style="font-size:16px;font-weight:800;color:var(--text-0)">&amp;#9881;&#65039; Settings \u2014 '+stationName+'</h2>'
+      + '</div>'
+      + '<div style="background:var(--bg-2);border-radius:8px;padding:12px;margin-bottom:12px">'
+      + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">'
+      + '<div><label style="font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase">Status</label><select id="ss_status" style="width:100%;margin-top:4px;padding:8px;background:var(--bg-0);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px">'
+      + ['trial','active','suspended'].map(function(s){return '<option value="'+s+'" '+(sub.status===s?'selected':'')+'>'+{trial:'Trial',active:'Active',suspended:'Suspended'}[s]+'</option>';}).join('')
+      + '</select></div>'
+      + '<div><label style="font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase">Grace Days</label><input id="ss_grace" type="number" value="'+graceDays+'" min="0" max="30" oninput="mt_ssUpdateEndDate()" style="width:100%;margin-top:4px;padding:8px;background:var(--bg-0);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px" /></div>'
+      + '</div>'
+      + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">'
+      + '<div><label style="font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase">Trial Days</label><input id="ss_trial" type="number" value="'+(sub.trial_days||30)+'" min="0" style="width:100%;margin-top:4px;padding:8px;background:var(--bg-0);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px" /></div>'
+      + '<div><label style="font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase">Owner WhatsApp</label><input id="ss_phone" type="tel" value="'+(sub.owner_phone||'')+'" placeholder="+91XXXXXXXXXX" style="width:100%;margin-top:4px;padding:8px;background:var(--bg-0);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px" /></div>'
+      + '</div></div>'
+      + '<div style="background:var(--bg-2);border-radius:8px;padding:12px;margin-bottom:12px">'
+      + '<div style="font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase;margin-bottom:10px">Select Plan & Set Price</div>'
+      + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">'+planCards+'</div>'
+      + '<input type="hidden" id="ss_plan" value="'+activePlan+'" />'
+      + '<div id="ss_end_display" style="padding:10px;background:var(--bg-0);border-radius:6px;font-size:12px">\ud83d\udcc5 Ends: <span style="color:var(--accent-light);font-weight:700">'+fmtDate(endDate)+'</span><input type="hidden" id="ss_subend" value="'+endDate+'" /></div>'
+      + '</div>'
+      + '<div style="display:flex;gap:8px">'
+      + '<button onclick="mt_ssClose()" style="flex:1;background:var(--bg-2);border:1px solid var(--border);color:var(--text-2);border-radius:8px;padding:12px;font-size:13px;font-weight:700;cursor:pointer">Cancel</button>'
+      + '<button data-tid="'+tenantId+'" onclick="mt_ssDoSave(this.dataset.tid)" style="flex:2;background:var(--accent);border:none;color:#000;border-radius:8px;padding:12px;font-size:14px;font-weight:700;cursor:pointer">💾 Save Settings</button>'
+      + '</div></div>';
+    document.body.appendChild(ov);
   } catch(e) { mt_toast('Error: ' + e.message, 'error'); }
 }
+
+function mt_ssClose(){var o=document.getElementById("settingsOverlay");if(o)o.remove();}
+
+function mt_ssSelectPlan(planId) {
+  var plans = ['monthly','quarterly','halfyearly','yearly','trial'];
+  plans.forEach(function(p) {
+    var card=document.getElementById('ss_card_'+p); var dot=document.getElementById('ss_dot_'+p);
+    if (!card||!dot) return;
+    var a = p===planId;
+    card.style.border = a?'2px solid var(--accent)':'2px solid var(--border)';
+    dot.style.background = a?'var(--accent)':'transparent';
+    dot.style.border = a?'2px solid var(--accent)':'2px solid var(--text-3)';
+  });
+  var h = document.getElementById('ss_plan'); if(h) h.value = planId;
+  mt_ssUpdateEndDate();
+}
+
+function mt_ssUpdateEndDate() {
+  var planId = document.getElementById('ss_plan')?.value||'trial';
+  var grace  = parseInt(document.getElementById('ss_grace')?.value)||0;
+  var MONTHS = {monthly:1,quarterly:3,halfyearly:6,yearly:12,trial:0};
+  var months = MONTHS[planId]||0;
+  var hidden = document.getElementById('ss_subend');
+  var display = document.getElementById('ss_end_display');
+  if (!hidden||!display) return;
+  if (!months) {
+    hidden.value='';
+    display.innerHTML='\ud83d\udcc5 Ends: <span style="color:var(--text-3)">No end date (trial only)</span><input type="hidden" id="ss_subend" value="" />';
+  } else {
+    var d=new Date(); d.setMonth(d.getMonth()+months); d.setDate(d.getDate()+grace);
+    var iso=d.toISOString().slice(0,10);
+    var lbl=d.toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'});
+    hidden.value=iso;
+    display.innerHTML='\ud83d\udcc5 Ends: <span style="color:var(--accent-light);font-weight:700">'+lbl+'</span><input type="hidden" id="ss_subend" value="'+iso+'" />';
+  }
+}
+
+async function mt_ssDoSave(tenantId) {
+  var status = document.getElementById('ss_status')?.value||'trial';
+  var plan   = document.getElementById('ss_plan')?.value||'trial';
+  var trial  = parseInt(document.getElementById('ss_trial')?.value)||0;
+  var grace  = parseInt(document.getElementById('ss_grace')?.value)||3;
+  var phone  = document.getElementById('ss_phone')?.value?.trim()||'';
+  var subEnd = document.getElementById('ss_subend')?.value||null;
+  var prices = {};
+  ['monthly','quarterly','halfyearly','yearly'].forEach(function(p){
+    var el=document.getElementById('ss_price_'+p); if(el) prices[p]=parseFloat(el.value)||0;
+  });
+  if (plan!=='trial'&&subEnd) status='active';
+  try {
+    var tok=typeof getAuthToken==='function'?getAuthToken():'';
+    var r=await fetch('/api/subscriptions/'+encodeURIComponent(tenantId),{method:'PUT',headers:{'Content-Type':'application/json','Authorization':'Bearer '+tok},body:JSON.stringify({status,plan,trial_days:trial,price_monthly:prices.monthly||0,grace_days:grace,sub_end:subEnd||null,owner_phone:phone,notes:'Prices: '+JSON.stringify(prices)})});
+    if (!r.ok){var e2=await r.json();mt_toast(e2.error||'Save failed','error');return;}
+    mt_toast('\u2705 Settings saved!','success');
+    document.getElementById('settingsOverlay').remove();
+    _billingCache=null; await mt_loadBillingData();
+  } catch(e){mt_toast('Error: '+e.message,'error');}
+}
+
+
 
 function mt_confirmDialog(title, bodyHtml, confirmLabel) {
   return new Promise(resolve => {
