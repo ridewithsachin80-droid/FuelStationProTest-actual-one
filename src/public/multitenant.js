@@ -286,22 +286,52 @@ function mt_showTenantForm(existing) {
               </div>
             </div>
             <div class="form-group mb-0">
-              <label class="form-label">Plan Prices (₹) — tick to enable, set price</label>
-              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:6px">
-                ${[['monthly','Monthly','1 month','999'],['quarterly','Quarterly','3 months','2800'],['halfyearly','Half-Yearly','6 months','5400'],['yearly','Yearly','12 months','10000']].map(([id,label,dur,def])=>`
-                <label style="display:flex;flex-direction:column;gap:6px;background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:8px;cursor:pointer">
-                  <div style="display:flex;align-items:center;gap:6px">
-                    <input type="checkbox" id="tCheck_\${id}" checked style="accent-color:var(--accent);width:14px;height:14px" />
-                    <span style="font-size:11px;font-weight:700;color:var(--text-0)">\${label}</span>
-                    <span style="font-size:10px;color:var(--text-3)">/ \${dur}</span>
+              <label class="form-label" style="margin-bottom:8px;display:block">Subscription Plans — select one plan type & set price</label>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+                
+                <label id="tPlanCard_monthly" onclick="mt_selectPlan('monthly')" style="display:flex;flex-direction:column;gap:6px;background:var(--bg-2);border:2px solid var(--border);border-radius:8px;padding:10px;cursor:pointer;transition:border 0.15s">
+                  <div style="display:flex;align-items:center;gap:8px">
+                    <div id="tPlanDot_monthly" style="width:16px;height:16px;border-radius:50%;border:2px solid var(--text-3);flex-shrink:0"></div>
+                    <div><div style="font-size:12px;font-weight:700;color:var(--text-0)">Monthly</div><div style="font-size:10px;color:var(--text-3)">1 month</div></div>
                   </div>
                   <div style="display:flex;align-items:center;gap:4px">
                     <span style="font-size:12px;color:var(--text-3)">₹</span>
-                    <input class="form-input mono" id="tPrice_\${id}" type="number" value="\${def}" min="0" style="font-size:13px;font-weight:700;padding:4px 6px" />
+                    <input class="form-input mono" id="tPrice_monthly" type="number" value="999" min="0" onclick="event.stopPropagation();mt_selectPlan('monthly')" style="font-size:14px;font-weight:700;padding:5px 8px" />
                   </div>
-                </label>`).join('')}
+                </label>
+                <label id="tPlanCard_quarterly" onclick="mt_selectPlan('quarterly')" style="display:flex;flex-direction:column;gap:6px;background:var(--bg-2);border:2px solid var(--border);border-radius:8px;padding:10px;cursor:pointer;transition:border 0.15s">
+                  <div style="display:flex;align-items:center;gap:8px">
+                    <div id="tPlanDot_quarterly" style="width:16px;height:16px;border-radius:50%;border:2px solid var(--text-3);flex-shrink:0"></div>
+                    <div><div style="font-size:12px;font-weight:700;color:var(--text-0)">Quarterly</div><div style="font-size:10px;color:var(--text-3)">3 months</div></div>
+                  </div>
+                  <div style="display:flex;align-items:center;gap:4px">
+                    <span style="font-size:12px;color:var(--text-3)">₹</span>
+                    <input class="form-input mono" id="tPrice_quarterly" type="number" value="2800" min="0" onclick="event.stopPropagation();mt_selectPlan('quarterly')" style="font-size:14px;font-weight:700;padding:5px 8px" />
+                  </div>
+                </label>
+                <label id="tPlanCard_halfyearly" onclick="mt_selectPlan('halfyearly')" style="display:flex;flex-direction:column;gap:6px;background:var(--bg-2);border:2px solid var(--border);border-radius:8px;padding:10px;cursor:pointer;transition:border 0.15s">
+                  <div style="display:flex;align-items:center;gap:8px">
+                    <div id="tPlanDot_halfyearly" style="width:16px;height:16px;border-radius:50%;border:2px solid var(--text-3);flex-shrink:0"></div>
+                    <div><div style="font-size:12px;font-weight:700;color:var(--text-0)">Half-Yearly</div><div style="font-size:10px;color:var(--text-3)">6 months</div></div>
+                  </div>
+                  <div style="display:flex;align-items:center;gap:4px">
+                    <span style="font-size:12px;color:var(--text-3)">₹</span>
+                    <input class="form-input mono" id="tPrice_halfyearly" type="number" value="5400" min="0" onclick="event.stopPropagation();mt_selectPlan('halfyearly')" style="font-size:14px;font-weight:700;padding:5px 8px" />
+                  </div>
+                </label>
+                <label id="tPlanCard_yearly" onclick="mt_selectPlan('yearly')" style="display:flex;flex-direction:column;gap:6px;background:var(--bg-2);border:2px solid var(--border);border-radius:8px;padding:10px;cursor:pointer;transition:border 0.15s">
+                  <div style="display:flex;align-items:center;gap:8px">
+                    <div id="tPlanDot_yearly" style="width:16px;height:16px;border-radius:50%;border:2px solid var(--text-3);flex-shrink:0"></div>
+                    <div><div style="font-size:12px;font-weight:700;color:var(--text-0)">Yearly</div><div style="font-size:10px;color:var(--text-3)">12 months</div></div>
+                  </div>
+                  <div style="display:flex;align-items:center;gap:4px">
+                    <span style="font-size:12px;color:var(--text-3)">₹</span>
+                    <input class="form-input mono" id="tPrice_yearly" type="number" value="10000" min="0" onclick="event.stopPropagation();mt_selectPlan('yearly')" style="font-size:14px;font-weight:700;padding:5px 8px" />
+                  </div>
+                </label>
               </div>
-              <div style="font-size:10px;color:var(--text-3);margin-top:5px">✓ Tick plans to offer. Untick to hide that plan from this station.</div>
+              <div style="font-size:10px;color:var(--text-3);margin-top:6px">Select one plan for this station. Trial period runs before the selected plan starts.</div>
+              <input type="hidden" id="tSelectedPlan" value="" />
             </div>
             <div class="form-group mt-10 mb-0"><label class="form-label">Owner WhatsApp (for reminders)</label>
               <input class="form-input" id="tOwnerWA" type="tel" inputmode="numeric" maxlength="10" oninput="this.value=this.value.replace(/[^0-9]/g,'')" placeholder="10-digit mobile number" />
@@ -318,6 +348,28 @@ function mt_showTenantForm(existing) {
     </div>
   `;
 
+}
+
+function mt_selectPlan(planId) {
+  var plans = ['monthly','quarterly','halfyearly','yearly'];
+  plans.forEach(function(p) {
+    var card = document.getElementById('tPlanCard_'+p);
+    var dot  = document.getElementById('tPlanDot_'+p);
+    if (!card || !dot) return;
+    if (p === planId) {
+      card.style.border = '2px solid var(--accent)';
+      card.style.background = 'rgba(212,148,15,0.06)';
+      dot.style.background = 'var(--accent)';
+      dot.style.border = '2px solid var(--accent)';
+    } else {
+      card.style.border = '2px solid var(--border)';
+      card.style.background = 'var(--bg-2)';
+      dot.style.background = 'transparent';
+      dot.style.border = '2px solid var(--text-3)';
+    }
+  });
+  var hidden = document.getElementById('tSelectedPlan');
+  if (hidden) hidden.value = planId;
 }
 
 async function mt_saveTenant(isEdit) {
@@ -346,13 +398,14 @@ async function mt_saveTenant(isEdit) {
         const graceDays    = parseInt(document.getElementById('tGraceDays')?.value) || 3;
         const ownerWA      = (document.getElementById('tOwnerWA')?.value || '').trim();
         // Read individual plan prices
+        const selectedPlan = document.getElementById('tSelectedPlan')?.value || 'monthly';
         const planPrices = {
           monthly:    parseFloat(document.getElementById('tPrice_monthly')?.value)    || 999,
           quarterly:  parseFloat(document.getElementById('tPrice_quarterly')?.value)  || 2800,
           halfyearly: parseFloat(document.getElementById('tPrice_halfyearly')?.value) || 5400,
           yearly:     parseFloat(document.getElementById('tPrice_yearly')?.value)     || 10000,
         };
-        const priceMonthly = planPrices.monthly;
+        const priceMonthly = planPrices[selectedPlan] || planPrices.monthly;
         const newTenantId  = result?.id || id;
         if (newTenantId) {
           try {
@@ -363,6 +416,7 @@ async function mt_saveTenant(isEdit) {
                 plan: 'trial', status: 'trial', trial_days: trialDays,
                 price_monthly: priceMonthly, grace_days: graceDays,
                 owner_phone: ownerWA ? '+91' + ownerWA : '',
+                plan: selectedPlan,
                 notes: 'Prices: ' + JSON.stringify(planPrices)
               })
             });
