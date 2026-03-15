@@ -6,6 +6,31 @@
 // ═══════════════════════════════════════════════════════════
 
 // ── DASHBOARD ────────────────────────────────────────────────
+// ── Normalize null shift times — auto-heals missing start/end in DB ─────────
+// Saves corrected shifts back to DB so they're fixed permanently after first load.
+function _normalizeShiftTimes(shifts) {
+  if (!Array.isArray(shifts)) return;
+  const DEFAULTS = {
+    'morning':   { start: '06:00', end: '14:00' },
+    'noon':      { start: '14:00', end: '22:00' },
+    'afternoon': { start: '14:00', end: '22:00' },
+    'evening':   { start: '18:00', end: '02:00' },
+    'night':     { start: '22:00', end: '06:00' },
+    '24':        { start: '06:00', end: '06:00' },
+  };
+  shifts.forEach(s => {
+    if (!s.start || !s.end) {
+      const key = Object.keys(DEFAULTS).find(k => (s.name||'').toLowerCase().includes(k));
+      const def = DEFAULTS[key] || { start: '06:00', end: '14:00' };
+      if (!s.start) s.start = def.start;
+      if (!s.end)   s.end   = def.end;
+      // Persist fix to DB so it never happens again
+      if (typeof db !== 'undefined') db.put('shifts', s).catch(() => {});
+      console.log('[FuelBunk] Auto-fixed shift times for:', s.name, s.start, '-', s.end);
+    }
+  });
+}
+
 function renderDashboard(D) {
   // FIX 31: use IST today() to prevent off-by-one during 18:30-00:00 UTC
   const todayIso = (typeof window.today === 'function') ? window.today() : new Date().toLocaleString('en-CA', { timeZone: 'Asia/Kolkata' }).slice(0, 10);
@@ -70,7 +95,8 @@ function renderDashboard(D) {
   const weeklyTotal = D.weekly.reduce((a, d) => a + d.revenue, 0);
   const avgRev = weeklyTotal / 7;
 
-  // Active shift
+  // Active shift — normalize null start/end before use
+  _normalizeShiftTimes(D.shifts);
   let shiftsHtml = D.shifts.map(s => {
     const [sh] = (s.start||'00:00').split(':').map(Number);
     const [eh] = (s.end||'00:00').split(':').map(Number);
@@ -728,6 +754,16 @@ function renderCredit(D) {
 
 // ── STAFF & SHIFTS ───────────────────────────────────────────
 function renderStaff(D) {
+  // Show fix banner if any shifts have missing times
+  const nullShifts = (D.shifts||[]).filter(s => !s.start || !s.end);
+  const shiftFixBanner = nullShifts.length > 0
+    ? `<div style="display:flex;align-items:center;gap:12px;padding:10px 16px;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.3);border-radius:8px;margin-bottom:16px;flex-wrap:wrap">
+        <span style="font-size:13px;color:var(--red);font-weight:700">⚠️ ${nullShifts.length} shift${nullShifts.length>1?'s have':' has'} missing start/end times — this crashes Dashboard and Staff pages.</span>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-left:auto">
+          ${nullShifts.map(s=>`<button class="btn btn-ghost btn-sm" style="color:var(--red);border-color:rgba(239,68,68,0.4)" onclick="openEditShiftModal('${s.id}')">Fix: ${sanitize(s.name)}</button>`).join('')}
+        </div>
+      </div>`
+    : '';
   const payroll = D.employees.reduce((a, e) => a + e.salary, 0);
   const totalNozzles = D.pumps.reduce((a, p) => a + (p.nozzleLabels || ['A','B']).length, 0);
   const allocKey = allocShift + '_' + allocDate;
@@ -913,6 +949,7 @@ function renderStaff(D) {
   }).join('');
 
   // ═══ SHIFT SCHEDULE ═══
+  _normalizeShiftTimes(D.shifts);
   const h = new Date().getHours();
   const shiftCards = sortedShifts.map(s => {
     const emps = D.employees.filter(e => (e.shift||'').split(',').map(x=>x.trim()).includes(s.name));
@@ -1068,6 +1105,7 @@ function renderStaff(D) {
   }
 
   return `
+    ${shiftFixBanner}
     <div class="page-hdr"><h3>👥 Staff & Allocation</h3><div style="display:flex;gap:8px;align-items:center">${hdrBtns}</div></div>
     ${tabBar}
     ${tabContent}
