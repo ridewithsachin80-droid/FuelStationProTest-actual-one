@@ -2091,13 +2091,13 @@ function emp_recordSale() {
   // ── NO tank deduction here — meter reading at shift end handles inventory sync
   //    to prevent double-deduction (sale + meter reading both deducting from tank)
 
-  // ── Loyalty: earn points on credit sale ─────────────────────────────────
+  // ── Loyalty: earn points on credit sale (only if owner-enrolled) ────────────
   if (empPayMode === 'credit' && sale.customer) {
     const loyaltyEarnRate = APP.data?.loyaltyEarnRate || 1;
     const earnedPts = Math.floor((sale.amount / 100) * loyaltyEarnRate);
     if (earnedPts > 0) {
       const loyaltyCust = APP.data?.creditCustomers?.find(c => c.name === sale.customer);
-      if (loyaltyCust) {
+      if (loyaltyCust && loyaltyCust.loyaltyEnrolled) {
         loyaltyCust.loyaltyPoints = (loyaltyCust.loyaltyPoints || 0) + earnedPts;
         if (!loyaltyCust.loyaltyHistory) loyaltyCust.loyaltyHistory = [];
         loyaltyCust.loyaltyHistory.unshift({ type:'earn', pts: earnedPts, balance: loyaltyCust.loyaltyPoints, ref: sale.id, date: emp_today() });
@@ -2129,7 +2129,7 @@ function emp_showLoyaltyBadge(customerName) {
   if (!badge) return;
   if (!customerName) { badge.style.display = 'none'; return; }
   const c = (APP.data?.creditCustomers||[]).find(x => x.name === customerName);
-  if (!c) { badge.style.display = 'none'; return; }
+  if (!c || !c.loyaltyEnrolled) { badge.style.display = 'none'; return; }
   const pts = c.loyaltyPoints || 0;
   const redeemRate = APP.data?.loyaltyRedeemRate || 50;
   const val = Math.floor(pts / 100) * redeemRate;
@@ -3211,11 +3211,11 @@ function enterApp() {
     document.querySelector('.main-area').classList.add('emp-fullwidth');
     var eIni = 'EM';
     if (empState.user && empState.user.name) eIni = empState.user.name.split(' ').map(function(w){return w[0]}).join('');
-    document.getElementById('avatarEl').textContent = eIni;
+    if (empState.user && empState.user.name) eIni = empState.user.name.split(' ').map(function(w){return w[0]}).join('');
+    var avEl2 = document.getElementById('avatarEl'); if (avEl2) avEl2.textContent = eIni;
     APP.page = 'employee';
-    document.getElementById('pageTitle').textContent = 'Employee Portal';
-    document.getElementById('breadcrumb').textContent = sanitize(empState.user ? empState.user.name : 'Employee') + ' \u00B7 ' + emp_today();
-    renderPage();
+    var ptEl2 = document.getElementById('pageTitle'); if (ptEl2) ptEl2.textContent = 'Employee Portal';
+    var bcEl2 = document.getElementById('breadcrumb'); if (bcEl2) bcEl2.textContent = sanitize(empState.user ? empState.user.name : 'Employee') + ' · ' + emp_today();
   }
 }
 
@@ -3245,6 +3245,11 @@ function openCreditCustomerModal() {
       <div class="form-group"><label class="form-label">Credit Limit (₹)</label><input class="form-input" id="ccLimit" type="number" placeholder="500000" /></div>
     </div>
     <div class="form-group"><label class="form-label">Phone</label><div style="display:flex;gap:8px"><input class="form-input" id="ccPhoneCC" type="tel" inputmode="numeric" maxlength="4" placeholder="+91" value="+91" style="width:72px;flex-shrink:0" /><input class="form-input" id="ccPhone" type="tel" inputmode="numeric" maxlength="10" minlength="10" oninput="this.value=this.value.replace(/[^0-9]/g,'')" placeholder="10-digit number" style="flex:1" /></div></div>
+    <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:rgba(212,148,15,0.06);border:1px solid rgba(212,148,15,0.25);border-radius:8px;margin-top:4px">
+      <input type="checkbox" id="ccLoyalty" style="width:16px;height:16px;cursor:pointer;accent-color:var(--accent-light)" />
+      <label for="ccLoyalty" style="cursor:pointer;font-size:13px;color:var(--text-1)">⭐ Enrol in Loyalty Programme</label>
+      <span style="font-size:11px;color:var(--text-3);margin-left:auto">Owner-controlled</span>
+    </div>
   `, `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-accent" onclick="saveCreditCustomer()">💾 Save Customer</button>`);
 }
 
@@ -3257,9 +3262,10 @@ async function saveCreditCustomer() {
   if (!phone || phone.length !== 10 || !/^\d{10}$/.test(phone)) { toast('Phone number must be exactly 10 digits', 'error'); return; }
   if (isNaN(limit) || limit <= 0) { toast('Enter valid credit limit', 'error'); return; }
   if (limit > 10000000) { toast('Credit limit exceeds ₹1,00,00,000', 'error'); return; }
+  const loyaltyEnrolled = !!(document.getElementById('ccLoyalty')?.checked);
   const customer = {
     id: Date.now(), name: sanitize(name), type, limit, outstanding: 0,
-    lastPayment: '', phone: sanitize(phone)
+    lastPayment: '', phone: sanitize(phone), loyaltyEnrolled
   };
   APP.data.creditCustomers.push(customer);
   try { await db.add('creditCustomers', customer); } catch(e) { console.warn('[CreditCustomer]', e.message); }
@@ -3286,7 +3292,12 @@ function openEditCreditModal(customerId) {
         <input class="form-input" id="ecLimit" type="number" value="${c.limit||0}" /></div>
     </div>
     <div class="form-group"><label class="form-label">Phone</label>
-      <div style="display:flex;gap:8px"><input class="form-input" id="ecPhoneCC" type="tel" inputmode="numeric" maxlength="4" placeholder="+91" value="${sanitize(c.phoneCC||'+91')}" style="width:72px;flex-shrink:0" /><input class="form-input" id="ecPhone" type="tel" inputmode="numeric" maxlength="10" minlength="10" oninput="this.value=this.value.replace(/[^0-9]/g,'')" placeholder="10-digit number" value="${sanitize(c.phone||'')}" style="flex:1" /></div></div>`,
+      <div style="display:flex;gap:8px"><input class="form-input" id="ecPhoneCC" type="tel" inputmode="numeric" maxlength="4" placeholder="+91" value="${sanitize(c.phoneCC||'+91')}" style="width:72px;flex-shrink:0" /><input class="form-input" id="ecPhone" type="tel" inputmode="numeric" maxlength="10" minlength="10" oninput="this.value=this.value.replace(/[^0-9]/g,'')" placeholder="10-digit number" value="${sanitize(c.phone||'')}" style="flex:1" /></div></div>
+    <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:rgba(212,148,15,0.06);border:1px solid rgba(212,148,15,0.25);border-radius:8px;margin-top:4px">
+      <input type="checkbox" id="ecLoyalty" ${c.loyaltyEnrolled ? 'checked' : ''} style="width:16px;height:16px;cursor:pointer;accent-color:var(--accent-light)" />
+      <label for="ecLoyalty" style="cursor:pointer;font-size:13px;color:var(--text-1)">⭐ Enrol in Loyalty Programme</label>
+      <span style="font-size:11px;color:var(--text-3);margin-left:auto">Owner-controlled</span>
+    </div>`,
     `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
      <button class="btn btn-accent" onclick="saveEditCredit(${customerId})">💾 Save</button>`
   );
@@ -3303,8 +3314,10 @@ async function saveEditCredit(customerId) {
   const c = APP.data.creditCustomers.find(x => parseInt(x.id) === parseInt(customerId));
   if (!c) { toast('Customer not found', 'error'); return; }
   c.name = sanitize(name); c.type = type; c.limit = limit; c.phone = sanitize(phone);
+  c.loyaltyEnrolled = !!(document.getElementById('ecLoyalty')?.checked);
+  // If unenrolled, preserve existing points but stop earning
   try { await db.put('creditCustomers', c); } catch(e) { console.warn('[Credit edit]', e.message); }
-  auditLog('credit_customer_edit', { customerId, name, type, limit });
+  auditLog('credit_customer_edit', { customerId, name, type, limit, loyaltyEnrolled: c.loyaltyEnrolled });
   closeModal(); toast(`${sanitize(name)} updated`, 'success'); renderPage();
 }
 
