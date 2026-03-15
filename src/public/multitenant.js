@@ -476,20 +476,55 @@ async function mt_saveTenant(isEdit) {
         const newTenantId  = result?.id || id;
         if (newTenantId) {
           try {
+            const tok = typeof getAuthToken === 'function' ? getAuthToken() : '';
+            const PLAN_MONTHS = { monthly:1, quarterly:3, halfyearly:6, yearly:12 };
+            const planMonths  = PLAN_MONTHS[selectedPlan] || 1;
+
+            // Determine status and dates based on trial + plan selection
+            let subStatus, subStart, subEnd;
+            if (isTrialOnly) {
+              // Trial only — status=trial, no sub dates
+              subStatus = 'trial';
+              subStart  = null;
+              subEnd    = null;
+            } else if (trialEnabled && trialDays > 0) {
+              // Trial + paid plan — status=trial, sub dates start after trial
+              subStatus = 'trial';
+              const trialEndDate = new Date();
+              trialEndDate.setDate(trialEndDate.getDate() + trialDays);
+              subStart = trialEndDate.toISOString();
+              const subEndDate = new Date(trialEndDate);
+              subEndDate.setMonth(subEndDate.getMonth() + planMonths);
+              subEnd = subEndDate.toISOString();
+            } else {
+              // No trial — status=active, sub starts now
+              subStatus = 'active';
+              subStart  = new Date().toISOString();
+              const subEndDate = new Date();
+              subEndDate.setMonth(subEndDate.getMonth() + planMonths);
+              subEnd = subEndDate.toISOString();
+            }
+
+            // Create subscription record
             await fetch('/api/subscriptions/' + encodeURIComponent(newTenantId), {
               method: 'PUT',
-              headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + (typeof getAuthToken === 'function' ? getAuthToken() : '') },
+              headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + tok },
               body: JSON.stringify({
-                plan: 'trial', status: 'trial', trial_days: trialDays,
-                price_monthly: priceMonthly, grace_days: graceDays,
-                owner_phone: ownerWA ? '+91' + ownerWA : '',
                 plan: isTrialOnly ? 'trial' : selectedPlan,
+                status: subStatus,
+                trial_days: trialEnabled ? trialDays : 0,
+                price_monthly: priceMonthly,
+                grace_days: graceDays,
+                owner_phone: ownerWA ? '+91' + ownerWA : '',
+                sub_start: subStart,
+                sub_end: subEnd,
                 notes: 'Prices: ' + JSON.stringify(planPrices)
               })
             });
           } catch(e) { console.warn('[Subscription] Could not create subscription record:', e.message); }
         }
-        mt_toast(name + ' created with ' + trialDays + '-day trial!', 'success');
+        const planLabel = {trial:'trial only',monthly:'monthly',quarterly:'quarterly',halfyearly:'half-yearly',yearly:'yearly'}[selectedPlan] || selectedPlan;
+        mt_toast(name + ' created' + (trialEnabled && trialDays > 0 ? ' · ' + trialDays + '-day trial' : '') + (isTrialOnly ? '' : ' · ' + planLabel + ' plan') + '!', 'success');
       }
       if (typeof mt_getTenants_async === 'function') await mt_getTenants_async();
       mt_showSelector();
