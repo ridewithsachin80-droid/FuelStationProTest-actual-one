@@ -975,22 +975,32 @@ async function mt_subSettingsFromBilling(tenantId, stationName) {
     const token = typeof getAuthToken === 'function' ? getAuthToken() : '';
     const resp = await fetch('/api/subscriptions/' + encodeURIComponent(tenantId), { headers: { 'Authorization': 'Bearer ' + token } });
     const sub = await resp.json();
-    const html = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">'
-      + '<div><label style="font-size:11px;font-weight:700;color:var(--text-3);text-transform:uppercase">Status</label>'
-      + '<select id="ss2_status" style="width:100%;margin-top:4px;padding:8px;background:var(--bg-2);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px">'
+    // Parse saved plan prices from notes
+    var _sp = {}; try { var _m=(sub.notes||'').match(/Prices: ({.*})/); if(_m) _sp=JSON.parse(_m[1]); } catch(e2){}
+    var _inp = function(id,val,type,ph){return '<input id="'+id+'" type="'+(type||'number')+'" value="'+(val||0)+'" placeholder="'+(ph||'')+' " style="width:100%;padding:6px 8px;background:var(--bg-2);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px" />';};
+    var _lbl = function(t){return '<label style="font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase">'+t+'</label>';};
+    var _g2 = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">';
+    var _subEndVal = sub.sub_end ? new Date(sub.sub_end).toISOString().slice(0,10) : '';
+    var html = _g2
+      + '<div>'+_lbl('Status')+'<select id="ss2_status" style="width:100%;margin-top:4px;padding:7px;background:var(--bg-2);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px">'
       + ['trial','active','suspended'].map(s => '<option value="'+s+'" '+(sub.status===s?'selected':'')+'>'+{trial:'Trial',active:'Active',suspended:'Suspended'}[s]+'</option>').join('')
       + '</select></div>'
-      + '<div><label style="font-size:11px;font-weight:700;color:var(--text-3);text-transform:uppercase">Trial Days</label>'
-      + '<input id="ss2_trial" type="number" value="'+(sub.trial_days||30)+'" style="width:100%;margin-top:4px;padding:8px;background:var(--bg-2);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px" /></div>'
-      + '</div>'
-      + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">'
-      + '<div><label style="font-size:11px;font-weight:700;color:var(--text-3);text-transform:uppercase">Monthly Price (₹)</label>'
-      + '<input id="ss2_price" type="number" value="'+(sub.price_monthly||0)+'" style="width:100%;margin-top:4px;padding:8px;background:var(--bg-2);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px" /></div>'
-      + '<div><label style="font-size:11px;font-weight:700;color:var(--text-3);text-transform:uppercase">Grace Days</label>'
-      + '<input id="ss2_grace" type="number" value="'+(sub.grace_days||3)+'" style="width:100%;margin-top:4px;padding:8px;background:var(--bg-2);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px" /></div>'
-      + '</div>'
-      + '<div><label style="font-size:11px;font-weight:700;color:var(--text-3);text-transform:uppercase">Owner WhatsApp</label>'
-      + '<input id="ss2_phone" value="'+(sub.owner_phone||'')+'" placeholder="+91XXXXXXXXXX" style="width:100%;margin-top:4px;padding:8px;background:var(--bg-2);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px" /></div>';
+      + '<div>'+_lbl('Plan')+'<select id="ss2_plan" style="width:100%;margin-top:4px;padding:7px;background:var(--bg-2);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px">'
+      + ['trial','monthly','quarterly','halfyearly','yearly'].map(p=>{var l={trial:'Trial Only',monthly:'Monthly',quarterly:'Quarterly',halfyearly:'Half-Yearly',yearly:'Yearly'}[p];return '<option value="'+p+'" '+(sub.plan===p?'selected':'')+'>'+l+'</option>';}).join('')
+      + '</select></div></div>'
+      + _g2
+      + '<div>'+_lbl('Trial Days')+_inp('ss2_trial',sub.trial_days||30,'number')+'</div>'
+      + '<div>'+_lbl('Grace Days')+_inp('ss2_grace',sub.grace_days||3,'number')+'</div></div>'
+      + _g2
+      + '<div>'+_lbl('Sub End Date')+'<input id="ss2_subend" type="date" value="'+_subEndVal+'" style="width:100%;padding:6px 8px;background:var(--bg-2);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px" /></div>'
+      + '<div>'+_lbl('Owner WhatsApp')+'<input id="ss2_phone" type="tel" value="'+(sub.owner_phone||'')+'" placeholder="+91XXXXXXXXXX" style="width:100%;padding:6px 8px;background:var(--bg-2);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px" /></div></div>'
+      + '<div style="margin-bottom:6px">'+_lbl('Plan Prices (₹)')+'<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:5px">'
+      + ['monthly','quarterly','halfyearly','yearly'].map(p=>{
+          var lb={monthly:'Monthly/1mo',quarterly:'Quarterly/3mo',halfyearly:'Half-Yearly/6mo',yearly:'Yearly/12mo'}[p];
+          var pv=_sp[p]||sub.price_monthly||0;
+          return '<div><div style="font-size:10px;color:var(--text-3);margin-bottom:2px">'+lb+'</div><div style="display:flex;align-items:center;gap:3px"><span style="color:var(--text-3);font-size:11px">₹</span><input id="ss2_price_'+p+'" type="number" value="'+pv+'" min="0" style="width:100%;padding:5px 7px;background:var(--bg-2);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px" /></div></div>';
+        }).join('')
+      + '</div></div>';
 
     const confirmed = await mt_confirmDialog('⚙️ Settings — ' + stationName, html, 'Save Settings');
     if (!confirmed) return;
@@ -1000,10 +1010,13 @@ async function mt_subSettingsFromBilling(tenantId, stationName) {
       headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token2 },
       body: JSON.stringify({
         status: document.getElementById('ss2_status')?.value,
+        plan: document.getElementById('ss2_plan')?.value,
         trial_days: parseInt(document.getElementById('ss2_trial')?.value)||30,
-        price_monthly: parseFloat(document.getElementById('ss2_price')?.value)||0,
+        price_monthly: parseFloat(document.getElementById('ss2_price_monthly')?.value)||0,
         grace_days: parseInt(document.getElementById('ss2_grace')?.value)||3,
-        owner_phone: document.getElementById('ss2_phone')?.value?.trim()||''
+        sub_end: document.getElementById('ss2_subend')?.value || null,
+        owner_phone: document.getElementById('ss2_phone')?.value?.trim()||'',
+        notes: 'Prices: ' + JSON.stringify({monthly:parseFloat(document.getElementById('ss2_price_monthly')?.value)||0,quarterly:parseFloat(document.getElementById('ss2_price_quarterly')?.value)||0,halfyearly:parseFloat(document.getElementById('ss2_price_halfyearly')?.value)||0,yearly:parseFloat(document.getElementById('ss2_price_yearly')?.value)||0})
       })
     });
     if (!r2.ok) { const e = await r2.json(); mt_toast(e.error||'Save failed','error'); return; }
