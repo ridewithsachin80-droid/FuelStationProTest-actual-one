@@ -1026,11 +1026,11 @@ async function startServer() {
   // PUT upsert subscription settings (super admin only)
   app.put('/api/subscriptions/:tenantId', authMiddleware(db), reqRole('super'), async (req, res) => {
     const tid = req.params.tenantId;
-    const { plan, status, trial_days, price_monthly, grace_days, owner_phone, notes } = req.body;
+    const { plan, status, trial_days, price_monthly, grace_days, owner_phone, notes, sub_start, sub_end } = req.body;
     try {
       await pool.query(`
-        INSERT INTO subscriptions (tenant_id, plan, status, trial_days, price_monthly, grace_days, owner_phone, notes, trial_start, updated_at)
-        VALUES ($1, COALESCE($2,'trial'), COALESCE($3,'trial'), COALESCE($4,30), COALESCE($5,0), COALESCE($6,3), COALESCE($7,''), COALESCE($8,''), NOW(), NOW())
+        INSERT INTO subscriptions (tenant_id, plan, status, trial_days, price_monthly, grace_days, owner_phone, notes, sub_start, sub_end, trial_start, updated_at)
+        VALUES ($1, COALESCE($2,'trial'), COALESCE($3,'trial'), COALESCE($4,30), COALESCE($5,0), COALESCE($6,3), COALESCE($7,''), COALESCE($8,''), $9, $10, NOW(), NOW())
         ON CONFLICT(tenant_id) DO UPDATE SET
           plan = COALESCE($2, subscriptions.plan),
           status = COALESCE($3, subscriptions.status),
@@ -1039,8 +1039,10 @@ async function startServer() {
           grace_days = COALESCE($6, subscriptions.grace_days),
           owner_phone = COALESCE($7, subscriptions.owner_phone),
           notes = COALESCE($8, subscriptions.notes),
+          sub_start = COALESCE($9, subscriptions.sub_start),
+          sub_end = COALESCE($10, subscriptions.sub_end),
           updated_at = NOW()
-      `, [tid, plan, status, trial_days, price_monthly, grace_days, owner_phone, notes]);
+      `, [tid, plan, status, trial_days, price_monthly, grace_days, owner_phone, notes, sub_start||null, sub_end||null]);
       res.json({ success: true });
     } catch(e) { res.status(500).json({ error: e.message }); }
   });
