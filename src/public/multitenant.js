@@ -229,6 +229,9 @@ function mt_showTenantForm(existing) {
   const isEdit = !!existing;
   const app = document.getElementById('app');
   const newId = existing?.id || ('t_' + Date.now().toString(36));
+  window.scrollTo(0, 0);
+  document.documentElement.scrollTop = 0;
+  document.body.scrollTop = 0;
   app.innerHTML = `
     <div style="position:fixed;inset:0;background:var(--bg-0);display:flex;align-items:center;justify-content:center;padding:20px;overflow-y:auto;z-index:9999">
       <div style="width:100%;max-width:480px">
