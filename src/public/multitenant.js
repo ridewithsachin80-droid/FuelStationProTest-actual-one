@@ -709,25 +709,28 @@ async function mt_loadBillingData(filter) {
 }
 
 async function mt_recordPaymentFromBilling(tenantId, stationName, defaultPrice) {
-  const plans = [['monthly','Monthly (1 mo)'],['quarterly','Quarterly (3 mo)'],['halfyearly','Half-Yearly (6 mo)'],['yearly','Yearly (12 mo)']];
-  const planOpts = plans.map(([v,l]) => '<option value="'+v+'">'+l+'</option>').join('');
-  const html = '<div style="padding:4px 0">'
-    + '<div style="margin-bottom:12px"><label style="font-size:11px;font-weight:700;color:var(--text-3);text-transform:uppercase">Plan</label>'
-    + '<select id="rp2_plan" style="width:100%;margin-top:4px;padding:8px;background:var(--bg-2);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px">'+planOpts+'</select></div>'
-    + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">'
-    + '<div><label style="font-size:11px;font-weight:700;color:var(--text-3);text-transform:uppercase">Amount (₹)</label><input id="rp2_amount" type="number" value="'+Math.round(defaultPrice)+'" style="width:100%;margin-top:4px;padding:8px;background:var(--bg-2);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px" /></div>'
-    + '<div><label style="font-size:11px;font-weight:700;color:var(--text-3);text-transform:uppercase">Mode</label><select id="rp2_mode" style="width:100%;margin-top:4px;padding:8px;background:var(--bg-2);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px"><option value="upi">UPI</option><option value="cash">Cash</option><option value="bank">Bank Transfer</option><option value="cheque">Cheque</option></select></div>'
-    + '</div>'
-    + '<div style="margin-bottom:12px"><label style="font-size:11px;font-weight:700;color:var(--text-3);text-transform:uppercase">Reference / UTR</label><input id="rp2_ref" placeholder="UPI ref, UTR, cheque no..." style="width:100%;margin-top:4px;padding:8px;background:var(--bg-2);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px" /></div>'
-    + '</div>';
+  // Pull saved plan prices from billing cache
+  var subData = (_billingCache||[]).find(function(s){return s.tenant_id===tenantId;}) || {};
+  var sp = {}; try { var _m=(subData.notes||'').match(/Prices: ({.*})/); if(_m) sp=JSON.parse(_m[1]); } catch(e2){}
+  var PP = {monthly:sp.monthly||subData.price_monthly||0, quarterly:sp.quarterly||0, halfyearly:sp.halfyearly||0, yearly:sp.yearly||0};
+  var curPlan = subData.plan||'quarterly';
+  if (curPlan==='trial') curPlan='monthly';
+  var initAmt = PP[curPlan] || defaultPrice || 0;
 
-  const confirmed = await mt_confirmDialog('💰 Record Payment — ' + stationName, html, 'Record Payment');
+  var plans = [['monthly','Monthly (1 mo)'],['quarterly','Quarterly (3 mo)'],['halfyearly','Half-Yearly (6 mo)'],['yearly','Yearly (12 mo)']];
+  var planOpts = plans.map(function(pv){
+    return '<option value="'+pv[0]+'" '+(curPlan===pv[0]?'selected':'')+'>'+pv[1]+'</option>';
+  }).join('');
+  var ppJson = JSON.stringify(PP);
+  var html = '<div style="padding:4px 0">'    + '<div style="margin-bottom:12px"><label style="font-size:11px;font-weight:700;color:var(--text-3);text-transform:uppercase">Plan</label>'    + '<select id="rp2_plan" onchange="(function(sel){var pp='+ppJson+';var a=document.getElementById(\'rp2_amount\');if(a&&pp[sel.value])a.value=pp[sel.value];})(this)" style="width:100%;margin-top:4px;padding:8px;background:var(--bg-2);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px">'+planOpts+'</select></div>'    + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">'    + '<div><label style="font-size:11px;font-weight:700;color:var(--text-3);text-transform:uppercase">Amount (₹)</label><input id="rp2_amount" type="number" value="'+Math.round(initAmt)+'" style="width:100%;margin-top:4px;padding:8px;background:var(--bg-2);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px" /></div>'    + '<div><label style="font-size:11px;font-weight:700;color:var(--text-3);text-transform:uppercase">Mode</label><select id="rp2_mode" style="width:100%;margin-top:4px;padding:8px;background:var(--bg-2);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px"><option value="cash">Cash</option><option value="upi">UPI</option><option value="bank">Bank Transfer</option><option value="cheque">Cheque</option></select></div>'    + '</div>'    + '<div style="margin-bottom:12px"><label style="font-size:11px;font-weight:700;color:var(--text-3);text-transform:uppercase">Reference / UTR</label><input id="rp2_ref" placeholder="UPI ref, UTR, cheque no..." style="width:100%;margin-top:4px;padding:8px;background:var(--bg-2);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px" /></div>'    + '</div>';
+
+  const confirmed = await mt_confirmDialog('\ud83d\udcb0 Record Payment \u2014 ' + stationName, html, 'Record Payment');
   if (!confirmed) return;
   const plan   = document.getElementById('rp2_plan')?.value || 'monthly';
   const amount = parseFloat(document.getElementById('rp2_amount')?.value) || 0;
-  const mode   = document.getElementById('rp2_mode')?.value || 'upi';
+  const mode   = document.getElementById('rp2_mode')?.value || 'cash';
   const ref    = document.getElementById('rp2_ref')?.value?.trim() || '';
-  const months = { monthly:1, quarterly:3, halfyearly:6, yearly:12 }[plan] || 1;
+  const months = {monthly:1,quarterly:3,halfyearly:6,yearly:12}[plan] || 1;
   if (!amount) { mt_toast('Enter a valid amount', 'error'); return; }
   try {
     const token = typeof getAuthToken === 'function' ? getAuthToken() : '';
@@ -737,10 +740,13 @@ async function mt_recordPaymentFromBilling(tenantId, stationName, defaultPrice) 
       body: JSON.stringify({ plan, amount, payment_mode: mode, reference: ref, months })
     });
     if (!resp.ok) { const r = await resp.json(); mt_toast(r.error || 'Failed', 'error'); return; }
-    mt_toast('✅ Payment recorded — subscription extended!', 'success');
+    mt_toast('\u2705 Payment recorded \u2014 subscription extended!', 'success');
     _billingCache=null; await mt_loadBillingData();
+    // Second reload after 1.5s to catch Railway DB propagation delay
+    setTimeout(function(){_billingCache=null; mt_loadBillingData();}, 1500);
   } catch(e) { mt_toast('Error: ' + e.message, 'error'); }
 }
+
 
 async function mt_subSettingsFromBilling(tenantId, stationName) {
   try {
@@ -880,14 +886,14 @@ function mt_confirmDialog(title, bodyHtml, confirmLabel) {
     overlay.setAttribute('data-mtconfirm', '1');
     overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:10020;display:flex;align-items:center;justify-content:center;padding:20px';
     overlay.innerHTML = '<div style="background:var(--bg-1);border:1px solid var(--border);border-radius:12px;padding:20px;width:100%;max-width:420px;max-height:80vh;overflow-y:auto">'
+    overlay.innerHTML = '<div style="background:var(--bg-1);border:1px solid var(--border);border-radius:12px;padding:20px;width:100%;max-width:420px;max-height:80vh;overflow-y:auto">'
       + '<div style="font-size:15px;font-weight:800;color:var(--text-0);margin-bottom:16px">'+title+'</div>'
       + bodyHtml
       + '<div style="display:flex;gap:8px;margin-top:16px">'
-      + '<div style="display:flex;gap:8px;margin-top:16px">'
       + '<button onclick="this.closest(\'[data-mtconfirm]\').remove();window._mtConfirmResolve(false)" style="flex:1;background:var(--bg-2);border:1px solid var(--border);color:var(--text-2);border-radius:6px;padding:10px;font-size:13px;font-weight:700;cursor:pointer">Cancel</button>'
       + '<button onclick="this.closest(\'[data-mtconfirm]\').remove();window._mtConfirmResolve(true)" style="flex:1;background:var(--accent);border:none;color:#000;border-radius:6px;padding:10px;font-size:13px;font-weight:700;cursor:pointer">'+confirmLabel+'</button>'
+      + '</div></div>';
     window._mtConfirmResolve = resolve;
-    document.body.appendChild(overlay);
   });
 }
 
