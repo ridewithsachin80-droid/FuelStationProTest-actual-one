@@ -273,9 +273,17 @@ function mt_showTenantForm(existing) {
           </div>
           <div style="background:var(--bg-0);border-radius:var(--radius-sm);border:1px solid rgba(212,148,15,0.3);padding:14px;margin-top:12px">
             <div style="font-size:11px;font-weight:700;color:var(--accent-light);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px">💳 Subscription Settings</div>
-            <div class="form-group mb-12">
-              <label class="form-label">Trial Period (days)</label>
-              <input class="form-input mono" id="tTrialDays" type="number" value="30" min="1" max="365" placeholder="30" style="max-width:160px" />
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+              <div class="form-group mb-0">
+                <label class="form-label">Trial Period (days)</label>
+                <input class="form-input mono" id="tTrialDays" type="number" value="30" min="1" max="365" placeholder="30" />
+              </div>
+              <div class="form-group mb-0">
+                <label class="form-label">Grace Period (days)
+                  <span style="font-size:9px;color:var(--text-3);font-weight:400;display:block;margin-top:1px">Extra days after expiry before lock</span>
+                </label>
+                <input class="form-input mono" id="tGraceDays" type="number" value="3" min="0" max="30" placeholder="3" />
+              </div>
             </div>
             <div class="form-group mb-0">
               <label class="form-label">Plan Prices (₹) — tick to enable, set price</label>
@@ -335,6 +343,7 @@ async function mt_saveTenant(isEdit) {
         const result = await TenantAPI.create({ name, location, ownerName, phone, icon, adminUser, adminPass });
         // Create subscription record for the new station
         const trialDays    = parseInt(document.getElementById('tTrialDays')?.value) || 30;
+        const graceDays    = parseInt(document.getElementById('tGraceDays')?.value) || 3;
         const ownerWA      = (document.getElementById('tOwnerWA')?.value || '').trim();
         // Read individual plan prices
         const planPrices = {
@@ -352,7 +361,7 @@ async function mt_saveTenant(isEdit) {
               headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + (typeof getAuthToken === 'function' ? getAuthToken() : '') },
               body: JSON.stringify({
                 plan: 'trial', status: 'trial', trial_days: trialDays,
-                price_monthly: priceMonthly, grace_days: 3,
+                price_monthly: priceMonthly, grace_days: graceDays,
                 owner_phone: ownerWA ? '+91' + ownerWA : '',
                 notes: 'Prices: ' + JSON.stringify(planPrices)
               })
