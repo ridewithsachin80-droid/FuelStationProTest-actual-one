@@ -307,7 +307,7 @@ function mt_showTenantForm(existing) {
                   </div>
                   <div style="display:flex;align-items:center;gap:4px">
                     <span style="font-size:12px;color:var(--text-3)">₹</span>
-                    <input class="form-input mono" id="tPrice_monthly" type="number" value="999" min="0" onclick="event.stopPropagation();mt_selectPlan('monthly')" style="font-size:14px;font-weight:700;padding:5px 8px" />
+                    <input class="form-input mono" id="tPrice_monthly" type="number" value="" min="0" placeholder="Enter price" onfocus="mt_selectPlan('monthly')" style="font-size:14px;font-weight:700;padding:5px 8px" />
                   </div>
                 </label>
                 <label id="tPlanCard_quarterly" onclick="mt_selectPlan('quarterly')" style="display:flex;flex-direction:column;gap:6px;background:var(--bg-2);border:2px solid var(--border);border-radius:8px;padding:10px;cursor:pointer;transition:border 0.15s">
@@ -317,7 +317,7 @@ function mt_showTenantForm(existing) {
                   </div>
                   <div style="display:flex;align-items:center;gap:4px">
                     <span style="font-size:12px;color:var(--text-3)">₹</span>
-                    <input class="form-input mono" id="tPrice_quarterly" type="number" value="2800" min="0" onclick="event.stopPropagation();mt_selectPlan('quarterly')" style="font-size:14px;font-weight:700;padding:5px 8px" />
+                    <input class="form-input mono" id="tPrice_quarterly" type="number" value="" min="0" placeholder="Enter price" onfocus="mt_selectPlan('quarterly')" style="font-size:14px;font-weight:700;padding:5px 8px" />
                   </div>
                 </label>
                 <label id="tPlanCard_halfyearly" onclick="mt_selectPlan('halfyearly')" style="display:flex;flex-direction:column;gap:6px;background:var(--bg-2);border:2px solid var(--border);border-radius:8px;padding:10px;cursor:pointer;transition:border 0.15s">
@@ -327,7 +327,7 @@ function mt_showTenantForm(existing) {
                   </div>
                   <div style="display:flex;align-items:center;gap:4px">
                     <span style="font-size:12px;color:var(--text-3)">₹</span>
-                    <input class="form-input mono" id="tPrice_halfyearly" type="number" value="5400" min="0" onclick="event.stopPropagation();mt_selectPlan('halfyearly')" style="font-size:14px;font-weight:700;padding:5px 8px" />
+                    <input class="form-input mono" id="tPrice_halfyearly" type="number" value="" min="0" placeholder="Enter price" onfocus="mt_selectPlan('halfyearly')" style="font-size:14px;font-weight:700;padding:5px 8px" />
                   </div>
                 </label>
                 <label id="tPlanCard_yearly" onclick="mt_selectPlan('yearly')" style="display:flex;flex-direction:column;gap:6px;background:var(--bg-2);border:2px solid var(--border);border-radius:8px;padding:10px;cursor:pointer;transition:border 0.15s">
@@ -337,7 +337,7 @@ function mt_showTenantForm(existing) {
                   </div>
                   <div style="display:flex;align-items:center;gap:4px">
                     <span style="font-size:12px;color:var(--text-3)">₹</span>
-                    <input class="form-input mono" id="tPrice_yearly" type="number" value="10000" min="0" onclick="event.stopPropagation();mt_selectPlan('yearly')" style="font-size:14px;font-weight:700;padding:5px 8px" />
+                    <input class="form-input mono" id="tPrice_yearly" type="number" value="" min="0" placeholder="Enter price" onfocus="mt_selectPlan('yearly')" style="font-size:14px;font-weight:700;padding:5px 8px" />
                   </div>
                 </label>
               </div>
