@@ -396,38 +396,38 @@ function mt_toggleTrial() {
 
 function mt_selectPlan(planId) {
   var plans = ['monthly','quarterly','halfyearly','yearly','trialonly'];
+  var hidden = document.getElementById('tSelectedPlan');
+  var current = hidden ? hidden.value : '';
+
+  // Toggle: clicking the already-selected plan deselects it
+  var newVal = (current === planId) ? '' : planId;
+
   // If trial only selected, auto-enable trial toggle
-  if (planId === 'trialonly') {
+  if (newVal === 'trialonly') {
+    var trialHidden = document.getElementById('tTrialEnabled');
     var trialCard = document.getElementById('tTrialCard');
     var trialDot  = document.getElementById('tTrialDot');
-    var trialHidden = document.getElementById('tTrialEnabled');
     var trialInput = document.getElementById('tTrialDays');
     if (trialHidden && trialHidden.value === '0') {
-      // Re-enable trial
       trialHidden.value = '1';
       if (trialCard) { trialCard.style.border='2px solid var(--accent)'; trialCard.style.background='rgba(212,148,15,0.06)'; }
       if (trialDot)  { trialDot.style.background='var(--accent)'; trialDot.style.border='2px solid var(--accent)'; }
       if (trialInput){ trialInput.disabled=false; trialInput.style.opacity='1'; }
     }
   }
+
   plans.forEach(function(p) {
     var card = document.getElementById('tPlanCard_'+p);
     var dot  = document.getElementById('tPlanDot_'+p);
     if (!card || !dot) return;
-    if (p === planId) {
-      card.style.border = '2px solid var(--accent)';
-      card.style.background = 'rgba(212,148,15,0.06)';
-      dot.style.background = 'var(--accent)';
-      dot.style.border = '2px solid var(--accent)';
-    } else {
-      card.style.border = '2px solid var(--border)';
-      card.style.background = 'var(--bg-2)';
-      dot.style.background = 'transparent';
-      dot.style.border = '2px solid var(--text-3)';
-    }
+    var active = (p === newVal);
+    card.style.border = active ? '2px solid var(--accent)' : '2px solid var(--border)';
+    card.style.background = active ? 'rgba(212,148,15,0.06)' : 'var(--bg-2)';
+    dot.style.background = active ? 'var(--accent)' : 'transparent';
+    dot.style.border = active ? '2px solid var(--accent)' : '2px solid var(--text-3)';
   });
-  var hidden = document.getElementById('tSelectedPlan');
-  if (hidden) hidden.value = planId;
+
+  if (hidden) hidden.value = newVal;
 }
 
 async function mt_saveTenant(isEdit) {
@@ -457,8 +457,9 @@ async function mt_saveTenant(isEdit) {
         const graceDays    = parseInt(document.getElementById('tGraceDays')?.value) || 3;
         const ownerWA      = (document.getElementById('tOwnerWA')?.value || '').trim();
         // Read individual plan prices
-        const selectedPlan = document.getElementById('tSelectedPlan')?.value || 'trialonly';
-        const isTrialOnly  = !selectedPlan || selectedPlan === 'trialonly';
+        const selectedPlan = document.getElementById('tSelectedPlan')?.value || '';
+        if (!selectedPlan) { mt_toast('Please select a subscription plan before creating the station', 'error'); return; }
+        const isTrialOnly  = selectedPlan === 'trialonly';
         const planPrices = {
           monthly:    parseFloat(document.getElementById('tPrice_monthly')?.value)    || 999,
           quarterly:  parseFloat(document.getElementById('tPrice_quarterly')?.value)  || 2800,
