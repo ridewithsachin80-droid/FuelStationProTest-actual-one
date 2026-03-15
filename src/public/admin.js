@@ -272,7 +272,12 @@ function renderDashboard(D) {
     const tid = APP.tenant?.id;
     if (tid) {
       fetch('/api/public/subscription/' + encodeURIComponent(tid))
-        .then(r => r.json()).then(s => { window._subStatus = s; renderPage(); }).catch(()=>{});
+        .then(r => r.json()).then(s => {
+          window._subStatus = s;
+          // Update badge in place without full re-render to avoid loop
+          var badge = document.getElementById('subStatusBadge');
+          if (badge && APP.page === 'dashboard') renderPage();
+        }).catch(()=>{});
     }
   }
   const sub = window._subStatus;
