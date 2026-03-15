@@ -3008,7 +3008,7 @@ async function doAdminLogin() {
     window._preloadPromise = null; // consume it
     await Promise.race([
       loadPromise,
-      new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 8000))
+      new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 3000))
     ]);
   } catch(e) {
     console.warn('[doAdminLogin] loadData timeout/error:', e.message);
