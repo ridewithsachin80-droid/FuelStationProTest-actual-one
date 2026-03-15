@@ -3245,6 +3245,16 @@ function enterApp() {
     buildNav(); renderPage();
     // Check backup reminder for admin
     checkBackupReminder();
+    // Fetch subscription status so read-only guard works before dashboard renders
+    setTimeout(function() {
+      var tenant = (typeof mt_getActiveTenant === 'function') ? mt_getActiveTenant() : null;
+      if (tenant && tenant.id && !window._subStatus) {
+        fetch('/api/public/subscription/' + encodeURIComponent(tenant.id))
+          .then(function(r) { return r.json(); })
+          .then(function(s) { window._subStatus = s; })
+          .catch(function() {});
+      }
+    }, 300);
   } else {
     document.getElementById('sidebar').classList.add('emp-hidden');
     document.querySelector('.main-area').classList.add('emp-fullwidth');
