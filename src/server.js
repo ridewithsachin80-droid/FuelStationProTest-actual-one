@@ -1821,6 +1821,116 @@ async function startServer() {
 
   console.log('[Server] Periodic cleanup jobs initialized (sessions: 15min, logins: 1hr, audit: 24hr)');
 
+  // ── SUBSCRIPTION EXPIRY REMINDERS — runs every 24h at startup + daily ────────
+  // Sends WhatsApp to station owner at 7, 3, 1 days before expiry
+  // Also notifies super admin when any station expires
+  const SUPER_ADMIN_PHONE = process.env.SUPER_ADMIN_PHONE || '';
+
+  async function runSubscriptionReminders() {
+    console.log('[SubReminder] Running daily subscription check...');
+    try {
+      const now = new Date();
+      const subs = await pool.query(`
+        SELECT s.*, t.name AS station_name, t.phone AS station_phone
+        FROM subscriptions s JOIN tenants t ON t.id = s.tenant_id
+        WHERE s.status IN ('trial','active')
+      `);
+
+      let remindersCount = 0;
+      for (const row of subs.rows) {
+        let expiryDate = null;
+        let isExpired = false;
+
+        if (row.status === 'trial') {
+          expiryDate = new Date(row.trial_start);
+          expiryDate.setDate(expiryDate.getDate() + (row.trial_days || 30));
+        } else if (row.status === 'active' && row.sub_end) {
+          expiryDate = new Date(row.sub_end);
+        }
+        if (!expiryDate) continue;
+
+        const daysLeft = Math.ceil((expiryDate - now) / 86400000);
+        const graceEnd = new Date(expiryDate);
+        graceEnd.setDate(graceEnd.getDate() + (row.grace_days || 3));
+        const isGraceExpired = now > graceEnd;
+
+        // Mark as expired in DB if past grace period
+        if (isGraceExpired && row.status !== 'expired') {
+          await pool.query("UPDATE subscriptions SET status='expired', updated_at=NOW() WHERE tenant_id=$1", [row.tenant_id]);
+          isExpired = true;
+          console.log('[SubReminder] Marked expired:', row.station_name);
+        }
+
+        const ownerPhone = row.owner_phone || row.station_phone || '';
+        const stationName = row.station_name || row.tenant_id;
+        const planLabel = row.status === 'trial' ? 'Trial' : (row.plan || 'Subscription');
+
+        // Send reminder to station owner
+        if (ownerPhone && [7, 3, 1].includes(daysLeft)) {
+          const msg = daysLeft === 1
+            ? `⚠️ *FuelBunk Pro — URGENT*
+
+🏪 ${stationName}
+
+Your ${planLabel} expires *TOMORROW*!
+
+After expiry you will be in read-only mode — no new sales can be recorded.
+
+Please renew immediately.
+
+_— FuelBunk Pro_`
+            : `📅 *FuelBunk Pro Reminder*
+
+🏪 ${stationName}
+
+Your ${planLabel} expires in *${daysLeft} days*.
+
+Contact your FuelBunk Pro admin to renew and avoid disruption.
+
+_— FuelBunk Pro_`;
+          await whatsapp.sendMessage(ownerPhone, msg);
+          remindersCount++;
+        }
+
+        // Notify super admin on expiry
+        if (isExpired && SUPER_ADMIN_PHONE) {
+          const msg = `🔴 *Station Subscription Expired*
+
+🏪 ${stationName}
+📅 Expired: ${expiryDate.toLocaleDateString('en-IN')}
+💰 Plan: ${planLabel}
+
+Station is now in read-only mode.
+
+_— FuelBunk Pro Auto-Alert_`;
+          await whatsapp.sendMessage(SUPER_ADMIN_PHONE, msg);
+        }
+
+        // Notify super admin 7 days before ANY station expires
+        if (daysLeft === 7 && SUPER_ADMIN_PHONE) {
+          const msg = `⚠️ *Subscription Expiring Soon*
+
+🏪 ${stationName}
+📅 Expires in 7 days: ${expiryDate.toLocaleDateString('en-IN')}
+💰 Plan: ${planLabel}
+
+Follow up with station owner for renewal.
+
+_— FuelBunk Pro_`;
+          await whatsapp.sendMessage(SUPER_ADMIN_PHONE, msg);
+        }
+      }
+      console.log('[SubReminder] Done. Reminders sent:', remindersCount);
+    } catch(e) {
+      console.error('[SubReminder] Error:', e.message);
+    }
+  }
+
+  // Run once at startup (after 5 min delay to let server settle), then every 24h
+  const subReminderTimeout = setTimeout(runSubscriptionReminders, 5 * 60 * 1000);
+  const subReminderInterval = setInterval(runSubscriptionReminders, 24 * 60 * 60 * 1000);
+  console.log('[Server] Subscription reminder job initialized (daily)');
+
   // FIX #38: Close DB pool on shutdown so in-flight queries finish cleanly
   const gracefulShutdown = async (signal) => {
     console.log(`[Server] ${signal} received — shutting down gracefully...`);
@@ -1829,6 +1939,8 @@ async function startServer() {
     clearInterval(sessionCleanupInterval);
     clearInterval(loginCleanupInterval);
     clearInterval(auditCleanupInterval);
+    clearInterval(subReminderInterval);
+    clearTimeout(subReminderTimeout);
     console.log('[Server] Cleanup jobs stopped');
     
     // Close database pool
