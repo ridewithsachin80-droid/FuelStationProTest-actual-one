@@ -1018,7 +1018,18 @@ function emp_renderSales() {
       </div>
       <div class="form-group"><label class="form-label">Payment Mode</label><div style="display:flex;gap:6px;flex-wrap:wrap">${['cash','upi','card','credit']
         .map(m=>`<button class="btn btn-sm ${empPayMode===m?'btn-accent':'btn-ghost'}" data-paybtn="${m}" onclick="emp_selPay('${m}')">${{cash:'💵 Cash',upi:'📱 UPI',card:'💳 Card',credit:'📋 Credit'}[m]}</button>`).join('')}</div></div>
-      <div id="empCustWrap" style="display:${empPayMode==='credit'?'':'none'}"><div class="form-group"><label class="form-label">Credit Customer</label><select class="form-input" id="empSaleCustomer"><option value="">— Select Customer —</option>${(APP.data?.creditCustomers||[]).filter(c=>c.active!==false&&c.active!==0).map(c=>`<option value="${sanitize(c.name)}">${sanitize(c.name)}</option>`).join('')}</select></div></div><input type="hidden" id="empSaleCustomerHidden" value="" />
+      <div id="empCustWrap" style="display:${empPayMode==='credit'?'':'none'}"><div class="form-group"><label class="form-label">Credit Customer</label><select class="form-input" id="empSaleCustomer" onchange="emp_showLoyaltyBadge(this.value)"><option value="">— Select Customer —</option>${(APP.data?.creditCustomers||[]).filter(c=>c.active!==false&&c.active!==0).map(c=>`<option value="${sanitize(c.name)}">${sanitize(c.name)}</option>`).join('')}</select></div>
+      <div id="empLoyaltyBadge" style="display:none;margin-top:6px;padding:8px 12px;background:rgba(212,148,15,0.08);border:1px solid rgba(212,148,15,0.3);border-radius:8px;font-size:12px;display:flex;justify-content:space-between;align-items:center">
+        <span style="color:var(--text-2)">⭐ <span id="empLoyaltyPts">0</span> pts &nbsp;·&nbsp; Value: <span id="empLoyaltyVal" style="color:var(--green);font-weight:700">₹0</span></span>
+        <span style="font-size:10px;color:var(--text-3)" id="empLoyaltyEarn"></span>
+      </div></div><input type="hidden" id="empSaleCustomerHidden" value="" />
+      <div id="empVoiceWrap" style="display:none;margin-bottom:8px">
+        <button id="empVoiceBtn" class="btn btn-ghost btn-block" style="padding:10px;font-size:13px;border:1px dashed rgba(212,148,15,0.5);color:var(--accent-light);position:relative" onclick="emp_voiceEntry()">
+          🎤 <span id="empVoiceBtnLabel">Voice Entry</span>
+          <span style="font-size:10px;color:var(--text-3);margin-left:8px">say "petrol 500 rupees" or "diesel 20 litres"</span>
+        </button>
+        <div id="empVoiceStatus" style="font-size:11px;color:var(--text-3);text-align:center;margin-top:4px;min-height:16px"></div>
+      </div>
       <button class="btn btn-accent btn-block" style="padding:14px;font-size:14px;margin-top:6px" onclick="emp_recordSale()">💾 Record Sale</button>
     </div></div>
     ${empState.sales.length>0?`<div class="card"><div class="card-head"><h4>Recent Sales</h4><span class="mono fw-700" style="color:var(--green);font-size:13px">${cur(total)}</span></div><div class="card-body">
@@ -2080,6 +2091,22 @@ function emp_recordSale() {
   // ── NO tank deduction here — meter reading at shift end handles inventory sync
   //    to prevent double-deduction (sale + meter reading both deducting from tank)
 
+  // ── Loyalty: earn points on credit sale ─────────────────────────────────
+  if (empPayMode === 'credit' && sale.customer) {
+    const loyaltyEarnRate = APP.data?.loyaltyEarnRate || 1;
+    const earnedPts = Math.floor((sale.amount / 100) * loyaltyEarnRate);
+    if (earnedPts > 0) {
+      const loyaltyCust = APP.data?.creditCustomers?.find(c => c.name === sale.customer);
+      if (loyaltyCust) {
+        loyaltyCust.loyaltyPoints = (loyaltyCust.loyaltyPoints || 0) + earnedPts;
+        if (!loyaltyCust.loyaltyHistory) loyaltyCust.loyaltyHistory = [];
+        loyaltyCust.loyaltyHistory.unshift({ type:'earn', pts: earnedPts, balance: loyaltyCust.loyaltyPoints, ref: sale.id, date: emp_today() });
+        db.put('creditCustomers', loyaltyCust).catch(() => {});
+        toast('⭐ +' + earnedPts + ' loyalty pts for ' + sanitize(sale.customer) + ' (total: ' + loyaltyCust.loyaltyPoints + ')', 'info');
+      }
+    }
+  }
+
   auditLog('sale_add', { ...sale, source: 'employee_portal' });
   toast(`✅ Sale recorded: ${fmt(l)}L · ${cur(amt)}`, 'success');
 
@@ -2095,6 +2122,220 @@ function emp_recordSale() {
 
   emp_go('sales');
 }
+
+// ── LOYALTY: Show balance badge when credit customer is selected at POS ──────
+function emp_showLoyaltyBadge(customerName) {
+  const badge = document.getElementById('empLoyaltyBadge');
+  if (!badge) return;
+  if (!customerName) { badge.style.display = 'none'; return; }
+  const c = (APP.data?.creditCustomers||[]).find(x => x.name === customerName);
+  if (!c) { badge.style.display = 'none'; return; }
+  const pts = c.loyaltyPoints || 0;
+  const redeemRate = APP.data?.loyaltyRedeemRate || 50;
+  const val = Math.floor(pts / 100) * redeemRate;
+  const earnRate = APP.data?.loyaltyEarnRate || 1;
+  document.getElementById('empLoyaltyPts').textContent = pts.toLocaleString('en-IN');
+  document.getElementById('empLoyaltyVal').textContent = '₹' + val.toFixed(0);
+  document.getElementById('empLoyaltyEarn').textContent = 'Earns ' + earnRate + ' pt per ₹100 spent';
+  badge.style.display = 'flex';
+}
+window.emp_showLoyaltyBadge = emp_showLoyaltyBadge;
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ── VOICE ENTRY — Optional, degrades gracefully if browser lacks Speech API ──
+// ══════════════════════════════════════════════════════════════════════════════
+// Supported commands (case-insensitive):
+//   "petrol 500 rupees"   → fuel=petrol, amount=500
+//   "diesel 20 litres"    → fuel=diesel, liters=20
+//   "premium 30 liters"   → fuel=premium_petrol, liters=30
+//   "cash petrol 400"     → mode=cash, fuel=petrol, amount=400
+//   "upi diesel 15 litres"
+// After parsing, fields are filled; user reviews and taps 💾 Record Sale.
+
+(function initVoiceEntry() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) return; // Browser doesn't support — button stays hidden
+  // Show the voice button once we confirm support
+  document.addEventListener('DOMContentLoaded', () => {
+    const w = document.getElementById('empVoiceWrap');
+    if (w) w.style.display = 'block';
+  });
+  // Also expose for renderPage re-renders
+  window._voiceSupported = true;
+})();
+
+function emp_initVoiceButton() {
+  if (!window._voiceSupported) return;
+  const w = document.getElementById('empVoiceWrap');
+  if (w) w.style.display = 'block';
+}
+window.emp_initVoiceButton = emp_initVoiceButton;
+
+let _voiceRecognizer = null;
+let _voiceActive     = false;
+
+function emp_voiceEntry() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) {
+    toast('Voice entry not supported in this browser. Try Chrome or Edge.', 'error');
+    return;
+  }
+
+  if (_voiceActive && _voiceRecognizer) {
+    _voiceRecognizer.stop();
+    return;
+  }
+
+  const btn   = document.getElementById('empVoiceBtn');
+  const label = document.getElementById('empVoiceBtnLabel');
+  const status = document.getElementById('empVoiceStatus');
+
+  _voiceRecognizer = new SR();
+  _voiceRecognizer.lang = 'en-IN';
+  _voiceRecognizer.interimResults = false;
+  _voiceRecognizer.maxAlternatives = 3;
+
+  _voiceRecognizer.onstart = () => {
+    _voiceActive = true;
+    if (btn)    btn.style.borderColor = 'rgba(239,68,68,0.6)';
+    if (btn)    btn.style.color       = 'var(--red)';
+    if (label)  label.textContent     = 'Listening… (tap to stop)';
+    if (status) status.textContent    = '🎙️ Speak now…';
+  };
+
+  _voiceRecognizer.onresult = (event) => {
+    // Try all alternatives until one parses
+    let parsed = null;
+    for (let i = 0; i < event.results[0].length; i++) {
+      const transcript = event.results[0][i].transcript.toLowerCase().trim();
+      if (status) status.textContent = '💬 Heard: "' + transcript + '"';
+      parsed = emp_parseVoiceCommand(transcript);
+      if (parsed) break;
+    }
+    if (parsed) {
+      emp_applyVoiceParsed(parsed);
+    } else {
+      const raw = event.results[0][0].transcript;
+      if (status) status.textContent = '❓ Could not parse: "' + raw + '" — try "petrol 500 rupees"';
+      toast('Could not parse: "' + raw + '" — try "petrol 500 rupees"', 'warning');
+    }
+  };
+
+  _voiceRecognizer.onerror = (e) => {
+    const msgs = { 'no-speech':'No speech detected — try again.', 'network':'Network error — check connection.', 'not-allowed':'Microphone permission denied.' };
+    if (status) status.textContent = msgs[e.error] || ('Error: ' + e.error);
+    emp_voiceReset();
+  };
+
+  _voiceRecognizer.onend = () => {
+    emp_voiceReset();
+  };
+
+  _voiceRecognizer.start();
+}
+window.emp_voiceEntry = emp_voiceEntry;
+
+function emp_voiceReset() {
+  _voiceActive     = false;
+  _voiceRecognizer = null;
+  const btn    = document.getElementById('empVoiceBtn');
+  const label  = document.getElementById('empVoiceBtnLabel');
+  if (btn)   { btn.style.borderColor = ''; btn.style.color = ''; }
+  if (label) label.textContent = 'Voice Entry';
+}
+
+function emp_parseVoiceCommand(text) {
+  // Normalise spoken numbers: "five hundred" → 500, "twenty" → 20
+  const numWords = {
+    zero:0,one:1,two:2,three:3,four:4,five:5,six:6,seven:7,eight:8,nine:9,
+    ten:10,eleven:11,twelve:12,thirteen:13,fourteen:14,fifteen:15,
+    sixteen:16,seventeen:17,eighteen:18,nineteen:19,twenty:20,
+    thirty:30,forty:40,fifty:50,sixty:60,seventy:70,eighty:80,ninety:90,
+    hundred:100,thousand:1000
+  };
+  let normalized = text;
+  Object.entries(numWords).forEach(([w, v]) => {
+    normalized = normalized.replace(new RegExp('\b' + w + '\b', 'g'), ' ' + v + ' ');
+  });
+  // Collapse "5 100" → 500, "2 1000" → 2000 patterns
+  normalized = normalized.replace(/(\d+)\s+100/g, (m,a) => parseInt(a)*100);
+  normalized = normalized.replace(/(\d+)\s+1000/g, (m,a) => parseInt(a)*1000);
+  normalized = normalized.replace(/\s+/g, ' ').trim();
+
+  const result = { fuel: null, amount: null, liters: null, mode: null };
+
+  // Payment mode
+  if (/cash/.test(normalized))   result.mode = 'cash';
+  if (/upi|gpay|paytm|phone\s*pe/.test(normalized)) result.mode = 'upi';
+  if (/card|swipe/.test(normalized))  result.mode = 'card';
+  if (/credit/.test(normalized)) result.mode = 'credit';
+
+  // Fuel type
+  if (/petrol|pms/.test(normalized))               result.fuel = 'petrol';
+  if (/diesel|hsd/.test(normalized))                result.fuel = 'diesel';
+  if (/premium|speed|power/.test(normalized))   result.fuel = 'premium_petrol';
+
+  // Amount (rupees)
+  const amtMatch = normalized.match(/(\d+(?:\.\d+)?)\s*(?:rupee|rs|rupe|₹|inr)?s?(?!\s*li)/i);
+  if (amtMatch) result.amount = parseFloat(amtMatch[1]);
+
+  // Litres
+  const litMatch = normalized.match(/(\d+(?:\.\d+)?)\s*(?:litr|liter|litre|lit|l)/i);
+  if (litMatch) result.liters = parseFloat(litMatch[1]);
+
+  // Must have at least fuel type and one of amount/liters
+  if (!result.fuel) return null;
+  if (!result.amount && !result.liters) return null;
+  return result;
+}
+
+function emp_applyVoiceParsed(p) {
+  const status = document.getElementById('empVoiceStatus');
+
+  // Set fuel type
+  if (p.fuel) {
+    // Click the matching fuel button
+    document.querySelectorAll('[data-fuelbtn]').forEach(btn => {
+      if (btn.dataset.fuelbtn === p.fuel) btn.click();
+    });
+    // Fallback: set global
+    if (typeof empSaleFuel !== 'undefined') empSaleFuel = p.fuel;
+  }
+
+  // Set payment mode
+  if (p.mode) {
+    document.querySelectorAll('[data-paybtn]').forEach(btn => {
+      if (btn.dataset.paybtn === p.mode) btn.click();
+    });
+  }
+
+  // Set amount or litres
+  const amtEl   = document.getElementById('empSaleAmt');
+  const litEl   = document.getElementById('empSaleLiters');
+
+  if (p.liters && litEl) {
+    litEl.value = p.liters;
+    litEl.dispatchEvent(new Event('input'));
+    if (amtEl) { amtEl.value = ''; amtEl.dataset.manualAmt = ''; }
+  } else if (p.amount && amtEl) {
+    amtEl.value = p.amount;
+    amtEl.dataset.manualAmt = p.amount;
+    amtEl.dispatchEvent(new Event('input'));
+    if (litEl) litEl.value = '';
+  }
+
+  const fuelLabel = p.fuel ? p.fuel.replace('_',' ') : '';
+  const valLabel  = p.liters ? (p.liters + ' L') : (p.amount ? '₹' + p.amount : '');
+  const modeLabel = p.mode ? (' · ' + p.mode) : '';
+  if (status) status.textContent = '✅ Set: ' + fuelLabel + ' ' + valLabel + modeLabel + ' — verify and tap 💾';
+  toast('🎤 Voice: ' + fuelLabel + ' ' + valLabel + modeLabel, 'success');
+
+  // Focus Record Sale button
+  const recBtn = document.querySelector('.btn-accent.btn-block[onclick*="emp_recordSale"]');
+  if (recBtn) recBtn.focus();
+}
+window.emp_applyVoiceParsed = emp_applyVoiceParsed;
+
 
 function emp_recordDip() {
   const tankId = parseInt(document.getElementById('empDipTank')?.value);

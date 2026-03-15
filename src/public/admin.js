@@ -2236,6 +2236,7 @@ function renderAnalytics(D) {
     { id: 'monthly',   icon: '📅', label: 'Monthly Trends' },
     { id: 'fuelpnl',   icon: '⛽', label: 'Fuel P&L' },
     { id: 'topcust',   icon: '🏆', label: 'Top Customers' },
+    { id: 'pumps',     icon: '⛽', label: 'Pump Performance' },
   ];
 
   const tabBar = `<div style="display:flex;gap:6px;margin-bottom:20px;flex-wrap:wrap">
@@ -2511,6 +2512,8 @@ function renderAnalytics(D) {
     body = renderAnalyticsFuelPL(D);
   } else if (_analyticsTab === 'topcust') {
     body = renderAnalyticsTopCustomers(D);
+  } else if (_analyticsTab === 'pumps') {
+    body = renderAnalyticsPumpPerformance(D);
   }
 
   return `<div class="page-hdr"><h3>🔍 Analytics</h3></div>${tabBar}${body}`;
@@ -5333,6 +5336,153 @@ function renderAnalyticsTopCustomers(D) {
 }
 
 
+
+// ── PUMP PERFORMANCE ANALYTICS ───────────────────────────────────────────────
+function renderAnalyticsPumpPerformance(D) {
+  const vFrom = window._ppFrom || new Date(Date.now()-30*86400000).toISOString().slice(0,10);
+  const vTo   = window._ppTo   || (()=>{const _d=new Date();return _d.getFullYear()+'-'+String(_d.getMonth()+1).padStart(2,'0')+'-'+String(_d.getDate()).padStart(2,'0');})();
+
+  const sales = (D.sales||[]).filter(s => {
+    const d = (s.date||'').slice(0,10);
+    return d >= vFrom && d <= vTo;
+  });
+
+  // Aggregate per pump
+  const byPump = {};
+  sales.forEach(s => {
+    const pumpId = String(s.pump || s.pump_id || '—');
+    const pump   = (D.pumps||[]).find(p => String(p.id) === pumpId);
+    const label  = pump ? (pump.name || ('Pump ' + pumpId)) : ('Pump ' + pumpId);
+    if (!byPump[pumpId]) byPump[pumpId] = { label, txns:0, litres:0, revenue:0, cash:0, upi:0, card:0, credit:0, employees:{}, fuels:{}, hourBuckets: new Array(24).fill(0) };
+    const b = byPump[pumpId];
+    b.txns++;
+    b.litres  += s.liters  || s.quantity || 0;
+    b.revenue += s.amount  || 0;
+    b[s.mode || s.payment_method || 'cash'] = (b[s.mode || s.payment_method || 'cash'] || 0) + (s.amount || 0);
+    const emp = s.employee || s.employee_name || 'Unknown';
+    b.employees[emp] = (b.employees[emp] || 0) + (s.amount || 0);
+    const ft = s.fuelType || s.fuel_type || 'unknown';
+    b.fuels[ft] = (b.fuels[ft] || 0) + (s.liters || s.quantity || 0);
+    const hr = parseInt((s.time||'00:00').split(':')[0]) || 0;
+    b.hourBuckets[hr]++;
+  });
+
+  const pumps = Object.entries(byPump).sort((a,b) => b[1].revenue - a[1].revenue);
+  const maxRev = pumps[0]?.[1]?.revenue || 1;
+
+  if (pumps.length === 0) {
+    return `<div class="card card-pad" style="text-align:center;padding:40px;color:var(--text-3)">
+      <div style="font-size:36px;margin-bottom:10px">⛽</div>
+      <div class="fw-700">No pump data for this period</div>
+      <div style="font-size:12px;margin-top:6px">Sales with pump assignment will appear here</div>
+    </div>`;
+  }
+
+  // Stat cards — totals
+  const totalRev    = pumps.reduce((a,[,p])=>a+p.revenue,0);
+  const totalLitres = pumps.reduce((a,[,p])=>a+p.litres,0);
+  const totalTxns   = pumps.reduce((a,[,p])=>a+p.txns,0);
+  const avgPerTxn   = totalTxns > 0 ? totalRev / totalTxns : 0;
+
+  const statCards = `
+    <div class="g" style="grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px;margin-bottom:18px">
+      ${statCard('Total Revenue',    cur(totalRev),               'all pumps',       '💰')}
+      ${statCard('Total Volume',     totalLitres.toFixed(0)+' L', 'dispensed',       '⛽')}
+      ${statCard('Transactions',     totalTxns,                   'in period',       '🔢')}
+      ${statCard('Avg per Sale',     cur(avgPerTxn),              'revenue/txn',     '📊')}
+    </div>`;
+
+  // Per-pump cards
+  const pumpCards = pumps.map(([id, p], idx) => {
+    const revShare = ((p.revenue / maxRev) * 100).toFixed(0);
+    const topEmp   = Object.entries(p.employees).sort((a,b)=>b[1]-a[1])[0];
+    const topFt    = Object.entries(p.fuels).sort((a,b)=>b[1]-a[1])[0];
+    const fi       = topFt ? getFuel(topFt[0]) : null;
+    const peakHr   = p.hourBuckets.reduce((best,v,h) => v > p.hourBuckets[best] ? h : best, 0);
+    const isTop    = idx === 0;
+    const isSlow   = idx === pumps.length - 1 && pumps.length > 1;
+    const badge2   = isTop ? `<span style="font-size:10px;background:rgba(34,197,94,0.12);color:var(--green);border:1px solid rgba(34,197,94,0.3);padding:2px 8px;border-radius:99px;font-weight:700">🏆 Best</span>`
+                   : isSlow ? `<span style="font-size:10px;background:rgba(249,115,22,0.10);color:var(--orange);border:1px solid rgba(249,115,22,0.25);padding:2px 8px;border-radius:99px;font-weight:700">⚠ Slowest</span>`
+                   : '';
+    return `
+    <div class="card card-pad mb-14" style="border-left:3px solid ${isTop?'var(--green)':isSlow?'var(--orange)':'var(--border)'}">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <div>
+          <span class="fw-800" style="font-size:16px;color:var(--text-0)">${sanitize(p.label)}</span>
+          ${badge2}
+        </div>
+        <div class="mono fw-800" style="font-size:20px;color:var(--accent-light)">${cur(p.revenue)}</div>
+      </div>
+      <div class="g" style="grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px;font-size:11px">
+        <div class="dbox text-center" style="padding:8px">
+          <div class="mono fw-700" style="font-size:15px">${p.litres.toFixed(0)}<span style="font-size:10px;font-weight:400"> L</span></div>
+          <div style="color:var(--text-3)">Volume</div>
+        </div>
+        <div class="dbox text-center" style="padding:8px">
+          <div class="mono fw-700" style="font-size:15px">${p.txns}</div>
+          <div style="color:var(--text-3)">Txns</div>
+        </div>
+        <div class="dbox text-center" style="padding:8px">
+          <div class="mono fw-700" style="font-size:15px">${p.txns>0?cur(p.revenue/p.txns):'—'}</div>
+          <div style="color:var(--text-3)">Avg/Sale</div>
+        </div>
+      </div>
+      <div style="height:6px;background:var(--bg-3);border-radius:3px;margin-bottom:12px">
+        <div style="height:100%;width:${revShare}%;background:${isTop?'var(--green)':isSlow?'var(--orange)':'var(--accent-light)'};border-radius:3px;transition:width 0.4s"></div>
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;font-size:11px;color:var(--text-3)">
+        ${topEmp ? `<span>👤 Top: <span class="fw-700" style="color:var(--text-1)">${sanitize(topEmp[0])}</span></span>` : ''}
+        ${fi     ? `<span>${fi.icon||'⛽'} <span class="fw-700" style="color:${fi.color}">${fi.short}</span></span>` : ''}
+        <span>🕐 Peak: <span class="fw-700" style="color:var(--text-1)">${peakHr.toString().padStart(2,'0')}:00</span></span>
+      </div>
+      <div style="margin-top:10px;display:flex;gap:4px;align-items:flex-end;height:32px">
+        ${p.hourBuckets.map((v,h) => {
+          const maxH = Math.max(...p.hourBuckets, 1);
+          const ht   = Math.round((v/maxH)*28);
+          return `<div title="${h}:00 — ${v} sales" style="flex:1;min-width:2px;height:${ht||2}px;background:${h===peakHr?'var(--accent-light)':'var(--bg-3)'};border-radius:1px;align-self:flex-end"></div>`;
+        }).join('')}
+      </div>
+      <div style="font-size:9px;color:var(--text-3);margin-top:3px;text-align:center">Hourly sales pattern (0–23h)</div>
+    </div>`;
+  }).join('');
+
+  // Comparison table
+  const tableRows = pumps.map(([id, p]) => `
+    <tr>
+      <td class="fw-700">${sanitize(p.label)}</td>
+      <td class="r mono fw-700" style="color:var(--accent-light)">${cur(p.revenue)}</td>
+      <td class="r mono">${p.litres.toFixed(1)} L</td>
+      <td class="r">${p.txns}</td>
+      <td class="r mono" style="font-size:11px">${p.txns>0?cur(p.revenue/p.txns):'—'}</td>
+      <td class="r mono" style="font-size:11px">${cur(p.cash)}</td>
+      <td class="r mono" style="font-size:11px">${cur(p.upi)}</td>
+      <td class="r mono" style="font-size:11px">${cur(p.credit)}</td>
+    </tr>`).join('');
+
+  return `
+    <div class="card card-pad mb-14" style="padding:10px 14px">
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <span class="fw-700" style="font-size:12px">Date Range:</span>
+        <input type="date" class="form-input" style="width:auto;padding:5px 10px" value="${vFrom}" onchange="window._ppFrom=this.value;renderPage()" />
+        <span style="color:var(--text-3)">→</span>
+        <input type="date" class="form-input" style="width:auto;padding:5px 10px" value="${vTo}" onchange="window._ppTo=this.value;renderPage()" />
+      </div>
+    </div>
+    ${statCards}
+    <div class="g" style="grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:0">
+      ${pumpCards}
+    </div>
+    <div class="card mb-0">
+      <div class="card-head"><h4>⛽ Pump Comparison Table</h4></div>
+      <div class="card-body"><div class="tbl-wrap"><table>
+        <thead><tr><th>Pump</th><th class="r">Revenue</th><th class="r">Volume</th><th class="r">Txns</th><th class="r">Avg/Sale</th><th class="r">Cash</th><th class="r">UPI</th><th class="r">Credit</th></tr></thead>
+        <tbody>${tableRows}</tbody>
+      </table></div></div>
+    </div>`;
+}
+window.renderAnalyticsPumpPerformance = renderAnalyticsPumpPerformance;
+
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // ── LOYALTY POINTS SYSTEM ────────────────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -5974,6 +6124,8 @@ function renderPage() {
       el.innerHTML = '<div style="padding:40px;color:var(--text-2);text-align:center"><p>⚠️ Page "' + APP.page + '" returned empty content.</p><p style="font-size:11px;margin-top:8px">Data keys: ' + (D ? Object.keys(D).join(', ') : 'null') + '</p><p style="font-size:11px">Tanks: ' + (D?.tanks?.length || 0) + ', Sales: ' + (D?.sales?.length || 0) + '</p></div>';
     } else {
       el.innerHTML = html;
+      // Wire voice button visibility after employee portal re-render
+      if (APP.page === "employee" && typeof emp_initVoiceButton === "function") emp_initVoiceButton();
     }
   } catch (err) {
     console.error('Render error on page "' + APP.page + '":', err);
