@@ -724,12 +724,18 @@ async function mt_recordPaymentFromBilling(tenantId, stationName, defaultPrice) 
   var ppJson = JSON.stringify(PP);
   var html = '<div style="padding:4px 0">'    + '<div style="margin-bottom:12px"><label style="font-size:11px;font-weight:700;color:var(--text-3);text-transform:uppercase">Plan</label>'    + '<select id="rp2_plan" onchange="(function(sel){var pp='+ppJson+';var a=document.getElementById(\'rp2_amount\');if(a&&pp[sel.value])a.value=pp[sel.value];})(this)" style="width:100%;margin-top:4px;padding:8px;background:var(--bg-2);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px">'+planOpts+'</select></div>'    + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">'    + '<div><label style="font-size:11px;font-weight:700;color:var(--text-3);text-transform:uppercase">Amount (₹)</label><input id="rp2_amount" type="number" value="'+Math.round(initAmt)+'" style="width:100%;margin-top:4px;padding:8px;background:var(--bg-2);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px" /></div>'    + '<div><label style="font-size:11px;font-weight:700;color:var(--text-3);text-transform:uppercase">Mode</label><select id="rp2_mode" style="width:100%;margin-top:4px;padding:8px;background:var(--bg-2);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px"><option value="cash">Cash</option><option value="upi">UPI</option><option value="bank">Bank Transfer</option><option value="cheque">Cheque</option></select></div>'    + '</div>'    + '<div style="margin-bottom:12px"><label style="font-size:11px;font-weight:700;color:var(--text-3);text-transform:uppercase">Reference / UTR</label><input id="rp2_ref" placeholder="UPI ref, UTR, cheque no..." style="width:100%;margin-top:4px;padding:8px;background:var(--bg-2);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px" /></div>'    + '</div>';
 
-  const confirmed = await mt_confirmDialog('\ud83d\udcb0 Record Payment \u2014 ' + stationName, html, 'Record Payment');
-  if (!confirmed) return;
-  const plan   = document.getElementById('rp2_plan')?.value || 'monthly';
-  const amount = parseFloat(document.getElementById('rp2_amount')?.value) || 0;
-  const mode   = document.getElementById('rp2_mode')?.value || 'cash';
-  const ref    = document.getElementById('rp2_ref')?.value?.trim() || '';
+  const _dialogEl = await mt_confirmDialog('\ud83d\udcb0 Record Payment \u2014 ' + stationName, html, 'Record Payment');
+  if (!_dialogEl) return; // cancelled
+  // FIX: Read ALL values while the overlay is still attached to the DOM.
+  // The confirm button now passes the overlay element to the resolver so we
+  // can safely query its fields here. Previously .remove() ran synchronously
+  // before the await resumed — getElementById returned null — amount was 0.
+  const _q = function(id) { return _dialogEl && _dialogEl.querySelector ? _dialogEl.querySelector('#'+id) : document.getElementById(id); };
+  const plan   = _q('rp2_plan')?.value  || 'monthly';
+  const amount = parseFloat(_q('rp2_amount')?.value) || 0;
+  const mode   = _q('rp2_mode')?.value  || 'cash';
+  const ref    = (_q('rp2_ref')?.value  || '').trim();
+  if (_dialogEl && _dialogEl.remove) _dialogEl.remove(); // safe to remove now
   const months = {monthly:1,quarterly:3,halfyearly:6,yearly:12}[plan] || 1;
   if (!amount) { mt_toast('Enter a valid amount', 'error'); return; }
   try {
@@ -894,7 +900,7 @@ function mt_confirmDialog(title, bodyHtml, confirmLabel) {
       + bodyHtml
       + '<div style="display:flex;gap:8px;margin-top:16px">'
       + '<button onclick="this.closest(\'[data-mtconfirm]\').remove();window._mtConfirmResolve(false)" style="flex:1;background:var(--bg-2);border:1px solid var(--border);color:var(--text-2);border-radius:6px;padding:10px;font-size:13px;font-weight:700;cursor:pointer">Cancel</button>'
-      + '<button onclick="this.closest(\'[data-mtconfirm]\').remove();window._mtConfirmResolve(true)" style="flex:1;background:var(--accent);border:none;color:#000;border-radius:6px;padding:10px;font-size:13px;font-weight:700;cursor:pointer">'+confirmLabel+'</button>'
+      + '<button onclick="var _ov=this.closest(\'[data-mtconfirm]\');window._mtConfirmResolve(_ov||true)" style="flex:1;background:var(--accent);border:none;color:#000;border-radius:6px;padding:10px;font-size:13px;font-weight:700;cursor:pointer">'+confirmLabel+'</button>'
       + '</div></div>';
 
     window._mtConfirmResolve = resolve;
