@@ -243,9 +243,10 @@ function mt_showTenantForm(existing) {
           <div class="form-group"><label class="form-label">Station Name *</label>
           <div class="form-group"><label class="form-label">Station Name *</label>
             <input class="form-input" id="tName" placeholder="e.g. Sri Lakshmi Fuel Station" value="${existing?.name||''}" />
+          </div>
+          <div class="form-group"><label class="form-label">Location</label>
             <input class="form-input" id="tLocation" placeholder="e.g. Tumakuru, Karnataka" value="${existing?.location||''}" />
           </div>
-          <div class="form-group"><label class="form-label">Owner Name</label>
             <input class="form-input" id="tOwner" placeholder="e.g. Ramesh Kumar" value="${existing?.ownerName||''}" />
           </div>
           <div class="form-row">
@@ -277,38 +278,22 @@ function mt_showTenantForm(existing) {
               <input class="form-input mono" id="tTrialDays" type="number" value="30" min="1" max="365" placeholder="30" style="max-width:160px" />
             </div>
             <div class="form-group mb-0">
-              <label class="form-label">Plan Prices (₹) — set each independently</label>
-              <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:6px">
-                <div style="background:var(--bg-2);border:1px solid rgba(212,148,15,0.3);border-radius:8px;padding:10px">
-                  <div style="font-size:11px;font-weight:700;color:var(--text-0);margin-bottom:6px">📅 Monthly <span style="font-size:10px;color:var(--text-3);font-weight:400">/ 1 month</span></div>
-                  <div style="display:flex;align-items:center;gap:4px">
-                    <span style="font-size:13px;color:var(--text-3)">₹</span>
-                    <input class="form-input mono" id="tPrice_monthly" type="number" value="999" min="0" placeholder="999" style="font-size:15px;font-weight:700;padding:6px 8px" />
+              <label class="form-label">Plan Prices (₹) — tick to enable, set price</label>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:6px">
+                ${[['monthly','Monthly','1 month','999'],['quarterly','Quarterly','3 months','2800'],['halfyearly','Half-Yearly','6 months','5400'],['yearly','Yearly','12 months','10000']].map(([id,label,dur,def])=>`
+                <label style="display:flex;flex-direction:column;gap:6px;background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:8px;cursor:pointer">
+                  <div style="display:flex;align-items:center;gap:6px">
+                    <input type="checkbox" id="tCheck_\${id}" checked style="accent-color:var(--accent);width:14px;height:14px" />
+                    <span style="font-size:11px;font-weight:700;color:var(--text-0)">\${label}</span>
+                    <span style="font-size:10px;color:var(--text-3)">/ \${dur}</span>
                   </div>
-                </div>
-                <div style="background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:10px">
-                  <div style="font-size:11px;font-weight:700;color:var(--text-0);margin-bottom:6px">📅 Quarterly <span style="font-size:10px;color:var(--text-3);font-weight:400">/ 3 months</span></div>
                   <div style="display:flex;align-items:center;gap:4px">
-                    <span style="font-size:13px;color:var(--text-3)">₹</span>
-                    <input class="form-input mono" id="tPrice_quarterly" type="number" value="2800" min="0" placeholder="2800" style="font-size:15px;font-weight:700;padding:6px 8px" />
+                    <span style="font-size:12px;color:var(--text-3)">₹</span>
+                    <input class="form-input mono" id="tPrice_\${id}" type="number" value="\${def}" min="0" style="font-size:13px;font-weight:700;padding:4px 6px" />
                   </div>
-                </div>
-                <div style="background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:10px">
-                  <div style="font-size:11px;font-weight:700;color:var(--text-0);margin-bottom:6px">📅 Half-Yearly <span style="font-size:10px;color:var(--text-3);font-weight:400">/ 6 months</span></div>
-                  <div style="display:flex;align-items:center;gap:4px">
-                    <span style="font-size:13px;color:var(--text-3)">₹</span>
-                    <input class="form-input mono" id="tPrice_halfyearly" type="number" value="5400" min="0" placeholder="5400" style="font-size:15px;font-weight:700;padding:6px 8px" />
-                  </div>
-                </div>
-                <div style="background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:10px">
-                  <div style="font-size:11px;font-weight:700;color:var(--text-0);margin-bottom:6px">📅 Yearly <span style="font-size:10px;color:var(--text-3);font-weight:400">/ 12 months</span></div>
-                  <div style="display:flex;align-items:center;gap:4px">
-                    <span style="font-size:13px;color:var(--text-3)">₹</span>
-                    <input class="form-input mono" id="tPrice_yearly" type="number" value="10000" min="0" placeholder="10000" style="font-size:15px;font-weight:700;padding:6px 8px" />
-                  </div>
-                </div>
+                </label>`).join('')}
               </div>
-              <div style="font-size:10px;color:var(--text-3);margin-top:6px">Each plan price is independent — set what you want to charge for each duration.</div>
+              <div style="font-size:10px;color:var(--text-3);margin-top:5px">✓ Tick plans to offer. Untick to hide that plan from this station.</div>
             </div>
             <div class="form-group mt-10 mb-0"><label class="form-label">Owner WhatsApp (for reminders)</label>
               <input class="form-input" id="tOwnerWA" type="tel" inputmode="numeric" maxlength="10" oninput="this.value=this.value.replace(/[^0-9]/g,'')" placeholder="10-digit mobile number" />
