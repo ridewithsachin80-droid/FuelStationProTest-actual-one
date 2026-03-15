@@ -880,20 +880,30 @@ async function mt_ssDoSave(tenantId) {
 
 
 function mt_confirmDialog(title, bodyHtml, confirmLabel) {
-  return new Promise(resolve => {
-    const id = 'mtConfirm_' + Date.now();
-    const overlay = document.createElement('div');
+  return new Promise(function(resolve) {
+    // Remove any stale dialog left over from a previous call that never resolved
+    document.querySelectorAll('[data-mtconfirm]').forEach(function(el) { el.remove(); });
+
+    var overlay = document.createElement('div');
     overlay.setAttribute('data-mtconfirm', '1');
     overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:10020;display:flex;align-items:center;justify-content:center;padding:20px';
-    overlay.innerHTML = '<div style="background:var(--bg-1);border:1px solid var(--border);border-radius:12px;padding:20px;width:100%;max-width:420px;max-height:80vh;overflow-y:auto">'
+
+    // FIX: Removed duplicate overlay.innerHTML assignment (first line immediately overwrote itself).
     overlay.innerHTML = '<div style="background:var(--bg-1);border:1px solid var(--border);border-radius:12px;padding:20px;width:100%;max-width:420px;max-height:80vh;overflow-y:auto">'
       + '<div style="font-size:15px;font-weight:800;color:var(--text-0);margin-bottom:16px">'+title+'</div>'
       + bodyHtml
       + '<div style="display:flex;gap:8px;margin-top:16px">'
-      + '<button onclick="this.closest(\'[data-mtconfirm]\').remove();window._mtConfirmResolve(false)" style="flex:1;background:var(--bg-2);border:1px solid var(--border);color:var(--text-2);border-radius:6px;padding:10px;font-size:13px;font-weight:700;cursor:pointer">Cancel</button>'
-      + '<button onclick="this.closest(\'[data-mtconfirm]\').remove();window._mtConfirmResolve(true)" style="flex:1;background:var(--accent);border:none;color:#000;border-radius:6px;padding:10px;font-size:13px;font-weight:700;cursor:pointer">'+confirmLabel+'</button>'
+      + '<button onclick="this.closest('[data-mtconfirm]').remove();window._mtConfirmResolve(false)" style="flex:1;background:var(--bg-2);border:1px solid var(--border);color:var(--text-2);border-radius:6px;padding:10px;font-size:13px;font-weight:700;cursor:pointer">Cancel</button>'
+      + '<button onclick="this.closest('[data-mtconfirm]').remove();window._mtConfirmResolve(true)" style="flex:1;background:var(--accent);border:none;color:#000;border-radius:6px;padding:10px;font-size:13px;font-weight:700;cursor:pointer">'+confirmLabel+'</button>'
       + '</div></div>';
+
     window._mtConfirmResolve = resolve;
+
+    // FIX: Missing document.body.appendChild — the dialog was built in memory but never
+    // inserted into the DOM. mt_recordPaymentFromBilling awaits this Promise, which hung
+    // forever because the buttons were never visible. This is why pressing "Record Payment"
+    // did absolutely nothing — the modal existed, it just wasn't on the page.
+    document.body.appendChild(overlay);
   });
 }
 
