@@ -976,6 +976,16 @@ async function startServer() {
   // GET all subscriptions (super admin only)
   app.get('/api/subscriptions', authMiddleware(db), reqRole('super'), async (req, res) => {
     try {
+      // Auto-create trial subscription records for any tenant that doesn't have one
+      await pool.query(`
+        INSERT INTO subscriptions (tenant_id, plan, status, trial_days, trial_start, grace_days)
+        SELECT id, 'trial', 'trial', 30, NOW(), 3
+        FROM tenants
+        WHERE active = 1
+          AND id NOT IN (SELECT tenant_id FROM subscriptions)
+        ON CONFLICT (tenant_id) DO NOTHING
+      `);
+
       const rows = await pool.query(`
         SELECT s.*, t.name AS station_name, t.location, t.owner_name,
           COALESCE(p.total_paid, 0) AS total_paid,
