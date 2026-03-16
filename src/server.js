@@ -352,13 +352,21 @@ async function startServer() {
   
   app.post('/api/public/verify-pin/:tenantId', pinVerifyLimiter, async (req, res) => {
     try {
-      const { employeeId, pinHash } = req.body;
-      if (!employeeId || !pinHash) return res.status(400).json({ valid: false, error: 'Missing fields' });
-      
-      // FIX: Check for account lockout after repeated failed attempts
-      const lockoutKey = `lockout_${req.params.tenantId}_${employeeId}`;
-      const failedAttemptsKey = `failed_${req.params.tenantId}_${employeeId}`;
-      
+      // BUG-16 CRITICAL FIX:
+      // ROOT CAUSE: The client sends pinHash = SHA-256(pin) via utils.js hashPassword().
+      // The server stores pin_hash = bcrypt(pin) via schema.js hashPassword().
+      // The old code did: pin_hash === pinHash  →  bcrypt_string === sha256_string  → ALWAYS FALSE.
+      // This caused every employee PIN login to fail with "Incorrect PIN."
+      //
+      // FIX STRATEGY: Accept both `pin` (raw, preferred) and legacy `pinHash` (SHA-256).
+      // If raw `pin` is provided → use bcrypt verifyPassword() (correct, secure).
+      // If only `pinHash` (SHA-256) provided → fall back to direct compare for legacy cached hashes.
+      // Client updated below to send raw `pin` instead of pre-hashed value.
+      const { employeeId, pin, pinHash } = req.body;
+      if (!employeeId || (!pin && !pinHash)) {
+        return res.status(400).json({ valid: false, error: 'Missing fields' });
+      }
+
       // Check failed attempts in login_attempts table
       const recentAttempts = await pool.query(
         `SELECT COUNT(*) as count FROM login_attempts 
@@ -369,7 +377,6 @@ async function startServer() {
       
       const failedCount = parseInt(recentAttempts.rows[0]?.count || 0);
       
-      // FIX: Lock account after 5 failed attempts within 15 minutes
       if (failedCount >= 5) {
         return res.status(429).json({ 
           valid: false, 
@@ -379,12 +386,11 @@ async function startServer() {
       }
       
       const r = await pool.query(
-        'SELECT pin_hash FROM employees WHERE id = $1 AND tenant_id = $2 AND active = 1',
+        'SELECT id, pin_hash FROM employees WHERE id = $1 AND tenant_id = $2 AND active = 1',
         [String(employeeId), req.params.tenantId]
       );
       
       if (!r.rows[0]) {
-        // Log failed attempt
         await pool.query(
           'INSERT INTO login_attempts (tenant_id, username, ip_address, success, attempted_at) VALUES ($1, $2, $3, 0, NOW())',
           [req.params.tenantId, employeeId, req.ip]
@@ -392,7 +398,6 @@ async function startServer() {
         return res.json({ valid: false });
       }
       
-      // FIX #7: guard against null pin_hash — null === string is always false, but be explicit
       if (!r.rows[0].pin_hash) {
         await pool.query(
           'INSERT INTO login_attempts (tenant_id, username, ip_address, success, attempted_at) VALUES ($1, $2, $3, 0, NOW())',
@@ -400,8 +405,24 @@ async function startServer() {
         );
         return res.json({ valid: false });
       }
-      
-      const match = r.rows[0].pin_hash === pinHash;
+
+      // Verify: use bcrypt.compare if raw pin provided, else fall back to direct hash compare
+      const { verifyPassword: verifyPinPw } = require('./schema');
+      let match = false;
+      if (pin) {
+        // Preferred path: raw PIN → bcrypt.compare against stored bcrypt hash
+        match = await verifyPinPw(String(pin), r.rows[0].pin_hash);
+        // Also upgrade legacy SHA-256 hash to bcrypt on first successful login
+        if (match && !r.rows[0].pin_hash.startsWith('$2')) {
+          const { hashPassword: hashPinPw } = require('./schema');
+          const newHash = await hashPinPw(String(pin));
+          await pool.query('UPDATE employees SET pin_hash = $1 WHERE id = $2 AND tenant_id = $3',
+            [newHash, r.rows[0].id, req.params.tenantId]).catch(() => {});
+        }
+      } else {
+        // Legacy fallback: SHA-256 hash compare (offline-cached hashes)
+        match = r.rows[0].pin_hash === pinHash;
+      }
       
       // Log the attempt
       await pool.query(

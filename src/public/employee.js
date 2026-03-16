@@ -1520,9 +1520,11 @@ async function emp_doLogin() {
   }
   if (!emp) { toast('Select employee','error'); return; }
   if (!checkRateLimit('emp_' + id)) return;
+  // BUG-16 FIX: Was sending SHA-256(pin) as pinHash. Server stores bcrypt(pin).
+  // SHA-256 hash can never match a bcrypt hash — every login was failing.
+  // Now send the raw pin to verify-pin; server uses bcrypt.compare correctly.
+  // pinHash still computed for offline fallback (cached SHA-256 hashes only).
   const pinHash = await hashPassword(pin);
-  // IR-01 FIX: Verify PIN server-side (hashes no longer served publicly).
-  // Falls back to locally cached hash (stored in IDB during admin loadData) when offline.
   let pinValid = false;
   try {
     const tenant = (typeof mt_getActiveTenant === 'function') ? mt_getActiveTenant() : null;
@@ -1530,7 +1532,8 @@ async function emp_doLogin() {
       const verifyResp = await fetch('/api/public/verify-pin/' + encodeURIComponent(tenant.id), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ employeeId: id, pinHash }),
+        // Send raw `pin` so server can bcrypt.compare; also send pinHash for legacy fallback
+        body: JSON.stringify({ employeeId: id, pin, pinHash }),
       });
       if (verifyResp.ok) {
         const result = await verifyResp.json();
@@ -3057,20 +3060,21 @@ async function doEmpLogin() {
   var pinHash = await hashPassword(pin);
 
   // ── PIN verification: prefer local hash, fall back to server verify-pin ──
-  // emp.pinHash may be null when employee list was sourced from server (IR-01 security fix
-  // strips pinHash from public response). In that case verify against server instead.
-  if (emp.pinHash) {
-    // Local hash available (admin session cached it or fb_emp_pins has it)
+  // BUG-16 FIX: Was sending pinHash (SHA-256) to verify-pin endpoint.
+  // Server stores bcrypt hashes — SHA-256 can never match bcrypt. Now send raw pin.
+  if (emp.pinHash && emp.pinHash !== '__server__') {
+    // Local SHA-256 hash available (admin session cached it) — offline fast path
     if (pinHash !== emp.pinHash) { recordFailedLogin('emp_' + id); toast('Incorrect PIN.', 'error'); return; }
   } else {
-    // No local hash — verify online via server
+    // No local hash — verify online via server using raw pin + bcrypt.compare
     try {
       const tenant = (typeof mt_getActiveTenant === 'function') ? mt_getActiveTenant() : null;
       if (!tenant || !tenant.id) { toast('No station selected', 'error'); return; }
       const vResp = await fetch('/api/public/verify-pin/' + encodeURIComponent(tenant.id), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ employeeId: id, pinHash })
+        // Send both raw pin (for bcrypt) and pinHash (legacy SHA-256 fallback on server)
+        body: JSON.stringify({ employeeId: id, pin, pinHash })
       });
       const vResult = await vResp.json().catch(() => ({ valid: false }));
       if (!vResult.valid) { recordFailedLogin('emp_' + id); toast('Incorrect PIN.', 'error'); return; }
