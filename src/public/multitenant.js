@@ -1330,6 +1330,16 @@ async function mt_subSettingsFromBilling(tenantId, stationName) {
         + '<div style="font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase;margin-bottom:10px">Select Plan &amp; Set Price</div>'
         + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">'+planCards+'</div>'
         + trialOnlyCard
+        // ── Trial Only days input (shown when Trial Only is selected)
+        + '<div id="ss_trial_only_wrap" style="display:'+(activePlan==='trial'?'flex':'none')+';align-items:center;gap:8px;margin-top:8px;padding:10px 12px;background:var(--bg-0);border:1px solid var(--accent);border-radius:8px">'
+          + '<span style="font-size:11px;font-weight:700;color:var(--text-3);white-space:nowrap">Trial Days:</span>'
+          + '<button onclick="event.stopPropagation();mt_ssTrialAdj(-5)" style="width:32px;height:32px;border-radius:6px;border:1px solid var(--border);background:var(--bg-2);color:var(--text-1);font-size:13px;font-weight:700;cursor:pointer;flex-shrink:0">-5</button>'
+          + '<button onclick="event.stopPropagation();mt_ssTrialAdj(-1)" style="width:32px;height:32px;border-radius:6px;border:1px solid var(--border);background:var(--bg-2);color:var(--text-1);font-size:18px;font-weight:700;cursor:pointer;flex-shrink:0">−</button>'
+          + '<input id="ss_trial" type="number" value="'+trialDays+'" min="1" max="365" oninput="mt_ssUpdateEndDate()" style="flex:1;min-width:0;padding:6px;background:transparent;border:none;color:var(--accent-light);font-size:20px;font-weight:800;font-family:monospace;text-align:center;outline:none" />'
+          + '<button onclick="event.stopPropagation();mt_ssTrialAdj(1)" style="width:32px;height:32px;border-radius:6px;border:1px solid var(--border);background:var(--bg-2);color:var(--text-1);font-size:18px;font-weight:700;cursor:pointer;flex-shrink:0">+</button>'
+          + '<button onclick="event.stopPropagation();mt_ssTrialAdj(5)" style="width:32px;height:32px;border-radius:6px;border:1px solid var(--border);background:var(--bg-2);color:var(--text-1);font-size:13px;font-weight:700;cursor:pointer;flex-shrink:0">+5</button>'
+          + '<span style="font-size:10px;color:var(--text-3);white-space:nowrap">days</span>'
+        + '</div>'
         + '<input type="hidden" id="ss_plan" value="'+activePlan+'" />'
         // ── Trial period toggle (only shown for paid plans)
         + '<div id="ss_trial_section" style="display:'+(activePlan==='trial'?'none':'block')+'">'
@@ -1408,7 +1418,10 @@ function mt_ssSelectPlan(planId) {
   // Show/hide trial toggle section (hide for Trial Only plan)
   var trialSection = document.getElementById('ss_trial_section');
   if (trialSection) trialSection.style.display = planId === 'trial' ? 'none' : 'block';
-  // When switching to Trial Only, turn off the trial toggle
+  // Show/hide the Trial Only days input
+  var trialOnlyWrap = document.getElementById('ss_trial_only_wrap');
+  if (trialOnlyWrap) trialOnlyWrap.style.display = planId === 'trial' ? 'flex' : 'none';
+  // When switching to Trial Only, turn off the paid-plan trial toggle
   if (planId === 'trial') {
     var card = document.getElementById('ss_trial_card');
     if (card) card.setAttribute('data-trial-on', '0');
