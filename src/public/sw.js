@@ -10,7 +10,7 @@
  *   - Push notifications: Fully wired — requires VAPID subscription from server
  */
 
-const CACHE_VERSION = 'v20';
+const CACHE_VERSION = 'v21';
 const CACHE_NAME    = `fuelbunk-${CACHE_VERSION}`;
 const SHELL_CACHE   = `fuelbunk-shell-${CACHE_VERSION}`;
 const API_CACHE     = `fuelbunk-api-${CACHE_VERSION}`;
@@ -24,13 +24,13 @@ const API_CACHE     = `fuelbunk-api-${CACHE_VERSION}`;
 // handler below will cache it on first successful network fetch instead.
 const SHELL_ASSETS = [
   '/',
-  '/multitenant.js?v=20',
-  '/utils.js?v=14',
-  '/admin.js?v=18',
-  '/employee.js?v=16',
-  '/app.js?v=14',
-  '/api-client.js?v=14',
-  '/bridge.js?v=14',
+  '/multitenant.js?v=21',
+  '/utils.js?v=21',
+  '/admin.js?v=21',
+  '/employee.js?v=21',
+  '/app.js?v=21',
+  '/api-client.js?v=21',
+  '/bridge.js?v=21',
   '/autosave.js',
   '/manifest.json',
   '/icon-192.png',
@@ -154,28 +154,57 @@ self.addEventListener('fetch', event => {
     return; // all other API: network only
   }
 
-  // ── App shell (HTML + JS + assets): cache-first, network fallback ───────
+  // ── App shell fetch strategy ────────────────────────────────────────────
+  //
+  // STRATEGY CHANGE (FIX: users had to clear cache to see updates):
+  //
+  //   JS files + HTML  → NETWORK-FIRST, cache fallback
+  //     Always fetches fresh code from server when online.
+  //     Falls back to cache only when offline.
+  //     Means users ALWAYS see the latest deployed version without clearing cache.
+  //
+  //   Static assets (images, manifest) → CACHE-FIRST, background update
+  //     Icons and images never change between deploys — serve instantly from cache
+  //     and revalidate in background to keep cache warm.
+  //
   if (request.method === 'GET') {
-    event.respondWith(
-      caches.match(request).then(cached => {
-        const networkFetch = fetch(request.clone()).then(res => {
-          if (res.ok && (
-            path === '/' ||
-            path.endsWith('.js') ||
-            path.endsWith('.json') ||
-            path.endsWith('.png') ||
-            path.endsWith('.svg')
-          )) {
-            const clone = res.clone();
-            caches.open(SHELL_CACHE).then(c => c.put(request, clone));
-          }
-          return res;
-        }).catch(() => null);
+    const isJS   = path.endsWith('.js');
+    const isHTML = path === '/' || path.endsWith('.html');
+    const isStatic = path.endsWith('.png') || path.endsWith('.svg') ||
+                     path.endsWith('.json') || path.endsWith('.ico');
 
-        // Return cached immediately if available; update in background
-        return cached || networkFetch || caches.match('/');
-      })
-    );
+    if (isJS || isHTML) {
+      // Network-first: always try server first so users see new code immediately.
+      // Cache is only used when the network fails (offline mode).
+      event.respondWith(
+        fetch(request.clone())
+          .then(res => {
+            if (res.ok) {
+              const clone = res.clone();
+              caches.open(SHELL_CACHE).then(c => c.put(request, clone));
+            }
+            return res;
+          })
+          .catch(() =>
+            // Offline fallback — serve whatever we have cached
+            caches.match(request).then(cached => cached || caches.match('/'))
+          )
+      );
+    } else if (isStatic) {
+      // Cache-first for images/icons/manifest — they never change mid-deploy.
+      event.respondWith(
+        caches.match(request).then(cached => {
+          const networkFetch = fetch(request.clone()).then(res => {
+            if (res.ok) {
+              const clone = res.clone();
+              caches.open(SHELL_CACHE).then(c => c.put(request, clone));
+            }
+            return res;
+          }).catch(() => null);
+          return cached || networkFetch;
+        })
+      );
+    }
   }
 });
 
