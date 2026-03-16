@@ -500,7 +500,7 @@ async function startServer() {
       const py = now.getFullYear();
       const payrollKey = `payroll_${py}_${now.getMonth()+1}`;
 
-      const [empRows, shiftRows, rosterRow, attRow, lubeProdsRow, lubeSalesRow, advancesRow, payrollRow] = await Promise.all([
+      const [empRows, shiftRows, rosterRow, attRow, lubeProdsRow, lubeSalesRow, advancesRow, payrollRow, lubesTableRows] = await Promise.all([
         pool.query('SELECT id, name, role, shift, phone, data_json FROM employees WHERE tenant_id = $1 AND active = 1 ORDER BY name', [tid]),
         pool.query('SELECT * FROM shifts WHERE tenant_id = $1 ORDER BY start_time', [tid]),
         pool.query("SELECT value FROM settings WHERE key = 'shift_roster' AND tenant_id = $1", [tid]),
@@ -534,7 +534,32 @@ async function startServer() {
         })),
         roster:     parse(rosterRow, {}),
         attendance: parse(attRow, {}),
-        lubesProducts: parse(lubeProdsRow, []),
+        lubesProducts: (() => {
+          // Merge: settings key (user-edited products) takes priority over TABLE (seeded templates)
+          // Products in settings key are complete with user prices; TABLE products have price=0
+          const fromSettings = parse(lubeProdsRow, null);
+          if (fromSettings && fromSettings.length > 0) return fromSettings;
+          // No settings key yet — use seeded OMC template products from lubes_products TABLE
+          return (lubesTableRows?.rows || []).map(p => {
+            let extra = {}; try { extra = JSON.parse(p.data_json || '{}'); } catch {}
+            return {
+              id: p.id,
+              name: p.name || '',
+              brand: p.brand || '',
+              category: p.category || '',
+              unit: p.unit || 'Nos',
+              costPrice: parseFloat(p.cost_price) || 0,
+              sellingPrice: parseFloat(p.selling_price) || 0,
+              stock: parseFloat(p.stock) || 0,
+              minStock: parseFloat(p.min_stock) || 5,
+              hsn: p.hsn || '',
+              gstPct: parseFloat(p.gst_pct) || 18,
+              expiryDate: p.expiry_date || '',
+              active: p.active !== 0,
+              _fromTemplate: true,
+            };
+          });
+        })(),
         lubesSales:    parse(lubeSalesRow, []),
         advances:      parse(advancesRow, []),
         payroll:       parse(payrollRow, {}),

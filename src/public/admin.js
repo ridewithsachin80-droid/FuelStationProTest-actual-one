@@ -3808,7 +3808,7 @@ function renderLubes(D) {
   const totalProducts  = prods.filter(p=>p.active!==false).length;
   const totalStockVal  = prods.reduce((a,p) => a + (p.stock||0)*(p.costPrice||0), 0);
   const todaySalesAmt  = sales.filter(s=>s.date===today).reduce((a,s)=>a+s.amount,0);
-  const lowStockCount  = prods.filter(p=>p.active!==false && (p.stock||0) <= (p.minStock||5)).length;
+  const lowStockCount  = prods.filter(p=>p.active!==false && (p.minStock||0) > 0 && (p.stock||0) <= (p.minStock||5)).length;
   const expiredCount   = prods.filter(p=>p.active!==false && p.expiryDate && p.expiryDate < today).length;
 
   const statRow = `<div class="g g-auto-sm gap-12 mb-16">
@@ -3903,7 +3903,7 @@ function renderLubes(D) {
       </div>`;
 
   } else if (tab === 'lowstock') {
-    const lowProds = prods.filter(p => p.active!==false && ((p.stock||0)<=(p.minStock||5) || (p.expiryDate && p.expiryDate<=new Date(Date.now()+30*86400000).toISOString().slice(0,10))));
+    const lowProds = prods.filter(p => p.active!==false && (((p.minStock||0) > 0 && (p.stock||0)<=(p.minStock||5)) || (p.expiryDate && p.expiryDate<=new Date(Date.now()+30*86400000).toISOString().slice(0,10))));
     const lowCards = lowProds.map(p => {
       const isExpired = p.expiryDate && p.expiryDate < today;
       const isLow     = (p.stock||0) <= (p.minStock||5);
@@ -4031,6 +4031,17 @@ function saveLubeProduct(editId) {
   const gstPct     = parseInt(document.getElementById('lp_gst')?.value)||0;
   const expiryDate = document.getElementById('lp_expiry')?.value||'';
   if (!name) { toast('Product name is required','error'); return; }
+  if (sellingPrice < 0) { toast('Selling price cannot be negative','error'); return; }
+  if (costPrice < 0) { toast('Cost price cannot be negative','error'); return; }
+  if (sellingPrice > 0 && costPrice > sellingPrice) {
+    toast('Warning: Cost price is higher than selling price — selling at a loss','warning');
+    // Don't block — just warn
+  }
+  // Duplicate name check (only for new products)
+  if (!editId) {
+    const dup = (window._lubesProducts||[]).find(p => p.name.toLowerCase() === name.toLowerCase());
+    if (dup) { toast(`"${name}" already exists in catalogue`,'error'); return; }
+  }
   if (!window._lubesProducts) window._lubesProducts = [];
   if (editId) {
     const idx = window._lubesProducts.findIndex(p=>p.id===editId);
@@ -4049,12 +4060,24 @@ function confirmDeleteLube(id) {
   if (!window._lubesProducts) return;
   const p = window._lubesProducts.find(x=>x.id===id);
   if (!p) return;
-  if (!confirm(`Delete "${p.name}"? This cannot be undone.`)) return;
+  openModal('🗑 Delete Product',
+    `<div style="text-align:center;padding:16px 0">
+      <div style="font-size:40px;margin-bottom:12px">⚠️</div>
+      <div style="font-size:15px;font-weight:700;color:var(--text-0);margin-bottom:8px">${sanitize(p.name)}</div>
+      <div style="font-size:13px;color:var(--text-2)">Delete this product? All sales history will be preserved but the product will be removed from catalogue.</div>
+    </div>`,
+    `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+     <button class="btn btn-red" onclick="doDeleteLube(${id})">🗑 Delete</button>`
+  );
+}
+function doDeleteLube(id) {
   window._lubesProducts = window._lubesProducts.filter(x=>x.id!==id);
   lubes_save();
-  toast('Deleted', 'success');
+  closeModal();
+  toast('Product deleted', 'success');
   renderPage();
 }
+window.doDeleteLube = doDeleteLube;
 window.confirmDeleteLube = confirmDeleteLube;
 
 function openRestockModal(id) {
@@ -4138,7 +4161,8 @@ function saveLubeSale(productId) {
   if (isNaN(qty)||qty<=0) { toast('Enter valid quantity','error'); return; }
   if (isNaN(rate)||rate<=0) { toast('Enter valid rate','error'); return; }
   const p = (window._lubesProducts||[]).find(x=>x.id===productId);
-  if (!p) return;
+  if (!p) { toast('Product not found — please refresh','error'); return; }
+  if (p.active === false) { toast('This product is inactive','error'); return; }
   if (qty > p.stock) { toast(`Only ${p.stock} ${p.unit||''} in stock`,'error'); return; }
   const amount = +(qty * rate).toFixed(2);
   const now2 = new Date();
@@ -6517,6 +6541,11 @@ function calcSaleAmount() {
 }
 
 async function saveSale() {
+  // Double-submit guard: prevent duplicate sales from rapid tapping
+  if (window._saleInFlight) { toast('Processing… please wait', 'info'); return; }
+  window._saleInFlight = true;
+  const _releaseSale = () => { window._saleInFlight = false; };
+
   const fuelType = document.getElementById('saleFuel').value;
   const liters = parseFloat(document.getElementById('saleLiters').value);
   const amount = parseFloat(document.getElementById('saleAmount').value);
@@ -6526,7 +6555,7 @@ async function saveSale() {
   const customer = (document.getElementById('saleCustomer')?.value || '').trim();
 
   const errors = validateSaleInput(fuelType, liters, amount, vehicle, APP.data.prices, mode);
-  if (errors.length > 0) { toast(errors[0], 'error'); return; }
+  if (errors.length > 0) { _releaseSale(); toast(errors[0], 'error'); return; }
 
   const sale = {
     id: Date.now(), date: today(), time: now(), fuelType, liters, amount,
@@ -6563,6 +6592,7 @@ async function saveSale() {
         if (cust) { cust.outstanding = (cust.outstanding || 0) + amount; try { await db.put('creditCustomers', cust); } catch(e) {} }
       }
       auditLog('sale_add', { fuelType, liters, amount, vehicle, mode: 'upi', pump, upiTxnId: txnId });
+      _releaseSale();
       toast(`✅ Sale + UPI recorded: ${fmt(liters)}L — ${cur(amount)}`, 'success');
       renderPage();
     });
@@ -6599,6 +6629,7 @@ async function saveSale() {
   }
 
   auditLog('sale_add', { fuelType, liters, amount, vehicle, mode, pump, customer: customer || undefined });
+  _releaseSale();
   closeModal();
   toast(`Sale recorded: ${fmt(liters)}L ${getFuel(fuelType).short} — ${cur(amount)}`, 'success');
   renderPage();
