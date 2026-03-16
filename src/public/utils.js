@@ -15,13 +15,11 @@ const SNAPSHOT_STALE_MS  = 24 * 60 * 60 * 1000;  // 24 hours
 // ── FORMATTERS ───────────────────────────────────────────────
 const fmt = n => new Intl.NumberFormat('en-IN', { maximumFractionDigits: 2 }).format(n);
 const cur = n => '₹' + fmt(n);
-const today = () => {
-  const d = new Date();
-  const yr = d.getFullYear();
-  const mo = String(d.getMonth() + 1).padStart(2, '0');
-  const dy = String(d.getDate()).padStart(2, '0');
-  return yr + '-' + mo + '-' + dy;
-};
+// BUG-11 FIX: Was using new Date().getFullYear/Month/Date() which reads the BROWSER's local timezone.
+// If the device is set to UTC (common on some tablets), the date is wrong after 18:30 IST.
+// Use the same IST-pinned approach as the server's istDate() function.
+const today = () =>
+  new Date().toLocaleString('en-CA', { timeZone: 'Asia/Kolkata' }).slice(0, 10);
 const now = () => new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false });
 
 // ── SECURITY UTILITIES ──────────────────────────────────────
@@ -61,16 +59,20 @@ function getAppSecret() {
   return secret;
 }
 
-// Session signing
-function signData(payload) {
+// BUG-13 FIX: Was using djb2 (non-cryptographic, trivially reversible) for session signatures.
+// Replaced with SHA-256 via Web Crypto API. signData/verifyData are now async.
+// Callers (emp_saveSession, loadSession, emp_loadSession) have been updated accordingly.
+
+// Session signing — SHA-256 HMAC-style: hash(payload + secret)
+async function signData(payload) {
   const raw = JSON.stringify(payload);
-  const sig = hashSync(raw + getAppSecret());
+  const sig = await hashPassword(raw + getAppSecret());
   return JSON.stringify({ payload: raw, sig });
 }
-function verifyData(stored) {
+async function verifyData(stored) {
   try {
     const { payload, sig } = JSON.parse(stored);
-    const expected = hashSync(payload + getAppSecret());
+    const expected = await hashPassword(payload + getAppSecret());
     if (sig !== expected) return null;
     return JSON.parse(payload);
   } catch { return null; }

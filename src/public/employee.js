@@ -66,16 +66,12 @@ const EMP_PRICES_MAP = () => APP.data?.prices || { petrol: 102.86, diesel: 88.62
 const EMP_PRICES = new Proxy({}, { get: (_, k) => (APP.data?.prices || {})[k] || 0 });
 
 // ── DYNAMIC EMP_LIST — synced with IndexedDB employees ──────
-// Default hashes for initial seed employees (PIN = 1001-1007)
-const DEFAULT_EMP_PINS = {
-  1: 'fe675fe7aaee830b6fed09b64e034f84dcbdaeb429d9cccd4ebb90e15af8dd71',
-  2: 'b281bc2c616cb3c3a097215fdc9397ae87e6e06b156cc34e656be7a1a9ce8839',
-  3: '8c9a013ab70c0434313e3e881c310b9ff24aff1075255ceede3f2c239c231623',
-  4: '75992a5ac67ff644d3063976c2effd10bdd93fcc109798e3d5c1acf2e530d01a',
-  5: '7f861bcee185de001377d79e08af62e94b1e7718e2470e08520c917f8d953602',
-  6: '478c4ffb1cbcea37956a748e6c19d8eadd0a47e86f5e308d26cad39453b5d1ab',
-  7: '2c8b871e52d4e5f5db5ff84a82a45327e20df77edef961c4b6fa0e9c3d97ce5b',
-};
+// BUG-14 FIX: Removed hardcoded SHA-256 hashes for demo PINs 1001–1007.
+// These hashes were visible in the JS bundle and trivially reversible (known plaintext).
+// All employees must now have PINs set explicitly via the admin panel before they can log in.
+// If an employee has no PIN set, they will simply not appear in the login dropdown
+// (server WHERE pin_hash IS NOT NULL already filters them out).
+const DEFAULT_EMP_PINS = {};
 
 function loadEmpPins() {
   try { return JSON.parse(localStorage.getItem('fb_emp_pins') || '{}'); } catch { return {}; }
@@ -183,17 +179,18 @@ async function emp_loadHistoryFromServer() {
     }
   } catch(e) {}
 }
-function emp_loadSession() {
+async function emp_loadSession() {
   try {
     const raw = localStorage.getItem('fb_emp_session');
     if (!raw) return false;
-    const s = verifyData(raw);
+    // BUG-13 FIX: verifyData is now async (SHA-256 instead of djb2)
+    const s = await verifyData(raw);
     if (!s || !validateEmpSessionShape(s)) { localStorage.removeItem('fb_emp_session'); return false; }
     empState = { ...empState, ...s };
     return true;
   } catch { return false; }
 }
-function emp_saveSession() {
+async function emp_saveSession() {
   try {
     const data = {
       user: empState.user, active: empState.active,
@@ -202,7 +199,8 @@ function emp_saveSession() {
       sales: empState.sales, dipReadings: empState.dipReadings,
       pendingSales: empState.pendingSales || [], // FA-01: persist queue across page refreshes
     };
-    localStorage.setItem('fb_emp_session', signData(data));
+    // BUG-13 FIX: signData is now async (SHA-256 instead of djb2)
+    localStorage.setItem('fb_emp_session', await signData(data));
   } catch {}
 }
 function emp_clearSession() { try { localStorage.removeItem('fb_emp_session'); } catch {} }
@@ -254,10 +252,10 @@ if (typeof window !== 'undefined') {
   });
 }
 
-const emp_today = () => {
-  const d = new Date();
-  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
-};
+// BUG-11 FIX: Was constructing date from new Date() local parts — wrong after 18:30 IST on UTC devices.
+// Now uses the same IST-pinned conversion as server istDate() and the updated utils.js today().
+const emp_today = () =>
+  new Date().toLocaleString('en-CA', { timeZone: 'Asia/Kolkata' }).slice(0, 10);
 const emp_time = () => new Date().toLocaleTimeString('en-IN', { hour:'2-digit', minute:'2-digit', hour12: false });
 function emp_key(pumpId, nozzle) { return `${pumpId}_${nozzle}`; }
 function emp_hasPerm(permId) {
@@ -2116,10 +2114,13 @@ function emp_recordSale() {
   // Clear inputs
   const litersEl = document.getElementById('empSaleLiters');
   const amtEl    = document.getElementById('empSaleAmt');
-  const vehEl    = document.getElementById('empSaleVeh');
   if (litersEl) litersEl.value = '';
   if (amtEl)    { amtEl.value = ''; amtEl.dataset.manualAmt = ''; }
-  if (vehEl)    vehEl.value    = '';
+  // BUG-09 FIX: Vehicle input was refactored to 4 segmented fields — 'empSaleVeh' doesn't exist.
+  // Clear all four actual fields so previous plate doesn't persist on next sale.
+  ['veh_state','veh_dist','veh_series','veh_num'].forEach(id => {
+    const el = document.getElementById(id); if (el) el.value = '';
+  });
   const custEl = document.getElementById('empSaleCustomer');
   if (custEl) custEl.value = '';
 
@@ -2261,22 +2262,23 @@ function emp_parseVoiceCommand(text) {
     normalized = normalized.replace(new RegExp('\b' + w + '\b', 'g'), ' ' + v + ' ');
   });
   // Collapse "5 100" → 500, "2 1000" → 2000 patterns
-  normalized = normalized.replace(/(\d+)\s+100/g, (m,a) => parseInt(a)*100);
-  normalized = normalized.replace(/(\d+)\s+1000/g, (m,a) => parseInt(a)*1000);
+  normalized = // BUG-12 FIX: \b word-boundary was stored as backspace byte (0x08) instead of \b. Fixed.
+  normalized = normalized.replace(/(\d+)\s+100\b/g, (m,a) => parseInt(a)*100);
+  normalized = normalized = normalized.replace(/(\d+)\s+1000\b/g, (m,a) => parseInt(a)*1000);
   normalized = normalized.replace(/\s+/g, ' ').trim();
 
   const result = { fuel: null, amount: null, liters: null, mode: null };
 
   // Payment mode
-  if (/cash/.test(normalized))   result.mode = 'cash';
-  if (/upi|gpay|paytm|phone\s*pe/.test(normalized)) result.mode = 'upi';
-  if (/card|swipe/.test(normalized))  result.mode = 'card';
-  if (/credit/.test(normalized)) result.mode = 'credit';
+  if (/\bcash\b/.test(normalized))   result.mode = 'cash';
+  if (/\bupi\b|\bgpay\b|\bpaytm\b|\bphone\s*pe\b/.test(normalized)) result.mode = 'upi';
+  if (/\bcard\b|\bswipe\b/.test(normalized))  result.mode = 'card';
+  if (/\bcredit\b/.test(normalized)) result.mode = 'credit';
 
   // Fuel type
-  if (/petrol|pms/.test(normalized))               result.fuel = 'petrol';
-  if (/diesel|hsd/.test(normalized))                result.fuel = 'diesel';
-  if (/premium|speed|power/.test(normalized))   result.fuel = 'premium_petrol';
+  if (/\bpetrol\b|\bpms\b/.test(normalized))               result.fuel = 'petrol';
+  if (/\bdiesel\b|\bhsd\b/.test(normalized))                result.fuel = 'diesel';
+  if (/\bpremium\b|\bspeed\b|\bpower\b/.test(normalized))   result.fuel = 'premium_petrol';
 
   // Amount (rupees)
   // Amount — handles "Rs 500", "petrol Rs 500", "500 rupees", "500 rs", plain "500"
@@ -2704,14 +2706,18 @@ async function _emp_submit_inner() {
 
   // ── Save nozzle meter log for this shift ──────────────────────────────────
   try {
-    nozzleLog_recordFromShift(
-      empUser?.name || '—',
-      empState.shift || '—',
-      emp_myPumps(),
-      empState.openReadings,
-      empState.closeReadings,
-      empState.sales
-    );
+    // BUG-08 FIX: Guard against nozzleLog_recordFromShift being undefined (defined in admin.js,
+    // may not be accessible depending on load order). Silent fail is fine here.
+    if (typeof nozzleLog_recordFromShift === 'function') {
+      nozzleLog_recordFromShift(
+        empUser?.name || '—',
+        empState.shift || '—',
+        emp_myPumps(),
+        empState.openReadings,
+        empState.closeReadings,
+        empState.sales
+      );
+    }
   } catch(nmErr) { console.warn('[NozzleLog] Failed to save:', nmErr); }
   empState.active = false; emp_clearSession();
   auditLog('reading_submit', { employee: empUser?.name, liters: submitLiters, revenue: submitRev, salesCount: empState.sales.length, mismatches: mismatchEntries.length });
@@ -2794,11 +2800,12 @@ let ADMIN_USERS = (() => {
   ];
 })();
 
-function loadSession() {
+async function loadSession() {
   try {
     const raw = localStorage.getItem('fb_session');
     if (!raw) return false;
-    const s = verifyData(raw);
+    // BUG-13 FIX: verifyData is now async
+    const s = await verifyData(raw);
     if (!s || !validateSessionShape(s)) {
       localStorage.removeItem('fb_session');
       return false;
@@ -2817,13 +2824,14 @@ function loadSession() {
     return true;
   } catch { return false; }
 }
-function saveSession() {
+async function saveSession() {
   try {
     const data = {
       loggedIn: APP.loggedIn, role: APP.role, adminUser: APP.adminUser,
       timestamp: Date.now(), lastActive: Date.now()
     };
-    localStorage.setItem('fb_session', signData(data));
+    // BUG-13 FIX: signData is now async
+    localStorage.setItem('fb_session', await signData(data));
   } catch {}
 }
 function clearSession() {
@@ -3511,7 +3519,9 @@ function exportShiftCSV() {
 function shareSalesSummary() {
   const totalRev = APP.data.sales.reduce((a, s) => a + s.amount, 0);
   const totalL = APP.data.sales.reduce((a, s) => a + s.liters, 0);
-  const text = `📊 FuelBunk Pro — Daily Summary\n📅 ${today()}\n💰 Revenue: ${cur(totalRev)}\n⛽ Liters Sold: ${fmt(totalL)} L\n🧾 Transactions: ${APP.data.sales.length}\n\n— ' + (APP.data?.upiName || APP.tenant?.name || 'FuelBunk Pro') + `;
+  // BUG-06 FIX: was mixing template literal with string concat — station name was never interpolated
+  const stationName = APP.data?.upiName || APP.tenant?.name || 'FuelBunk Pro';
+  const text = `📊 FuelBunk Pro — Daily Summary\n📅 ${today()}\n💰 Revenue: ${cur(totalRev)}\n⛽ Liters Sold: ${fmt(totalL)} L\n🧾 Transactions: ${APP.data.sales.length}\n\n— ${stationName}`;
   shareData('Daily Sales Summary', text);
 }
 
@@ -4208,21 +4218,21 @@ function emp_renderLubes() {
     const isLow = !isOut && (p.stock||0) <= (p.minStock||5);
     const stockColor = isOut ? 'var(--red)' : isLow ? 'var(--orange)' : 'var(--green)';
     const stockLabel = isOut ? '❌ Out of Stock' : (isLow ? '⚠️ Low: ' : '✅ ') + p.stock + ' ' + sanitize(p.unit||'');
-    return `<div class="card" style="padding:14px;border:1px solid \${isOut?'rgba(239,68,68,0.3)':isLow?'rgba(249,115,22,0.3)':'var(--border)'};margin-bottom:10px">
+    return `<div class="card" style="padding:14px;border:1px solid ${isOut?'rgba(239,68,68,0.3)':isLow?'rgba(249,115,22,0.3)':'var(--border)'};margin-bottom:10px">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">
         <div>
-          <div class="fw-800" style="color:var(--text-0);font-size:14px">\${sanitize(p.name)}</div>
-          <div style="font-size:10px;color:var(--text-3);margin-top:2px">\${sanitize(p.brand||'')}\${p.category?' · '+sanitize(p.category):''}</div>
+          <div class="fw-800" style="color:var(--text-0);font-size:14px">${sanitize(p.name)}</div>
+          <div style="font-size:10px;color:var(--text-3);margin-top:2px">${sanitize(p.brand||'')}${p.category?' · '+sanitize(p.category):''}</div>
         </div>
         <div style="text-align:right;flex-shrink:0;margin-left:12px">
-          <div class="mono fw-800" style="color:var(--accent-light);font-size:18px">₹\${(p.sellingPrice||0).toFixed(2)}</div>
-          <div style="font-size:9px;color:var(--text-3)">per \${sanitize(p.unit||'unit')}</div>
+          <div class="mono fw-800" style="color:var(--accent-light);font-size:18px">₹${(p.sellingPrice||0).toFixed(2)}</div>
+          <div style="font-size:9px;color:var(--text-3)">per ${sanitize(p.unit||'unit')}</div>
         </div>
       </div>
       <div style="display:flex;justify-content:space-between;align-items:center">
-        <div style="font-size:11px;font-weight:700;color:\${stockColor}">\${stockLabel}</div>
-        <button \${isOut?'disabled':''} onclick="emp_openLubeSell(\${p.id})"
-          style="padding:9px 18px;background:\${isOut?'var(--bg-2)':'rgba(212,148,15,0.15)'};border:1px solid \${isOut?'var(--border)':'rgba(212,148,15,0.4)'};color:\${isOut?'var(--text-3)':'var(--accent-light)'};border-radius:8px;font-size:12px;font-weight:700;cursor:\${isOut?'not-allowed':'pointer'};transition:all 0.15s">
+        <div style="font-size:11px;font-weight:700;color:${stockColor}">${stockLabel}</div>
+        <button ${isOut?'disabled':''} onclick="emp_openLubeSell(${p.id})"
+          style="padding:9px 18px;background:${isOut?'var(--bg-2)':'rgba(212,148,15,0.15)'};border:1px solid ${isOut?'var(--border)':'rgba(212,148,15,0.4)'};color:${isOut?'var(--text-3)':'var(--accent-light)'};border-radius:8px;font-size:12px;font-weight:700;cursor:${isOut?'not-allowed':'pointer'};transition:all 0.15s">
           🛒 Sell
         </button>
       </div>
@@ -4235,20 +4245,20 @@ function emp_renderLubes() {
   const modeMap   = {cash:'💵',upi:'📱',card:'💳',credit:'🏢'};
   const salesRows = mySales.length > 0
     ? mySales.map(s=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border-light)">
-        <div><div class="fw-700" style="font-size:12px;color:var(--text-0)">\${sanitize(s.productName||'')}</div>
-        <div style="font-size:10px;color:var(--text-3)">\${s.qty} \${sanitize(s.unit||'')} · \${s.time||''} · \${modeMap[s.mode]||s.mode||''} \${sanitize(s.customer||'')}</div></div>
-        <div class="mono fw-800" style="color:var(--green)">₹\${(s.amount||0).toFixed(2)}</div>
+        <div><div class="fw-700" style="font-size:12px;color:var(--text-0)">${sanitize(s.productName||'')}</div>
+        <div style="font-size:10px;color:var(--text-3)">${s.qty} ${sanitize(s.unit||'')} · ${s.time||''} · ${modeMap[s.mode]||s.mode||''} ${sanitize(s.customer||'')}</div></div>
+        <div class="mono fw-800" style="color:var(--green)">₹${(s.amount||0).toFixed(2)}</div>
       </div>`).join('')
     : `<div style="text-align:center;padding:16px;color:var(--text-3);font-size:12px">No lubes sales recorded today</div>`;
 
   return `
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
       <div><h3 class="fw-800" style="color:var(--text-0);font-size:18px">🛢️ Lubes Sales</h3>
-      <p style="font-size:11px;color:var(--text-3);margin-top:2px">\${allProds.length} products · tap Sell to record</p></div>
+      <p style="font-size:11px;color:var(--text-3);margin-top:2px">${allProds.length} products · tap Sell to record</p></div>
     </div>
-    \${cards}
-    <div class="card"><div class="card-head"><h4>📋 My Sales Today</h4>\${myRevenue>0?'<span class=\"mono fw-800\" style=\"color:var(--green)\">₹'+myRevenue.toFixed(2)+'</span>':''}
-    </div><div class="card-body" style="padding:0 16px">\${salesRows}</div></div>
+    ${cards}
+    <div class="card"><div class="card-head"><h4>📋 My Sales Today</h4>${myRevenue>0?'<span class=\"mono fw-800\" style=\"color:var(--green)\">₹'+myRevenue.toFixed(2)+'</span>':''}
+    </div><div class="card-body" style="padding:0 16px">${salesRows}</div></div>
   `;
 }
 window.emp_renderLubes = emp_renderLubes;
@@ -4317,7 +4327,9 @@ async function emp_saveLubeSale(productId) {
   if (!window._lubesSales) window._lubesSales = [];
   window._lubesSales.unshift({
     id: Date.now(),
-    date: now2.toISOString().slice(0, 10),
+    // BUG-10 FIX: was using now2.toISOString().slice(0,10) which returns UTC date,
+    // giving wrong date for evening/night shifts (after 18:30 IST = next UTC day).
+    date: emp_today(),
     time: now2.toTimeString().slice(0, 5),
     productId, productName: p.name,
     qty, unit: p.unit || '',
@@ -4680,6 +4692,16 @@ function emp_renderStaffView() {
 }
 window.emp_renderStaffView = emp_renderStaffView;
 
+
+// BUG-07 FIX: emp_bioRegisterFromModal was exported but never defined — ReferenceError on admin panel bio register
+// This wrapper reads the currently selected employee from the login dropdown and triggers registration.
+async function emp_bioRegisterFromModal(empIdOverride) {
+  const id = empIdOverride
+    || parseInt(document.getElementById('empLoginName')?.value)
+    || parseInt(document.getElementById('empLoginName2')?.value);
+  if (!id) { toast('Select an employee first', 'error'); return false; }
+  return emp_bioRegister(id);
+}
 
 // ── EMPLOYEE window exports ──────────────────────────────
 window.emp_nozzleRecon = emp_nozzleRecon;

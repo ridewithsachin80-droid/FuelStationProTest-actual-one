@@ -166,7 +166,9 @@ async function startServer() {
 
   // ── Split JS bundle (Option A refactor) ─────────────────────────────────
   // Each file is versioned via query string (?v=) in index.html for cache busting
-  const JS_BUNDLE_FILES = ['multitenant.js', 'utils.js', 'admin.js', 'employee.js', 'app.js'];
+  // BUG-15 FIX: Added api-client.js, bridge.js, autosave.js — they were served only
+  // through express.static() without explicit cache headers and SW pre-cache support.
+  const JS_BUNDLE_FILES = ['multitenant.js', 'utils.js', 'admin.js', 'employee.js', 'app.js', 'api-client.js', 'bridge.js', 'autosave.js'];
   JS_BUNDLE_FILES.forEach(fname => {
     app.get('/' + fname, (req, res) => {
       res.setHeader('Content-Type', 'application/javascript');
@@ -509,6 +511,8 @@ async function startServer() {
         pool.query("SELECT value FROM settings WHERE key = 'lubes_sales' AND tenant_id = $1", [tid]),
         pool.query("SELECT value FROM settings WHERE key = 'advances_data' AND tenant_id = $1", [tid]),
         pool.query("SELECT value FROM settings WHERE key = $1 AND tenant_id = $2", [payrollKey, tid]),
+        // BUG-04 FIX: Added missing 9th query — lubesTableRows was always undefined
+        pool.query('SELECT * FROM lubes_products WHERE tenant_id = $1 AND active != 0 ORDER BY name', [tid]),
       ]);
 
       const employees = empRows.rows.map(e => {
@@ -693,7 +697,14 @@ async function startServer() {
       }
       
       // FIX: Validate fuel type
-      const validFuelTypes = ['Petrol', 'Diesel', 'CNG', 'petrol', 'diesel', 'cng'];
+      // BUG-01 FIX: Added premium_petrol, premium, speed, power variants that frontend sends
+      const validFuelTypes = [
+        'Petrol', 'petrol',
+        'Diesel', 'diesel',
+        'CNG', 'cng',
+        'premium_petrol', 'Premium_Petrol', 'premium', 'Premium',
+        'speed', 'Speed', 'power', 'Power',
+      ];
       if (!validFuelTypes.includes(sale.fuelType)) {
         client.release();
         return res.status(400).json({ error: 'Invalid fuel type' });
@@ -1795,7 +1806,7 @@ Pack decoding: "300x40ML-POU"=packQty:300,packSize:"40ml",packType:"Pouch",isCar
   // ── SMART ALERTS ────────────────────────────────────────────────────────
   
   // Get active alerts for tenant
-  app.get('/api/alerts/:tenantId', authMiddleware, async (req, res) => {
+  app.get('/api/alerts/:tenantId', authMiddleware(db), async (req, res) => {
     try {
       const alerts = await getActiveAlerts(req.params.tenantId);
       res.json(alerts);
@@ -1806,7 +1817,7 @@ Pack decoding: "300x40ML-POU"=packQty:300,packSize:"40ml",packType:"Pouch",isCar
   });
 
   // Acknowledge an alert
-  app.post('/api/alerts/:tenantId/acknowledge', authMiddleware, async (req, res) => {
+  app.post('/api/alerts/:tenantId/acknowledge', authMiddleware(db), async (req, res) => {
     try {
       const { alert_id } = req.body;
       const userId = req.session?.user_id || 0;
@@ -1819,7 +1830,7 @@ Pack decoding: "300x40ML-POU"=packQty:300,packSize:"40ml",packType:"Pouch",isCar
   });
 
   // Get alert statistics
-  app.get('/api/alerts/:tenantId/stats', authMiddleware, async (req, res) => {
+  app.get('/api/alerts/:tenantId/stats', authMiddleware(db), async (req, res) => {
     try {
       const days = parseInt(req.query.days) || 7;
       const stats = await getAlertStats(req.params.tenantId, days);
@@ -1833,7 +1844,7 @@ Pack decoding: "300x40ML-POU"=packQty:300,packSize:"40ml",packType:"Pouch",isCar
   // ── ONE-TAP SHIFT CLOSE ─────────────────────────────────────────────────
   
   // Auto-close shift with complete summary
-  app.post('/api/auto-close-shift/:tenantId', authMiddleware, async (req, res) => {
+  app.post('/api/auto-close-shift/:tenantId', authMiddleware(db), async (req, res) => {
     try {
       const { employee_id } = req.body;
       const result = await autoCloseShift(req.params.tenantId, employee_id);
@@ -1845,7 +1856,7 @@ Pack decoding: "300x40ML-POU"=packQty:300,packSize:"40ml",packType:"Pouch",isCar
   });
 
   // Get shift summary without closing (preview)
-  app.get('/api/shift-summary/:tenantId/:employeeId', authMiddleware, async (req, res) => {
+  app.get('/api/shift-summary/:tenantId/:employeeId', authMiddleware(db), async (req, res) => {
     try {
       const result = await getShiftSummary(req.params.tenantId, parseInt(req.params.employeeId));
       res.json(result);
@@ -1858,7 +1869,7 @@ Pack decoding: "300x40ML-POU"=packQty:300,packSize:"40ml",packType:"Pouch",isCar
   // ── WHATSAPP INTEGRATION ────────────────────────────────────────────────
   
   // Send daily report via WhatsApp
-  app.post('/api/whatsapp/send-daily-report/:tenantId', authMiddleware, async (req, res) => {
+  app.post('/api/whatsapp/send-daily-report/:tenantId', authMiddleware(db), async (req, res) => {
     try {
       if (!whatsapp.enabled) {
         return res.status(400).json({ error: 'WhatsApp not configured. Set WHATSAPP_API_KEY environment variable.' });
@@ -1867,19 +1878,21 @@ Pack decoding: "300x40ML-POU"=packQty:300,packSize:"40ml",packType:"Pouch",isCar
       const { phone } = req.body;
       const { pool } = require('./schema');
 
-      // Fetch today's report data
+      // BUG-03 FIX: Use correct column names: liters (not quantity), mode (not payment_method),
+      // date (not timestamp). Also use IST date string for filtering.
+      const istToday = new Date().toLocaleString('en-CA', { timeZone: 'Asia/Kolkata' }).slice(0, 10);
       const reportResult = await pool.query(`
         SELECT 
           COUNT(*) as transactions,
           SUM(amount) as total_amount,
-          SUM(quantity) as total_liters,
-          SUM(CASE WHEN payment_method = 'cash' THEN amount ELSE 0 END) as cash,
-          SUM(CASE WHEN payment_method = 'card' THEN amount ELSE 0 END) as card,
-          SUM(CASE WHEN payment_method = 'upi' THEN amount ELSE 0 END) as upi
+          SUM(liters) as total_liters,
+          SUM(CASE WHEN mode = 'cash' THEN amount ELSE 0 END) as cash,
+          SUM(CASE WHEN mode = 'card' THEN amount ELSE 0 END) as card,
+          SUM(CASE WHEN mode = 'upi' THEN amount ELSE 0 END) as upi
         FROM sales
         WHERE tenant_id = $1
-          AND DATE(timestamp AT TIME ZONE 'Asia/Kolkata') = CURRENT_DATE
-      `, [req.params.tenantId]);
+          AND date = $2
+      `, [req.params.tenantId, istToday]);
 
       const totals = reportResult.rows[0];
       const reportData = {
@@ -1903,7 +1916,7 @@ Pack decoding: "300x40ML-POU"=packQty:300,packSize:"40ml",packType:"Pouch",isCar
   });
 
   // Send shift summary via WhatsApp
-  app.post('/api/whatsapp/send-shift-summary/:tenantId', authMiddleware, async (req, res) => {
+  app.post('/api/whatsapp/send-shift-summary/:tenantId', authMiddleware(db), async (req, res) => {
     try {
       if (!whatsapp.enabled) {
         return res.status(400).json({ error: 'WhatsApp not configured' });
@@ -1919,7 +1932,7 @@ Pack decoding: "300x40ML-POU"=packQty:300,packSize:"40ml",packType:"Pouch",isCar
   });
 
   // Send alert via WhatsApp
-  app.post('/api/whatsapp/send-alert/:tenantId', authMiddleware, async (req, res) => {
+  app.post('/api/whatsapp/send-alert/:tenantId', authMiddleware(db), async (req, res) => {
     try {
       if (!whatsapp.enabled) {
         return res.status(400).json({ error: 'WhatsApp not configured' });
