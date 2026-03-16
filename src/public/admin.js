@@ -3796,8 +3796,38 @@ function calcLpCarton() {
   if (!on) { if (marginBox) marginBox.style.display='none'; if (stockCalc) stockCalc.style.display='none'; return; }
   const qpc      = parseFloat(document.getElementById('lp_qpc')?.value) || 0;
   const costCar  = parseFloat(document.getElementById('lp_cost')?.value) || 0;
-  const sellPc   = parseFloat(document.getElementById('lp_sell')?.value) || 0;
+  const mrpPack  = parseFloat(document.getElementById('lp_mrp')?.value) || 0;
   const cartons  = parseFloat(document.getElementById('lp_cartons')?.value) || 0;
+  const sellEl   = document.getElementById('lp_sell');
+
+  // AUTO-FILL SELLING PRICE FIX:
+  // If MRP and qty per carton are both filled, and selling price is 0/empty,
+  // auto-calculate selling price = MRP ÷ qty per carton.
+  // This mirrors how cost/pc is already shown below.
+  // User can still override manually — we only auto-fill when the field is blank/zero.
+  if (sellEl && qpc > 0 && mrpPack > 0) {
+    const currentSell = parseFloat(sellEl.value) || 0;
+    if (currentSell === 0 || sellEl.dataset.autoFilled === '1') {
+      const autoSell = Math.round((mrpPack / qpc) * 100) / 100;
+      sellEl.value = autoSell.toFixed(2);
+      sellEl.dataset.autoFilled = '1'; // mark as auto-filled so we keep updating until user edits
+    }
+  }
+  // Clear auto-fill flag if user manually changes the sell price away from computed value
+  if (sellEl) {
+    sellEl.addEventListener('input', function _sellManual() {
+      const qpcV = parseFloat(document.getElementById('lp_qpc')?.value) || 0;
+      const mrpV = parseFloat(document.getElementById('lp_mrp')?.value) || 0;
+      const auto = qpcV > 0 && mrpV > 0 ? Math.round((mrpV / qpcV) * 100) / 100 : 0;
+      if (parseFloat(this.value) !== auto) {
+        this.dataset.autoFilled = '0'; // user overrode — stop auto-filling
+      }
+      this.removeEventListener('input', _sellManual); // one-time listener cleanup
+    }, { once: true });
+  }
+
+  const sellPc = parseFloat(sellEl?.value) || 0;
+
   if (marginBox) {
     if (qpc > 0 && costCar > 0) {
       const costPc = costCar / qpc;
@@ -3806,6 +3836,7 @@ function calcLpCarton() {
       marginBox.style.display = 'block';
       const mt = document.getElementById('lp_margin_text');
       if (mt) mt.innerHTML = '₹' + costCar.toFixed(2) + ' ÷ ' + qpc + ' = <strong>₹' + costPc.toFixed(2) + ' cost/pc</strong>'
+        + (mrpPack > 0 && qpc > 0 ? ' &nbsp;·&nbsp; MRP/pc: <strong style="color:var(--text-1)">₹' + (mrpPack/qpc).toFixed(2) + '</strong>' : '')
         + (sellPc > 0 ? ' &nbsp;·&nbsp; Margin: <strong style="color:' + mCol + '">₹' + (sellPc - costPc).toFixed(2) + '/pc (' + Math.round(margin) + '%)</strong>' : '');
     } else { marginBox.style.display = 'none'; }
   }
@@ -4041,7 +4072,7 @@ function openAddLubeModal(prefill) {
     </div>
     <div class="g g-2 gap-12">
       <div class="form-group"><label class="form-label" id="lp_cost_label">${isCarton?'Cost Price (₹ per carton)':'Cost Price (₹)'}</label><input class="form-input" type="number" id="lp_cost" step="0.01" value="${pf.costPrice||''}" placeholder="0.00" oninput="calcLpCarton()" /></div>
-      <div class="form-group"><label class="form-label">MRP on pack (₹)</label><input class="form-input" type="number" id="lp_mrp" step="0.01" value="${pf.mrp||''}" placeholder="0.00" /></div>
+      <div class="form-group"><label class="form-label">MRP on pack (₹)</label><input class="form-input" type="number" id="lp_mrp" step="0.01" value="${pf.mrp||''}" placeholder="0.00" oninput="calcLpCarton()" /></div>
       <div class="form-group"><label class="form-label">Selling Price (₹ per piece/unit)</label><input class="form-input" type="number" id="lp_sell" step="0.01" value="${pf.sellingPrice||''}" placeholder="0.00" oninput="calcLpCarton()" /></div>
       <div class="form-group"><label class="form-label">GST %</label><select class="form-input" id="lp_gst">${gstOpts}</select></div>
     </div>
@@ -4057,7 +4088,13 @@ function openAddLubeModal(prefill) {
       <div class="form-group"><label class="form-label">Expiry Date (optional)</label><input class="form-input" type="date" id="lp_expiry" value="${pf.expiryDate||''}" /></div>
     </div>
   `, `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-accent" onclick="saveLubeProduct(null)">Add Product</button>`);
-  setTimeout(()=>{ if(isCarton) calcLpCarton(); }, 80);
+  setTimeout(()=>{
+    if (isCarton) {
+      const sellEl = document.getElementById('lp_sell');
+      if (sellEl && (parseFloat(sellEl.value) || 0) === 0) sellEl.dataset.autoFilled = '1';
+      calcLpCarton();
+    }
+  }, 80);
 }
 window.openAddLubeModal = openAddLubeModal;
 
@@ -4094,7 +4131,7 @@ function openEditLubeModal(id) {
     </div>
     <div class="g g-2 gap-12">
       <div class="form-group"><label class="form-label" id="lp_cost_label">${isCarton?'Cost Price (₹ per carton)':'Cost Price (₹)'}</label><input class="form-input" type="number" id="lp_cost" step="0.01" value="${p.costPrice||0}" oninput="calcLpCarton()" /></div>
-      <div class="form-group"><label class="form-label">MRP on pack (₹)</label><input class="form-input" type="number" id="lp_mrp" step="0.01" value="${p.mrp||0}" /></div>
+      <div class="form-group"><label class="form-label">MRP on pack (₹)</label><input class="form-input" type="number" id="lp_mrp" step="0.01" value="${p.mrp||0}" oninput="calcLpCarton()" /></div>
       <div class="form-group"><label class="form-label">Selling Price (₹ per piece/unit)</label><input class="form-input" type="number" id="lp_sell" step="0.01" value="${p.sellingPrice||0}" oninput="calcLpCarton()" /></div>
       <div class="form-group"><label class="form-label">GST %</label><select class="form-input" id="lp_gst">${gstOpts}</select></div>
     </div>
@@ -4110,7 +4147,14 @@ function openEditLubeModal(id) {
       <div class="form-group"><label class="form-label">Expiry Date</label><input class="form-input" type="date" id="lp_expiry" value="${p.expiryDate||''}" /></div>
     </div>
   `, `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-accent" onclick="saveLubeProduct(${id})">Save Changes</button>`);
-  setTimeout(()=>{ if(isCarton) calcLpCarton(); }, 80);
+  setTimeout(()=>{
+    if (isCarton) {
+      // If selling price is 0 or unset, mark as auto-fillable so calcLpCarton populates it from MRP
+      const sellEl = document.getElementById('lp_sell');
+      if (sellEl && (parseFloat(sellEl.value) || 0) === 0) sellEl.dataset.autoFilled = '1';
+      calcLpCarton();
+    }
+  }, 80);
 }
 window.openEditLubeModal = openEditLubeModal;
 
