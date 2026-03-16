@@ -3909,7 +3909,10 @@ function renderLubes(D) {
       const isExpired = p.expiryDate && p.expiryDate < today;
       const expiringSoon = p.expiryDate && !isExpired && p.expiryDate <= new Date(Date.now()+30*86400000).toISOString().slice(0,10);
       const stockBg  = isLow ? 'rgba(239,68,68,0.08)' : '';
-      const margin   = p.sellingPrice && p.costPrice ? (((p.sellingPrice-p.costPrice)/p.sellingPrice)*100).toFixed(0) : '—';
+      const effectiveCost = (p.isCartonPacked && p.qtyPerCarton > 0)
+        ? (p.costPrice / p.qtyPerCarton)
+        : p.costPrice;
+      const margin   = p.sellingPrice && effectiveCost ? (((p.sellingPrice - effectiveCost) / p.sellingPrice) * 100).toFixed(0) : '—';
       return `<tr style="background:${stockBg}">
         <td>
           <div class="fw-700" style="font-size:13px;color:var(--text-0)">${sanitize(p.name)}</div>
@@ -3925,9 +3928,13 @@ function renderLubes(D) {
           ${isLow?badge('LOW','badge-red'):''}
           ${isExpired?badge('EXPIRED','badge-red'):expiringSoon?badge('EXPIRING','badge-accent'):''}
         </td>
-        <td class="r mono">${cur(p.costPrice||0)}</td>
+        <td class="r mono" style="font-size:11px">
+          ${p.isCartonPacked && p.qtyPerCarton > 0
+            ? `<span style="color:var(--text-1)">${cur(effectiveCost)}</span><br><span style="color:var(--text-3);font-size:9px">÷${p.qtyPerCarton}/ctn</span>`
+            : cur(p.costPrice||0)}
+        </td>
         <td class="r mono fw-700" style="color:var(--accent-light)">${cur(p.sellingPrice||0)}</td>
-        <td class="r" style="font-size:11px;color:${parseInt(margin)>=20?'var(--green)':'var(--orange)'}">${margin}%</td>
+        <td class="r" style="font-size:11px;color:${margin==='—'?'var(--text-3)':parseInt(margin)>=20?'var(--green)':parseInt(margin)>=0?'var(--orange)':'var(--red)'}">${margin==='—'?margin:margin+'%'}</td>
         <td style="font-size:11px;color:var(--text-3)">${p.gstPct||0}%</td>
         <td style="white-space:nowrap">
           <button onclick="openLubeSaleModal(${p.id})" style="padding:4px 10px;background:rgba(212,148,15,0.1);border:1px solid rgba(212,148,15,0.3);color:var(--accent-light);border-radius:6px;cursor:pointer;font-size:11px;font-weight:700;margin-right:4px">🛒 Sell</button>
