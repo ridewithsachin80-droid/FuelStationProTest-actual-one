@@ -4595,19 +4595,35 @@ function renderBillScanResults(data) {
   const prods = data.products || [];
   if (!prods.length) { area.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-3)">No products found in this invoice</div>'; area.style.display='block'; return; }
 
-  // Store globally for confirmBillItem to access
+  // Store globally for confirmBillItem / bulk actions to access
   window._billScanData = data;
+  window._billScanSelected = new Set(prods.map((_,i)=>i)); // all selected by default
+  window._billScanDone = new Set();
 
-  const existingSkus = new Set((window._lubesProducts||[]).map(p=>p.sku).filter(Boolean));
   const existingNames = new Map((window._lubesProducts||[]).map(p=>[p.name.toLowerCase(), p]));
 
-  let html = `<div style="padding:8px 12px;background:rgba(55,138,221,0.08);border-radius:var(--radius-sm);font-size:12px;margin-bottom:12px">
+  // Build header row with Select All checkbox + Confirm All Selected button
+  let html = `
+  <div style="padding:8px 12px;background:rgba(55,138,221,0.08);border-radius:var(--radius-sm);font-size:12px;margin-bottom:12px">
     <strong style="color:var(--text-1)">${sanitize(data.supplier||'Supplier')}</strong>
     &nbsp;·&nbsp; Invoice ${sanitize(data.invoiceNo||'')}
     &nbsp;·&nbsp; ${sanitize(data.invoiceDate||'')}
     &nbsp;·&nbsp; Total: ₹${(data.totalAmount||0).toLocaleString('en-IN')}
   </div>
-  <div style="font-size:12px;color:var(--text-2);margin-bottom:8px;font-weight:700">${prods.length} product${prods.length!==1?'s':''} found:</div>`;
+
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:8px;flex-wrap:wrap">
+    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;font-weight:700;color:var(--text-1);user-select:none">
+      <input type="checkbox" id="bill_select_all" checked
+        style="width:16px;height:16px;cursor:pointer;accent-color:var(--accent)"
+        onchange="billScanToggleAll(this.checked)" />
+      <span id="bill_sel_count">${prods.length} of ${prods.length} selected</span>
+    </label>
+    <button id="bill_confirm_all_btn" class="btn btn-accent"
+      style="font-size:12px;padding:6px 14px;border-radius:7px"
+      onclick="confirmAllBillItems()">
+      ✅ Add All Selected (${prods.length})
+    </button>
+  </div>`;
 
   prods.forEach((prod, idx) => {
     const matchBySkuProd = prod.sku ? (window._lubesProducts||[]).find(p=>p.sku === prod.sku) : null;
@@ -4615,61 +4631,201 @@ function renderBillScanResults(data) {
     const match = matchBySkuProd || matchByName;
     const pieces = prod.isCartonPacked ? (prod.cartonsOrdered||0)*(prod.packQty||1) : (prod.cartonsOrdered||0);
     const packStr = prod.isCartonPacked && prod.packQty > 1 ? `${prod.packQty}×${prod.packSize} ${prod.packType}` : (prod.packSize || prod.packType || '');
+    const isNew = !match;
 
-    html += `<div id="billitem_${idx}" style="border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px;margin-bottom:8px">
-      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px">
-        <div style="flex:1">
+    html += `
+    <div id="billitem_${idx}"
+      style="border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px;margin-bottom:8px;transition:background 0.15s,opacity 0.2s;cursor:pointer"
+      onclick="billScanToggleItem(${idx}, event)">
+      <div style="display:flex;align-items:flex-start;gap:10px">
+
+        <!-- Checkbox -->
+        <div style="padding-top:1px;flex-shrink:0" onclick="event.stopPropagation()">
+          <input type="checkbox" class="bill_item_chk" data-idx="${idx}" checked
+            style="width:16px;height:16px;cursor:pointer;accent-color:var(--accent)"
+            onchange="billScanItemChecked(${idx}, this.checked)" />
+        </div>
+
+        <!-- Product info -->
+        <div style="flex:1;min-width:0">
           <div style="font-weight:700;font-size:13px">${sanitize(prod.name||'')}</div>
           <div style="font-size:10px;color:var(--text-3);margin-top:2px">
-            ${prod.sku?'SKU '+sanitize(prod.sku)+' · ':''}HSN ${sanitize(prod.hsn||'')} · GST ${prod.gstPct||18}% · ${prod.cartonsOrdered||0} ${prod.isCartonPacked?'CAR':'nos'} @ ₹${(prod.ratePerCarton||0).toLocaleString('en-IN',{maximumFractionDigits:2})}
-            ${packStr?'<br><span style="background:rgba(99,153,34,0.12);color:#27500A;padding:0 5px;border-radius:3px">'+sanitize(packStr)+'</span>':''}
+            ${prod.sku?'SKU '+sanitize(prod.sku)+' · ':''}HSN ${sanitize(prod.hsn||'')}
+            &nbsp;·&nbsp; GST ${prod.gstPct||18}%
+            &nbsp;·&nbsp; ${prod.cartonsOrdered||0} ${prod.isCartonPacked?'CAR':'nos'} @ ₹${(prod.ratePerCarton||0).toLocaleString('en-IN',{maximumFractionDigits:2})}
+            ${packStr?'<br><span style="background:rgba(99,153,34,0.12);color:#27500A;padding:0 5px;border-radius:3px;display:inline-block;margin-top:3px">'+sanitize(packStr)+'</span>':''}
           </div>
         </div>
+
+        <!-- Action badge + individual button -->
         <div style="text-align:right;flex-shrink:0">
-          ${match
-            ? `<div style="font-size:10px;color:#185FA5;margin-bottom:4px">↺ Update stock</div>
-               <button class="btn btn-accent btn-sm" style="font-size:11px" onclick="confirmBillItem(${idx})">+ ${pieces.toLocaleString('en-IN')} pcs</button>`
-            : `<div style="font-size:10px;color:#27500A;margin-bottom:4px">New product</div>
-               <button class="btn btn-accent btn-sm" style="font-size:11px;background:#22c55e" onclick="confirmBillItem(${idx})">Add →</button>`
-          }
+          <div id="billitem_badge_${idx}" style="font-size:10px;margin-bottom:4px;color:${isNew?'#27500A':'#185FA5'}">
+            ${isNew ? 'New product' : '↺ Update stock'}
+          </div>
+          <button id="billitem_btn_${idx}" class="btn btn-sm"
+            style="font-size:11px;padding:4px 10px;${isNew?'background:#22c55e;color:#fff;border:none':'background:rgba(55,138,221,0.1);border:1px solid rgba(55,138,221,0.3);color:#185FA5'}"
+            onclick="event.stopPropagation();confirmBillItem(${idx})">
+            ${isNew ? 'Add →' : `+ ${Math.round(pieces).toLocaleString('en-IN')} pcs`}
+          </button>
         </div>
+
       </div>
     </div>`;
   });
 
   area.innerHTML = html;
   area.style.display = 'block';
+
+  // Update footer Close→Close (scan done shows Close)
+  _billScanRefreshHeader();
 }
 window.renderBillScanResults = renderBillScanResults;
 
-async function confirmBillItem(idx) {
+// Toggle a single item row selected/deselected
+function billScanToggleItem(idx, event) {
+  // Don't fire if click was on the checkbox itself (handled by onchange)
+  if (event && event.target && (event.target.type === 'checkbox' || event.target.tagName === 'BUTTON')) return;
+  const chk = document.querySelector(`.bill_item_chk[data-idx="${idx}"]`);
+  if (!chk) return;
+  const nowChecked = !chk.checked;
+  chk.checked = nowChecked;
+  billScanItemChecked(idx, nowChecked);
+}
+window.billScanToggleItem = billScanToggleItem;
+
+// Called whenever an individual checkbox changes
+function billScanItemChecked(idx, checked) {
+  const done = window._billScanDone || new Set();
+  if (done.has(idx)) return; // already processed — can't uncheck
+  const sel = window._billScanSelected || new Set();
+  if (checked) sel.add(idx); else sel.delete(idx);
+  window._billScanSelected = sel;
+  // Dim row when deselected
+  const row = document.getElementById(`billitem_${idx}`);
+  if (row) row.style.opacity = checked ? '1' : '0.4';
+  _billScanRefreshHeader();
+}
+window.billScanItemChecked = billScanItemChecked;
+
+// Select All / Deselect All
+function billScanToggleAll(checked) {
   const data = window._billScanData;
   if (!data) return;
-  const prod = data.products[idx];
-  if (!prod) return;
+  const done = window._billScanDone || new Set();
+  const prods = data.products || [];
+  const sel = new Set();
+  prods.forEach((_, i) => {
+    if (done.has(i)) return; // skip already-done
+    const chk = document.querySelector(`.bill_item_chk[data-idx="${i}"]`);
+    if (chk) { chk.checked = checked; }
+    if (checked) sel.add(i);
+    const row = document.getElementById(`billitem_${i}`);
+    if (row) row.style.opacity = checked ? '1' : '0.4';
+  });
+  // Keep done items selected-looking
+  done.forEach(i => sel.add(i));
+  window._billScanSelected = sel;
+  _billScanRefreshHeader();
+}
+window.billScanToggleAll = billScanToggleAll;
 
-  const btn = document.querySelector(`#billitem_${idx} button`);
-  if (btn) { btn.disabled = true; btn.textContent = '✓ Done'; }
+// Refresh the header count label + button text + select-all indeterminate state
+function _billScanRefreshHeader() {
+  const data = window._billScanData;
+  if (!data) return;
+  const prods = data.products || [];
+  const total = prods.length;
+  const done = window._billScanDone || new Set();
+  const sel = window._billScanSelected || new Set();
+  // Pending = selected AND not yet done
+  const pending = [...sel].filter(i => !done.has(i));
+  const pendingCount = pending.length;
+  const doneCount = done.size;
 
-  const pieces = prod.isCartonPacked ? Math.round((prod.cartonsOrdered||0)*(prod.packQty||1)) : (prod.cartonsOrdered||0);
+  const countEl = document.getElementById('bill_sel_count');
+  const btnEl = document.getElementById('bill_confirm_all_btn');
+  const allChk = document.getElementById('bill_select_all');
 
-  // Check if product already exists by SKU or name
-  const existingBySku  = prod.sku ? (window._lubesProducts||[]).find(p=>p.sku===prod.sku) : null;
-  const existingByName = (window._lubesProducts||[]).find(p=>p.name.toLowerCase()===(prod.name||'').toLowerCase());
-  const existing = existingBySku || existingByName;
+  if (countEl) {
+    if (doneCount > 0 && doneCount === total) {
+      countEl.textContent = `✅ All ${total} products added!`;
+    } else if (doneCount > 0) {
+      countEl.textContent = `${pendingCount} selected · ${doneCount} done`;
+    } else {
+      countEl.textContent = `${pendingCount} of ${total} selected`;
+    }
+  }
 
-  if (existing) {
-    // Update stock + cost price on existing product
+  if (btnEl) {
+    if (pendingCount === 0 && doneCount === total) {
+      btnEl.style.display = 'none';
+    } else if (pendingCount === 0) {
+      btnEl.disabled = true;
+      btnEl.style.opacity = '0.4';
+      btnEl.textContent = 'Nothing selected';
+    } else {
+      btnEl.disabled = false;
+      btnEl.style.opacity = '1';
+      btnEl.textContent = `✅ Add All Selected (${pendingCount})`;
+    }
+  }
+
+  if (allChk) {
+    const availableCount = total - doneCount;
+    const selectedPending = pendingCount;
+    allChk.checked = availableCount > 0 && selectedPending === availableCount;
+    allChk.indeterminate = selectedPending > 0 && selectedPending < availableCount;
+  }
+}
+
+// ── Bulk confirm: process all selected items that aren't done yet ──────────
+async function confirmAllBillItems() {
+  const data = window._billScanData;
+  if (!data) return;
+  const prods = data.products || [];
+  const done = window._billScanDone || new Set();
+  const sel = window._billScanSelected || new Set();
+  const pending = [...sel].filter(i => !done.has(i));
+  if (!pending.length) { toast('Nothing selected', 'info'); return; }
+
+  // Separate: existing (stock update) vs new (add to catalogue)
+  const toUpdate = [];
+  const toAdd    = [];
+  pending.forEach(idx => {
+    const prod = prods[idx];
+    if (!prod) return;
+    const existingBySku  = prod.sku ? (window._lubesProducts||[]).find(p=>p.sku===prod.sku) : null;
+    const existingByName = (window._lubesProducts||[]).find(p=>p.name.toLowerCase()===(prod.name||'').toLowerCase());
+    if (existingBySku || existingByName) {
+      toUpdate.push({ idx, prod, existing: existingBySku || existingByName });
+    } else {
+      toAdd.push({ idx, prod });
+    }
+  });
+
+  // Disable the bulk button while processing
+  const btnEl = document.getElementById('bill_confirm_all_btn');
+  if (btnEl) { btnEl.disabled = true; btnEl.textContent = 'Adding…'; }
+
+  let savedCount = 0;
+
+  // 1. Process stock updates immediately
+  toUpdate.forEach(({ idx, prod, existing }) => {
+    const pieces = prod.isCartonPacked ? Math.round((prod.cartonsOrdered||0)*(prod.packQty||1)) : (prod.cartonsOrdered||0);
     existing.stock = (existing.stock||0) + pieces;
     if (prod.ratePerCarton > 0) existing.costPrice = prod.ratePerCarton;
     if (prod.mrp > 0) existing.mrp = prod.mrp;
     if (prod.sku && !existing.sku) existing.sku = prod.sku;
-    lubes_save();
-    toast(`✅ ${sanitize(prod.name)} — stock +${pieces.toLocaleString('en-IN')}`, 'success');
-  } else {
-    // Add new product — close scan modal and open add modal pre-filled
-    closeModal();
-    openAddLubeModal({
+    _billMarkDone(idx, `+${Math.round(pieces).toLocaleString('en-IN')} pcs`);
+    savedCount++;
+  });
+
+  // 2. Auto-add new products directly (no modal — uses scanned data)
+  toAdd.forEach(({ idx, prod }) => {
+    if (!window._lubesProducts) window._lubesProducts = [];
+    const pieces = prod.isCartonPacked ? Math.round((prod.cartonsOrdered||0)*(prod.packQty||1)) : (prod.cartonsOrdered||0);
+    const newProd = {
+      id:            Date.now() + idx,
       name:          prod.name || '',
       brand:         'Indian Oil / Servo',
       sku:           prod.sku || '',
@@ -4677,15 +4833,114 @@ async function confirmBillItem(idx) {
       gstPct:        prod.gstPct || 18,
       costPrice:     prod.ratePerCarton || 0,
       mrp:           prod.mrp || 0,
-      isCartonPacked: prod.isCartonPacked,
+      sellingPrice:  prod.mrp > 0 && prod.packQty > 0 ? Math.round((prod.mrp / prod.packQty) * 100) / 100 : 0,
+      stock:         pieces,
+      minStock:      5,
+      unit:          'Nos',
+      category:      'Engine Oil',
+      expiryDate:    '',
+      active:        true,
+      isCartonPacked: !!(prod.isCartonPacked),
       qtyPerCarton:  prod.packQty || 0,
       indSize:       prod.packSize || '',
       packType:      prod.packType || 'Pouch',
-      cartons:       prod.cartonsOrdered || 0,
-      category:      'Engine Oil',
-      unit:          'Nos',
+    };
+    window._lubesProducts.push(newProd);
+    _billMarkDone(idx, 'Added ✓');
+    savedCount++;
+  });
+
+  if (savedCount > 0) {
+    lubes_save();
+    const newCount = toAdd.length;
+    const updCount = toUpdate.length;
+    const parts = [];
+    if (updCount) parts.push(`${updCount} stock${updCount>1?'s':''} updated`);
+    if (newCount) parts.push(`${newCount} new product${newCount>1?'s':''} added`);
+    toast(`✅ ${parts.join(' · ')}`, 'success');
+    renderPage(); // refresh catalogue
+  }
+
+  _billScanRefreshHeader();
+
+  // If all done, show a note about new products needing selling price
+  const allDone = (window._billScanDone||new Set()).size === prods.length;
+  if (allDone && toAdd.length > 0) {
+    setTimeout(() => {
+      toast(`💡 ${toAdd.length} new product${toAdd.length>1?'s':''} added — set selling prices in Catalogue`, 'info');
+    }, 1200);
+  }
+}
+window.confirmAllBillItems = confirmAllBillItems;
+
+// Mark a row as done visually
+function _billMarkDone(idx, label) {
+  if (!window._billScanDone) window._billScanDone = new Set();
+  window._billScanDone.add(idx);
+  window._billScanSelected = window._billScanSelected || new Set();
+  window._billScanSelected.add(idx);
+
+  const row = document.getElementById(`billitem_${idx}`);
+  if (row) {
+    row.style.opacity = '1';
+    row.style.background = 'rgba(34,197,94,0.06)';
+    row.style.borderColor = 'rgba(34,197,94,0.3)';
+    row.style.cursor = 'default';
+  }
+  const chk = document.querySelector(`.bill_item_chk[data-idx="${idx}"]`);
+  if (chk) { chk.checked = true; chk.disabled = true; }
+  const btn = document.getElementById(`billitem_btn_${idx}`);
+  if (btn) { btn.disabled = true; btn.textContent = label || '✓'; btn.style.background='rgba(34,197,94,0.1)'; btn.style.color='var(--green)'; btn.style.border='1px solid rgba(34,197,94,0.3)'; }
+  const badge = document.getElementById(`billitem_badge_${idx}`);
+  if (badge) { badge.textContent = '✅ Done'; badge.style.color = 'var(--green)'; }
+}
+
+// Individual confirm (single item button) — unchanged behaviour + marks done
+async function confirmBillItem(idx) {
+  const data = window._billScanData;
+  if (!data) return;
+  const prod = data.products[idx];
+  if (!prod) return;
+
+  // Prevent double-tap
+  const btn = document.getElementById(`billitem_btn_${idx}`);
+  if (btn && btn.disabled) return;
+  if (btn) { btn.disabled = true; btn.textContent = '…'; }
+
+  const pieces = prod.isCartonPacked ? Math.round((prod.cartonsOrdered||0)*(prod.packQty||1)) : (prod.cartonsOrdered||0);
+  const existingBySku  = prod.sku ? (window._lubesProducts||[]).find(p=>p.sku===prod.sku) : null;
+  const existingByName = (window._lubesProducts||[]).find(p=>p.name.toLowerCase()===(prod.name||'').toLowerCase());
+  const existing = existingBySku || existingByName;
+
+  if (existing) {
+    existing.stock = (existing.stock||0) + pieces;
+    if (prod.ratePerCarton > 0) existing.costPrice = prod.ratePerCarton;
+    if (prod.mrp > 0) existing.mrp = prod.mrp;
+    if (prod.sku && !existing.sku) existing.sku = prod.sku;
+    lubes_save();
+    _billMarkDone(idx, `+${Math.round(pieces).toLocaleString('en-IN')} pcs`);
+    toast(`✅ ${sanitize(prod.name)} — stock +${Math.round(pieces).toLocaleString('en-IN')}`, 'success');
+    _billScanRefreshHeader();
+    renderPage();
+  } else {
+    // New product: close scan, open prefilled Add modal for user to review before saving
+    closeModal();
+    openAddLubeModal({
+      name:           prod.name || '',
+      brand:          'Indian Oil / Servo',
+      sku:            prod.sku || '',
+      hsn:            prod.hsn || '',
+      gstPct:         prod.gstPct || 18,
+      costPrice:      prod.ratePerCarton || 0,
+      mrp:            prod.mrp || 0,
+      isCartonPacked: prod.isCartonPacked,
+      qtyPerCarton:   prod.packQty || 0,
+      indSize:        prod.packSize || '',
+      packType:       prod.packType || 'Pouch',
+      cartons:        prod.cartonsOrdered || 0,
+      category:       'Engine Oil',
+      unit:           'Nos',
     });
-    return;
   }
 }
 window.confirmBillItem = confirmBillItem;
