@@ -376,7 +376,7 @@ async function mt_saveTenant(isEdit) {
   if (isEdit) {
     const idx = tenants.findIndex(t => t.id === id);
     if (idx === -1) { mt_toast('Station not found', 'error'); return; }
-    tenants[idx] = { ...tenants[idx], name, location, ownerName, phone, icon };
+    tenants[idx] = { ...tenants[idx], name, location, ownerName, phone, icon, omc };
     mt_saveTenants(tenants);
     mt_toast(name + ' updated', 'success');
     mt_showSelector();
@@ -384,7 +384,7 @@ async function mt_saveTenant(isEdit) {
     if (tenants.find(t => t.name.toLowerCase() === name.toLowerCase())) { mt_toast('A station with this name already exists', 'error'); return; }
     const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(adminPass));
     const adminPassHash = Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('');
-    const newTenant = { id, name, location, ownerName, phone, icon, color: colors[colorIdx][0], colorLight: colors[colorIdx][1], createdAt: new Date().toISOString(), active: true, adminUsers: [{ id: 1, name: ownerName || 'Owner', username: adminUser, passHash: adminPassHash, role: 'Owner' }] };
+    const newTenant = { id, name, location, ownerName, phone, icon, omc, color: colors[colorIdx][0], colorLight: colors[colorIdx][1], createdAt: new Date().toISOString(), active: true, adminUsers: [{ id: 1, name: ownerName || 'Owner', username: adminUser, passHash: adminPassHash, role: 'Owner' }] };
     tenants.push(newTenant);
     mt_saveTenants(tenants);
     mt_toast(name + ' created!', 'success');
