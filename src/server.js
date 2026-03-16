@@ -1023,6 +1023,50 @@ async function startServer() {
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
+
+  // ── AI Invoice Scanner ──────────────────────────────────────────────────────
+  const INVOICE_SCAN_PROMPT = `You are reading a tax invoice from an Indian fuel station lubricant supplier supplying SERVO/IOCL products.
+Extract ALL product line items and return ONLY valid JSON — no explanation, no markdown, no backticks.
+Structure: {"supplier":"","invoiceNo":"","invoiceDate":"DD-MM-YYYY","supplierGSTIN":"","totalAmount":0,"products":[{"name":"clean product name","sku":"","hsn":"","packQty":300,"packSize":"40ml","packType":"Pouch","isCartonPacked":true,"cartonsOrdered":5,"ratePerCarton":3226.27,"mrp":5400,"gstPct":18,"netTotal":0,"totalPieces":1500}]}
+Pack decoding: "300x40ML-POU"=packQty:300,packSize:"40ml",packType:"Pouch",isCartonPacked:true. "20X1L"=packQty:20,packSize:"1L",packType:"Bottle",isCartonPacked:true. "Clear Blue 10 LTR" with unit Nos=packQty:1,packSize:"10L",packType:"Can",isCartonPacked:false. Unit CAR=cartons(isCartonPacked:true). Unit Nos=individual(isCartonPacked:false). Return ONLY JSON.`;
+
+  app.post('/api/data/scan-invoice', authMiddleware(db), async (req, res) => {
+    const { imageData, mimeType, filename } = req.body;
+    if (!imageData) return res.status(400).json({ error: 'No image data provided' });
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not set on server' });
+    try {
+      const isPdf = (mimeType === 'application/pdf') || (filename||'').toLowerCase().endsWith('.pdf');
+      const contentBlock = isPdf
+        ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: imageData } }
+        : { type: 'image',    source: { type: 'base64', media_type: mimeType || 'image/jpeg', data: imageData } };
+
+      const apiResp = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-20250514',
+          max_tokens: 2000,
+          messages: [{ role: 'user', content: [ contentBlock, { type: 'text', text: INVOICE_SCAN_PROMPT } ] }],
+        }),
+      });
+      if (!apiResp.ok) {
+        const errBody = await apiResp.text();
+        return res.status(502).json({ error: 'Claude API error: ' + apiResp.status + ' ' + errBody.slice(0,200) });
+      }
+      const apiData = await apiResp.json();
+      const rawText = (apiData.content || []).filter(b=>b.type==='text').map(b=>b.text).join('');
+      const clean   = rawText.replace(/```json|```/g, '').trim();
+      let parsed;
+      try { parsed = JSON.parse(clean); }
+      catch(pe) { return res.status(422).json({ error: 'Could not parse AI response as JSON', raw: clean.slice(0, 500) }); }
+      res.json({ success: true, data: parsed });
+    } catch (e) {
+      console.error('[Bill Scan]', e.message);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // DELETE tenant — this is the critical route that was failing
   app.delete('/api/data/tenants/:id', authMiddleware(db), reqRole('super'), async (req, res) => {
     const client = await pool.connect();

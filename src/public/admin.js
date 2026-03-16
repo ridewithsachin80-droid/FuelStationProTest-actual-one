@@ -3775,6 +3775,54 @@ window.wa_sendTest = wa_sendTest;
 // ═══════════════════════════════════════════════════════════════════════════════
 // ── LUBES & PRODUCTS INVENTORY ────────────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════════════════
+
+// ── Lubes carton pack helpers ─────────────────────────────────────────────
+function toggleLpCarton() {
+  const on = document.getElementById('lp_carton_toggle')?.checked;
+  const wrap = document.getElementById('lp_carton_wrap');
+  const carGroup = document.getElementById('lp_cartons_group');
+  const stkGroup = document.getElementById('lp_stock_group');
+  const costLbl = document.getElementById('lp_cost_label');
+  if (wrap) wrap.style.display = on ? 'block' : 'none';
+  if (carGroup) carGroup.style.display = on ? '' : 'none';
+  if (stkGroup) stkGroup.style.display = on ? 'none' : '';
+  if (costLbl) costLbl.textContent = on ? 'Cost Price (₹ per carton)' : 'Cost Price (₹)';
+  calcLpCarton();
+}
+function calcLpCarton() {
+  const on = document.getElementById('lp_carton_toggle')?.checked;
+  const marginBox = document.getElementById('lp_margin_box');
+  const stockCalc = document.getElementById('lp_stock_calc');
+  if (!on) { if (marginBox) marginBox.style.display='none'; if (stockCalc) stockCalc.style.display='none'; return; }
+  const qpc      = parseFloat(document.getElementById('lp_qpc')?.value) || 0;
+  const costCar  = parseFloat(document.getElementById('lp_cost')?.value) || 0;
+  const sellPc   = parseFloat(document.getElementById('lp_sell')?.value) || 0;
+  const cartons  = parseFloat(document.getElementById('lp_cartons')?.value) || 0;
+  if (marginBox) {
+    if (qpc > 0 && costCar > 0) {
+      const costPc = costCar / qpc;
+      const margin = sellPc > 0 ? ((sellPc - costPc) / sellPc * 100) : 0;
+      const mCol   = margin >= 0 ? 'var(--green,#22c55e)' : 'var(--red,#ef4444)';
+      marginBox.style.display = 'block';
+      const mt = document.getElementById('lp_margin_text');
+      if (mt) mt.innerHTML = '₹' + costCar.toFixed(2) + ' ÷ ' + qpc + ' = <strong>₹' + costPc.toFixed(2) + ' cost/pc</strong>'
+        + (sellPc > 0 ? ' &nbsp;·&nbsp; Margin: <strong style="color:' + mCol + '">₹' + (sellPc - costPc).toFixed(2) + '/pc (' + Math.round(margin) + '%)</strong>' : '');
+    } else { marginBox.style.display = 'none'; }
+  }
+  if (stockCalc) {
+    if (cartons > 0 && qpc > 0) {
+      const pieces = Math.round(cartons * qpc);
+      const sz = (document.getElementById('lp_indsize')?.value || '').trim();
+      const pt = document.getElementById('lp_packtype')?.value || 'pieces';
+      stockCalc.style.display = 'block';
+      const st = document.getElementById('lp_stock_text');
+      if (st) st.innerHTML = cartons + ' cartons × ' + qpc + ' = <strong>' + pieces.toLocaleString('en-IN') + ' ' + pt.toLowerCase() + 's</strong>' + (sz ? ' (' + sz + ' each)' : '');
+    } else { stockCalc.style.display = 'none'; }
+  }
+}
+window.toggleLpCarton = toggleLpCarton;
+window.calcLpCarton   = calcLpCarton;
+
 // Data: window._lubesProducts = [{ id, name, brand, category, hsn, gstPct, unit, sellingPrice, costPrice, stock, minStock, expiryDate, active }]
 //       window._lubesSales    = [{ id, date, time, productId, productName, qty, unit, rate, amount, customer, mode, employee }]
 
@@ -3834,7 +3882,11 @@ function renderLubes(D) {
       return `<tr style="background:${stockBg}">
         <td>
           <div class="fw-700" style="font-size:13px;color:var(--text-0)">${sanitize(p.name)}</div>
-          <div style="font-size:10px;color:var(--text-3)">${sanitize(p.brand||'')} ${p.hsn?'· HSN: '+p.hsn:''}</div>
+          <div style="font-size:10px;color:var(--text-3)">
+            ${sanitize(p.brand||'')} ${p.hsn?'· HSN: '+p.hsn:''}
+            ${p.sku?`<span style="background:rgba(55,138,221,0.12);color:#185FA5;padding:0 5px;border-radius:3px;margin-left:3px">SKU ${sanitize(p.sku)}</span>`:''}
+            ${p.isCartonPacked&&p.qtyPerCarton>0?`<span style="background:rgba(99,153,34,0.12);color:#27500A;padding:0 5px;border-radius:3px;margin-left:3px">${p.qtyPerCarton}×${sanitize(p.indSize||'')} ${sanitize(p.packType||'')}</span>`:''}
+          </div>
         </td>
         <td style="font-size:11px">${sanitize(p.category||'')}</td>
         <td class="r mono fw-700" style="color:${isLow?'var(--red)':isExpired?'var(--red)':'var(--text-1)'}">
@@ -3948,40 +4000,64 @@ function renderLubes(D) {
 
   return `<div class="page-hdr">
     <h3>🛢️ Lubes & Products</h3>
-    <button class="btn btn-accent" onclick="openAddLubeModal()">＋ Add Product</button>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-ghost" onclick="openBillScanModal()" title="Scan supplier invoice to auto-add products">📷 Scan Invoice</button>
+      <button class="btn btn-accent" onclick="openAddLubeModal()">＋ Add Product</button>
+    </div>
   </div>
   ${statRow}${tabBar}${body}`;
 }
 
 // ── CRUD functions ────────────────────────────────────────────────────────────
 
-function openAddLubeModal() {
-  const catOpts   = LUBES_CATEGORIES.map(c=>`<option value="${c}">${c}</option>`).join('');
-  const unitOpts  = LUBES_UNITS.map(u=>`<option value="${u}">${u}</option>`).join('');
-  const gstOpts   = LUBES_GST_RATES.map(r=>`<option value="${r}">${r}%</option>`).join('');
+function openAddLubeModal(prefill) {
+  const pf = prefill || {};
+  const catOpts  = LUBES_CATEGORIES.map(c=>`<option value="${c}" ${c===(pf.category||'Engine Oil')?'selected':''}>${c}</option>`).join('');
+  const unitOpts = LUBES_UNITS.map(u=>`<option value="${u}" ${u===(pf.unit||'Nos')?'selected':''}>${u}</option>`).join('');
+  const gstOpts  = LUBES_GST_RATES.map(r=>`<option value="${r}" ${r===(pf.gstPct||18)?'selected':''}>${r}%</option>`).join('');
+  const ptOpts   = ['Pouch','Bottle','Can','Sachet','Jar','Pack'].map(t=>`<option value="${t}" ${t===(pf.packType||'Pouch')?'selected':''}>${t}</option>`).join('');
+  const isCarton = !!(pf.qtyPerCarton > 0);
   openModal('📦 Add Product', `
     <div class="g g-2 gap-12">
-      <div class="form-group"><label class="form-label">Product Name *</label><input class="form-input" id="lp_name" placeholder="e.g. Castrol GTX 10W-40" /></div>
-      <div class="form-group"><label class="form-label">Brand</label><input class="form-input" id="lp_brand" placeholder="e.g. Castrol" /></div>
-    </div>
-    <div class="g g-2 gap-12">
+      <div class="form-group" style="grid-column:1/-1"><label class="form-label">Product Name *</label><input class="form-input" id="lp_name" value="${sanitize(pf.name||'')}" placeholder="e.g. Servo 2T Supreme(JFC)" /></div>
+      <div class="form-group"><label class="form-label">Brand</label><input class="form-input" id="lp_brand" value="${sanitize(pf.brand||'')}" placeholder="e.g. Indian Oil / Servo" /></div>
+      <div class="form-group"><label class="form-label">SKU / Supplier code</label><input class="form-input" id="lp_sku" value="${sanitize(pf.sku||'')}" placeholder="e.g. 2900125" /></div>
       <div class="form-group"><label class="form-label">Category</label><select class="form-input" id="lp_cat">${catOpts}</select></div>
-      <div class="form-group"><label class="form-label">Unit</label><select class="form-input" id="lp_unit">${unitOpts}</select></div>
+      <div class="form-group"><label class="form-label">HSN Code</label><input class="form-input" id="lp_hsn" value="${sanitize(pf.hsn||'')}" placeholder="e.g. 271019" /></div>
+    </div>
+    <label style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--bg-0);border-radius:var(--radius-sm);border:1px solid var(--border);margin:2px 0 10px;cursor:pointer">
+      <input type="checkbox" id="lp_carton_toggle" ${isCarton?'checked':''} onchange="toggleLpCarton()" style="width:16px;height:16px;cursor:pointer" />
+      <span>
+        <span style="font-size:13px;font-weight:700;display:block">Carton-packed product</span>
+        <span style="font-size:11px;color:var(--text-3)">e.g. 300 pouches/carton — enter cartons, app calculates pieces</span>
+      </span>
+    </label>
+    <div id="lp_carton_wrap" style="display:${isCarton?'block':'none'}">
+      <div class="g" style="grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:10px">
+        <div class="form-group mb-0"><label class="form-label">Qty per carton</label><input class="form-input" type="number" id="lp_qpc" value="${pf.qtyPerCarton||''}" placeholder="300" min="1" oninput="calcLpCarton()" /></div>
+        <div class="form-group mb-0"><label class="form-label">Individual size</label><input class="form-input" id="lp_indsize" value="${sanitize(pf.indSize||'')}" placeholder="40ml" /></div>
+        <div class="form-group mb-0"><label class="form-label">Pack type</label><select class="form-input" id="lp_packtype">${ptOpts}</select></div>
+      </div>
     </div>
     <div class="g g-2 gap-12">
-      <div class="form-group"><label class="form-label">Cost Price (₹)</label><input class="form-input" type="number" id="lp_cost" step="0.01" placeholder="0.00" /></div>
-      <div class="form-group"><label class="form-label">Selling Price (₹)</label><input class="form-input" type="number" id="lp_sell" step="0.01" placeholder="0.00" /></div>
-    </div>
-    <div class="g g-2 gap-12">
-      <div class="form-group"><label class="form-label">Opening Stock</label><input class="form-input" type="number" id="lp_stock" placeholder="0" /></div>
-      <div class="form-group"><label class="form-label">Min. Stock (alert)</label><input class="form-input" type="number" id="lp_minstock" placeholder="5" /></div>
-    </div>
-    <div class="g g-2 gap-12">
-      <div class="form-group"><label class="form-label">HSN Code</label><input class="form-input" id="lp_hsn" placeholder="e.g. 27101940" /></div>
+      <div class="form-group"><label class="form-label" id="lp_cost_label">${isCarton?'Cost Price (₹ per carton)':'Cost Price (₹)'}</label><input class="form-input" type="number" id="lp_cost" step="0.01" value="${pf.costPrice||''}" placeholder="0.00" oninput="calcLpCarton()" /></div>
+      <div class="form-group"><label class="form-label">MRP on pack (₹)</label><input class="form-input" type="number" id="lp_mrp" step="0.01" value="${pf.mrp||''}" placeholder="0.00" /></div>
+      <div class="form-group"><label class="form-label">Selling Price (₹ per piece/unit)</label><input class="form-input" type="number" id="lp_sell" step="0.01" value="${pf.sellingPrice||''}" placeholder="0.00" oninput="calcLpCarton()" /></div>
       <div class="form-group"><label class="form-label">GST %</label><select class="form-input" id="lp_gst">${gstOpts}</select></div>
     </div>
-    <div class="form-group"><label class="form-label">Expiry Date (optional)</label><input class="form-input" type="date" id="lp_expiry" /></div>
-  `, `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-accent" onclick="saveLubeProduct()">Add Product</button>`);
+    <div id="lp_margin_box" style="display:none;padding:8px 12px;background:var(--bg-0);border-radius:var(--radius-sm);border:1px solid var(--border-light);font-size:12px;margin-bottom:8px"><span id="lp_margin_text"></span></div>
+    <div class="g g-2 gap-12">
+      <div class="form-group" id="lp_stock_group" style="display:${isCarton?'none':''}"><label class="form-label">Opening Stock</label><input class="form-input" type="number" id="lp_stock" value="${pf.stock||''}" placeholder="0" /></div>
+      <div class="form-group" id="lp_cartons_group" style="display:${isCarton?'':'none'}"><label class="form-label">Opening Stock (cartons)</label><input class="form-input" type="number" id="lp_cartons" value="${pf.cartons||''}" placeholder="0" min="0" oninput="calcLpCarton()" /></div>
+      <div class="form-group"><label class="form-label">Min Stock Alert (pieces)</label><input class="form-input" type="number" id="lp_minstock" value="${pf.minStock||5}" placeholder="5" /></div>
+    </div>
+    <div id="lp_stock_calc" style="display:none;padding:8px 12px;background:var(--bg-0);border-radius:var(--radius-sm);border:1px solid var(--border-light);font-size:12px;margin-bottom:8px"><span id="lp_stock_text"></span></div>
+    <div class="g g-2 gap-12">
+      <div class="form-group"><label class="form-label">Unit (for sales)</label><select class="form-input" id="lp_unit">${unitOpts}</select></div>
+      <div class="form-group"><label class="form-label">Expiry Date (optional)</label><input class="form-input" type="date" id="lp_expiry" value="${pf.expiryDate||''}" /></div>
+    </div>
+  `, `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-accent" onclick="saveLubeProduct(null)">Add Product</button>`);
+  setTimeout(()=>{ if(isCarton) calcLpCarton(); }, 80);
 }
 window.openAddLubeModal = openAddLubeModal;
 
@@ -3992,62 +4068,96 @@ function openEditLubeModal(id) {
   const catOpts  = LUBES_CATEGORIES.map(c=>`<option value="${c}" ${c===p.category?'selected':''}>${c}</option>`).join('');
   const unitOpts = LUBES_UNITS.map(u=>`<option value="${u}" ${u===p.unit?'selected':''}>${u}</option>`).join('');
   const gstOpts  = LUBES_GST_RATES.map(r=>`<option value="${r}" ${r==p.gstPct?'selected':''}>${r}%</option>`).join('');
+  const ptOpts   = ['Pouch','Bottle','Can','Sachet','Jar','Pack'].map(t=>`<option value="${t}" ${t===(p.packType||'Pouch')?'selected':''}>${t}</option>`).join('');
+  const isCarton = !!(p.isCartonPacked && p.qtyPerCarton > 0);
   openModal('✏️ Edit Product', `
     <div class="g g-2 gap-12">
-      <div class="form-group"><label class="form-label">Product Name *</label><input class="form-input" id="lp_name" value="${sanitize(p.name)}" /></div>
+      <div class="form-group" style="grid-column:1/-1"><label class="form-label">Product Name *</label><input class="form-input" id="lp_name" value="${sanitize(p.name)}" /></div>
       <div class="form-group"><label class="form-label">Brand</label><input class="form-input" id="lp_brand" value="${sanitize(p.brand||'')}" /></div>
-    </div>
-    <div class="g g-2 gap-12">
+      <div class="form-group"><label class="form-label">SKU / Supplier code</label><input class="form-input" id="lp_sku" value="${sanitize(p.sku||'')}" placeholder="e.g. 2900125" /></div>
       <div class="form-group"><label class="form-label">Category</label><select class="form-input" id="lp_cat">${catOpts}</select></div>
-      <div class="form-group"><label class="form-label">Unit</label><select class="form-input" id="lp_unit">${unitOpts}</select></div>
-    </div>
-    <div class="g g-2 gap-12">
-      <div class="form-group"><label class="form-label">Cost Price (₹)</label><input class="form-input" type="number" id="lp_cost" step="0.01" value="${p.costPrice||0}" /></div>
-      <div class="form-group"><label class="form-label">Selling Price (₹)</label><input class="form-input" type="number" id="lp_sell" step="0.01" value="${p.sellingPrice||0}" /></div>
-    </div>
-    <div class="g g-2 gap-12">
-      <div class="form-group"><label class="form-label">Current Stock</label><input class="form-input" type="number" id="lp_stock" value="${p.stock||0}" /></div>
-      <div class="form-group"><label class="form-label">Min. Stock (alert)</label><input class="form-input" type="number" id="lp_minstock" value="${p.minStock||5}" /></div>
-    </div>
-    <div class="g g-2 gap-12">
       <div class="form-group"><label class="form-label">HSN Code</label><input class="form-input" id="lp_hsn" value="${sanitize(p.hsn||'')}" /></div>
+    </div>
+    <label style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--bg-0);border-radius:var(--radius-sm);border:1px solid var(--border);margin:2px 0 10px;cursor:pointer">
+      <input type="checkbox" id="lp_carton_toggle" ${isCarton?'checked':''} onchange="toggleLpCarton()" style="width:16px;height:16px;cursor:pointer" />
+      <span>
+        <span style="font-size:13px;font-weight:700;display:block">Carton-packed product</span>
+        <span style="font-size:11px;color:var(--text-3)">e.g. 300 pouches/carton</span>
+      </span>
+    </label>
+    <div id="lp_carton_wrap" style="display:${isCarton?'block':'none'}">
+      <div class="g" style="grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:10px">
+        <div class="form-group mb-0"><label class="form-label">Qty per carton</label><input class="form-input" type="number" id="lp_qpc" value="${p.qtyPerCarton||''}" placeholder="300" min="1" oninput="calcLpCarton()" /></div>
+        <div class="form-group mb-0"><label class="form-label">Individual size</label><input class="form-input" id="lp_indsize" value="${sanitize(p.indSize||'')}" placeholder="40ml" /></div>
+        <div class="form-group mb-0"><label class="form-label">Pack type</label><select class="form-input" id="lp_packtype">${ptOpts}</select></div>
+      </div>
+    </div>
+    <div class="g g-2 gap-12">
+      <div class="form-group"><label class="form-label" id="lp_cost_label">${isCarton?'Cost Price (₹ per carton)':'Cost Price (₹)'}</label><input class="form-input" type="number" id="lp_cost" step="0.01" value="${p.costPrice||0}" oninput="calcLpCarton()" /></div>
+      <div class="form-group"><label class="form-label">MRP on pack (₹)</label><input class="form-input" type="number" id="lp_mrp" step="0.01" value="${p.mrp||0}" /></div>
+      <div class="form-group"><label class="form-label">Selling Price (₹ per piece/unit)</label><input class="form-input" type="number" id="lp_sell" step="0.01" value="${p.sellingPrice||0}" oninput="calcLpCarton()" /></div>
       <div class="form-group"><label class="form-label">GST %</label><select class="form-input" id="lp_gst">${gstOpts}</select></div>
     </div>
-    <div class="form-group"><label class="form-label">Expiry Date</label><input class="form-input" type="date" id="lp_expiry" value="${p.expiryDate||''}" /></div>
+    <div id="lp_margin_box" style="display:none;padding:8px 12px;background:var(--bg-0);border-radius:var(--radius-sm);border:1px solid var(--border-light);font-size:12px;margin-bottom:8px"><span id="lp_margin_text"></span></div>
+    <div class="g g-2 gap-12">
+      <div class="form-group" id="lp_stock_group" style="display:${isCarton?'none':''}"><label class="form-label">Current Stock (pieces)</label><input class="form-input" type="number" id="lp_stock" value="${p.stock||0}" /></div>
+      <div class="form-group" id="lp_cartons_group" style="display:${isCarton?'':'none'}"><label class="form-label">Current Stock (cartons, approx)</label><input class="form-input" type="number" id="lp_cartons" value="${p.qtyPerCarton > 0 ? Math.floor((p.stock||0)/p.qtyPerCarton) : 0}" placeholder="0" min="0" oninput="calcLpCarton()" /></div>
+      <div class="form-group"><label class="form-label">Min Stock Alert (pieces)</label><input class="form-input" type="number" id="lp_minstock" value="${p.minStock||5}" /></div>
+    </div>
+    <div id="lp_stock_calc" style="display:none;padding:8px 12px;background:var(--bg-0);border-radius:var(--radius-sm);border:1px solid var(--border-light);font-size:12px;margin-bottom:8px"><span id="lp_stock_text"></span></div>
+    <div class="g g-2 gap-12">
+      <div class="form-group"><label class="form-label">Unit (for sales)</label><select class="form-input" id="lp_unit">${unitOpts}</select></div>
+      <div class="form-group"><label class="form-label">Expiry Date</label><input class="form-input" type="date" id="lp_expiry" value="${p.expiryDate||''}" /></div>
+    </div>
   `, `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-accent" onclick="saveLubeProduct(${id})">Save Changes</button>`);
+  setTimeout(()=>{ if(isCarton) calcLpCarton(); }, 80);
 }
 window.openEditLubeModal = openEditLubeModal;
 
 function saveLubeProduct(editId) {
-  const name       = (document.getElementById('lp_name')?.value||'').trim();
-  const brand      = (document.getElementById('lp_brand')?.value||'').trim();
-  const category   = document.getElementById('lp_cat')?.value||'Other';
-  const unit       = document.getElementById('lp_unit')?.value||'Nos';
-  const costPrice  = parseFloat(document.getElementById('lp_cost')?.value)||0;
+  const name         = (document.getElementById('lp_name')?.value||'').trim();
+  const brand        = (document.getElementById('lp_brand')?.value||'').trim();
+  const sku          = (document.getElementById('lp_sku')?.value||'').trim();
+  const category     = document.getElementById('lp_cat')?.value||'Other';
+  const unit         = document.getElementById('lp_unit')?.value||'Nos';
+  const costPrice    = parseFloat(document.getElementById('lp_cost')?.value)||0;
+  const mrp          = parseFloat(document.getElementById('lp_mrp')?.value)||0;
   const sellingPrice = parseFloat(document.getElementById('lp_sell')?.value)||0;
-  const stock      = parseFloat(document.getElementById('lp_stock')?.value)||0;
-  const minStock   = parseFloat(document.getElementById('lp_minstock')?.value)||5;
-  const hsn        = (document.getElementById('lp_hsn')?.value||'').trim();
-  const gstPct     = parseInt(document.getElementById('lp_gst')?.value)||0;
-  const expiryDate = document.getElementById('lp_expiry')?.value||'';
+  const minStock     = parseFloat(document.getElementById('lp_minstock')?.value)||5;
+  const hsn          = (document.getElementById('lp_hsn')?.value||'').trim();
+  const gstPct       = parseInt(document.getElementById('lp_gst')?.value)||0;
+  const expiryDate   = document.getElementById('lp_expiry')?.value||'';
+
+  const isCartonPacked = !!(document.getElementById('lp_carton_toggle')?.checked);
+  const qtyPerCarton   = isCartonPacked ? (parseFloat(document.getElementById('lp_qpc')?.value)||0) : 0;
+  const indSize        = isCartonPacked ? (document.getElementById('lp_indsize')?.value||'').trim() : '';
+  const packType       = isCartonPacked ? (document.getElementById('lp_packtype')?.value||'') : '';
+  let   stock;
+  if (isCartonPacked && qtyPerCarton > 0) {
+    const cartons = parseFloat(document.getElementById('lp_cartons')?.value)||0;
+    stock = Math.round(cartons * qtyPerCarton);
+  } else {
+    stock = parseFloat(document.getElementById('lp_stock')?.value)||0;
+  }
+
   if (!name) { toast('Product name is required','error'); return; }
   if (sellingPrice < 0) { toast('Selling price cannot be negative','error'); return; }
   if (costPrice < 0) { toast('Cost price cannot be negative','error'); return; }
-  if (sellingPrice > 0 && costPrice > sellingPrice) {
-    toast('Warning: Cost price is higher than selling price — selling at a loss','warning');
-    // Don't block — just warn
+  if (isCartonPacked && qtyPerCarton > 0 && costPrice > 0 && sellingPrice > 0) {
+    const costPc = costPrice / qtyPerCarton;
+    if (costPc > sellingPrice) toast('Warning: cost per piece exceeds selling price — selling at a loss','warning');
   }
-  // Duplicate name check (only for new products)
   if (!editId) {
     const dup = (window._lubesProducts||[]).find(p => p.name.toLowerCase() === name.toLowerCase());
     if (dup) { toast(`"${name}" already exists in catalogue`,'error'); return; }
   }
   if (!window._lubesProducts) window._lubesProducts = [];
+  const pd = { name, brand, sku, category, unit, costPrice, mrp, sellingPrice, stock, minStock, hsn, gstPct, expiryDate, active:true, isCartonPacked, qtyPerCarton, indSize, packType };
   if (editId) {
     const idx = window._lubesProducts.findIndex(p=>p.id===editId);
-    if (idx >= 0) window._lubesProducts[idx] = { ...window._lubesProducts[idx], name, brand, category, unit, costPrice, sellingPrice, stock, minStock, hsn, gstPct, expiryDate, active:true };
+    if (idx >= 0) window._lubesProducts[idx] = { ...window._lubesProducts[idx], ...pd };
   } else {
-    window._lubesProducts.push({ id: Date.now(), name, brand, category, unit, costPrice, sellingPrice, stock, minStock, hsn, gstPct, expiryDate, active:true });
+    window._lubesProducts.push({ id: Date.now(), ...pd });
   }
   lubes_save();
   closeModal();
@@ -4083,33 +4193,58 @@ window.confirmDeleteLube = confirmDeleteLube;
 function openRestockModal(id) {
   const p = (window._lubesProducts||[]).find(x=>x.id===id);
   if (!p) return;
+  const isCarton = !!(p.isCartonPacked && p.qtyPerCarton > 0);
+  const curCars  = isCarton ? Math.floor((p.stock||0)/p.qtyPerCarton) : 0;
+  const curLoose = isCarton ? ((p.stock||0) % p.qtyPerCarton) : 0;
   openModal(`📦 Restock — ${sanitize(p.name)}`, `
     <div class="dbox text-center mb-12">
       <div class="fw-700" style="color:var(--text-3);font-size:11px">Current Stock</div>
-      <div class="mono fw-800" style="font-size:28px;color:var(--text-0)">${p.stock||0} ${sanitize(p.unit||'')}</div>
+      <div class="mono fw-800" style="font-size:28px;color:var(--text-0)">${(p.stock||0).toLocaleString('en-IN')} ${sanitize(p.unit||'')}</div>
+      ${isCarton ? `<div style="font-size:11px;color:var(--text-3);margin-top:2px">≈ ${curCars} carton${curCars!==1?'s':''} ${curLoose>0?'+ '+curLoose+' loose':''}  · ${p.qtyPerCarton} ${p.packType||'pieces'}/carton</div>` : ''}
     </div>
-    <div class="form-group"><label class="form-label">Add Quantity *</label>
-      <input class="form-input" type="number" id="rs_qty" placeholder="Enter quantity received" min="0" step="0.01" style="font-family:var(--mono);font-size:18px;font-weight:700" />
-    </div>
-    <div class="form-group"><label class="form-label">Updated Cost Price (₹) <span style="font-size:10px;color:var(--text-3)">optional</span></label>
+    ${isCarton ? `
+    <div class="form-group">
+      <label class="form-label">Cartons received *</label>
+      <input class="form-input" type="number" id="rs_cartons" placeholder="e.g. 5" min="1" step="1"
+        oninput="(function(v){var p=document.getElementById('rs_pieces_preview');if(p)p.textContent=(+v||0)*${p.qtyPerCarton}+' ${sanitize(p.packType||p.unit||'pieces')}s = '+((+v||0)*${p.qtyPerCarton}).toLocaleString('en-IN')+' pieces'})(this.value)"
+        style="font-family:var(--mono);font-size:22px;font-weight:700" />
+      <div id="rs_pieces_preview" style="font-size:12px;color:var(--text-3);margin-top:4px">0 pieces</div>
+    </div>` : `
+    <div class="form-group">
+      <label class="form-label">Add Quantity *</label>
+      <input class="form-input" type="number" id="rs_qty" placeholder="Enter quantity received" min="0" step="0.01" style="font-family:var(--mono);font-size:22px;font-weight:700" />
+    </div>`}
+    <div class="form-group">
+      <label class="form-label">Updated Cost Price (₹${isCarton?' per carton':''}) <span style="font-size:10px;color:var(--text-3)">optional</span></label>
       <input class="form-input" type="number" id="rs_cost" value="${p.costPrice||0}" step="0.01" />
     </div>
-    <div class="form-group"><label class="form-label">Supplier / Invoice</label><input class="form-input" id="rs_note" placeholder="Optional note" /></div>
+    <div class="form-group"><label class="form-label">Supplier / Invoice No. <span style="font-size:10px;color:var(--text-3)">optional</span></label>
+      <input class="form-input" id="rs_note" placeholder="e.g. G.Y. Enterprises Inv-2779302600133" /></div>
   `, `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-accent" onclick="saveRestock(${id})">📦 Confirm Restock</button>`);
 }
 window.openRestockModal = openRestockModal;
 
 function saveRestock(id) {
-  const qty  = parseFloat(document.getElementById('rs_qty')?.value);
-  const cost = parseFloat(document.getElementById('rs_cost')?.value);
-  if (isNaN(qty) || qty <= 0) { toast('Quantity is required', 'error'); return; }
   const p = (window._lubesProducts||[]).find(x=>x.id===id);
   if (!p) return;
+  const isCarton = !!(p.isCartonPacked && p.qtyPerCarton > 0);
+  let qty;
+  if (isCarton) {
+    const cartons = parseFloat(document.getElementById('rs_cartons')?.value);
+    if (isNaN(cartons) || cartons <= 0) { toast('Enter number of cartons received', 'error'); return; }
+    qty = Math.round(cartons * p.qtyPerCarton);
+  } else {
+    qty = parseFloat(document.getElementById('rs_qty')?.value);
+    if (isNaN(qty) || qty <= 0) { toast('Quantity is required', 'error'); return; }
+  }
+  const cost = parseFloat(document.getElementById('rs_cost')?.value);
+  const note = (document.getElementById('rs_note')?.value||'').trim();
   p.stock = (p.stock||0) + qty;
   if (!isNaN(cost) && cost > 0) p.costPrice = cost;
   lubes_save();
   closeModal();
-  toast(`✅ Restocked ${qty} ${p.unit||''} — New stock: ${p.stock}`, 'success');
+  const carMsg = isCarton ? ` (${Math.round(qty/p.qtyPerCarton)} carton${qty/p.qtyPerCarton!==1?'s':''})` : '';
+  toast(`✅ Restocked ${qty.toLocaleString('en-IN')} ${p.unit||''}${carMsg} — Stock: ${p.stock.toLocaleString('en-IN')}`, 'success');
   renderPage();
 }
 window.saveRestock = saveRestock;
@@ -4121,7 +4256,11 @@ function openLubeSaleModal(productId) {
   const modeOpts = ['cash','upi','card','credit'].map(m=>`<option value="${m}">${m.toUpperCase()}</option>`).join('');
   openModal(`🛒 Sell — ${sanitize(p.name)}`, `
     <div class="g g-2 gap-12" style="margin-bottom:12px">
-      <div class="dbox text-center" style="padding:10px"><div class="mono fw-800" style="color:var(--green)">${p.stock||0} ${sanitize(p.unit||'')}</div><div style="font-size:10px;color:var(--text-3)">In Stock</div></div>
+      <div class="dbox text-center" style="padding:10px">
+      <div class="mono fw-800" style="color:var(--green)">${(p.stock||0).toLocaleString('en-IN')} ${sanitize(p.unit||'')}</div>
+      <div style="font-size:10px;color:var(--text-3)">In Stock</div>
+      ${p.isCartonPacked&&p.qtyPerCarton>0?`<div style="font-size:9px;color:var(--text-3)">≈${Math.floor((p.stock||0)/p.qtyPerCarton)} cartons</div>`:''}
+    </div>
       <div class="dbox text-center" style="padding:10px"><div class="mono fw-800" style="color:var(--accent-light)">${cur(p.sellingPrice||0)}</div><div style="font-size:10px;color:var(--text-3)">Per ${sanitize(p.unit||'unit')}</div></div>
     </div>
     <div class="g g-2 gap-12">
@@ -4186,6 +4325,256 @@ function saveLubeSale(productId) {
   renderPage();
 }
 window.saveLubeSale = saveLubeSale;
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ── AI BILL SCANNER — photograph any supplier invoice, auto-add products ──
+// ═══════════════════════════════════════════════════════════════════════════
+const BILL_SCAN_PROMPT = `You are reading a tax invoice from an Indian fuel station lubricant supplier (G.Y. Enterprises, Shashank Lubes, G.V. Enterprises or similar, supplying SERVO/IOCL/Indian Oil branded products).
+
+Extract ALL product line items and return ONLY valid JSON — no explanation, no markdown, no backticks.
+
+Return this exact structure:
+{
+  "supplier": "supplier company name",
+  "invoiceNo": "invoice number",
+  "invoiceDate": "DD-MM-YYYY",
+  "supplierGSTIN": "GSTIN if visible",
+  "totalAmount": 0,
+  "products": [
+    {
+      "name": "clean product name without pack code",
+      "sku": "SKU number if shown",
+      "hsn": "HSN code",
+      "packQty": 300,
+      "packSize": "40ml",
+      "packType": "Pouch",
+      "isCartonPacked": true,
+      "cartonsOrdered": 5,
+      "ratePerCarton": 3226.27,
+      "mrp": 5400,
+      "gstPct": 18,
+      "netTotal": 19035.00,
+      "totalPieces": 1500
+    }
+  ]
+}
+
+Pack format decoding rules:
+- "300x40ML-POU" = packQty:300, packSize:"40ml", packType:"Pouch", isCartonPacked:true
+- "200X60ML-POU" = packQty:200, packSize:"60ml", packType:"Pouch", isCartonPacked:true
+- "600X20ML" = packQty:600, packSize:"20ml", packType:"Pouch", isCartonPacked:true
+- "20W-40 MG-20X1L" = packQty:20, packSize:"1L", packType:"Bottle", isCartonPacked:true
+- "20XIL-HDPE" = packQty:20, packSize:"1L", packType:"Bottle", isCartonPacked:true
+- "IOCL Clear Blue 10 LTR" with unit Nos = packQty:1, packSize:"10L", packType:"Can", isCartonPacked:false
+- "IOCL CLEARBLUE 5 LTR" with unit Nos = packQty:1, packSize:"5L", packType:"Can", isCartonPacked:false
+- If unit is "CAR" in invoice = cartons (isCartonPacked:true); if unit is "Nos" = individual items (isCartonPacked:false)
+
+For isCartonPacked:true: totalPieces = cartonsOrdered × packQty
+For isCartonPacked:false: totalPieces = cartonsOrdered (i.e. quantity directly)
+
+Return ONLY the JSON object.`;
+
+async function openBillScanModal() {
+  openModal('📷 Scan Supplier Invoice', `
+    <div style="font-size:12px;color:var(--text-3);margin-bottom:14px">
+      Photograph any SERVO / IOCL / Indian Oil invoice from G.Y. Enterprises, Shashank Lubes, G.V. Enterprises or any lube supplier. Products are auto-added to your catalogue.
+    </div>
+    <div id="scan_drop_area" onclick="document.getElementById('scan_file_inp').click()"
+      style="border:2px dashed var(--border);border-radius:var(--radius-sm);padding:28px;text-align:center;cursor:pointer;margin-bottom:12px;transition:background 0.15s"
+      onmouseenter="this.style.background='var(--bg-0)'" onmouseleave="this.style.background='transparent'">
+      <div style="font-size:32px;margin-bottom:8px">📄</div>
+      <div style="font-weight:700;font-size:14px;margin-bottom:4px">Tap to select invoice photo or PDF</div>
+      <div style="font-size:11px;color:var(--text-3)">JPG · PNG · PDF — supports multi-page invoices</div>
+      <input type="file" id="scan_file_inp" accept="image/*,application/pdf" style="display:none" onchange="billScanFileSelected(this)" />
+    </div>
+    <div id="scan_preview" style="display:none;margin-bottom:12px">
+      <img id="scan_preview_img" style="max-width:100%;max-height:180px;border-radius:6px;border:1px solid var(--border)" />
+      <div id="scan_preview_name" style="font-size:11px;color:var(--text-3);margin-top:4px;text-align:center"></div>
+    </div>
+    <div id="scan_processing" style="display:none;text-align:center;padding:20px;color:var(--text-3)">
+      <div style="font-size:24px;margin-bottom:8px">⏳</div>
+      <div style="font-weight:700;margin-bottom:4px">Reading invoice with AI…</div>
+      <div style="font-size:11px">Extracting products, SKUs, pack formats, quantities</div>
+    </div>
+    <div id="scan_results_area" style="display:none"></div>
+    <div id="scan_error" style="display:none;padding:10px 14px;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.3);border-radius:var(--radius-sm);font-size:12px;color:var(--red)"></div>
+  `, `<button class="btn btn-ghost" onclick="closeModal()" id="scan_cancel_btn">Cancel</button><button class="btn btn-accent" id="scan_run_btn" onclick="runBillScan()" disabled style="opacity:0.4">Scan Invoice →</button>`);
+}
+window.openBillScanModal = openBillScanModal;
+
+function billScanFileSelected(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const runBtn = document.getElementById('scan_run_btn');
+  if (runBtn) { runBtn.disabled = false; runBtn.style.opacity = '1'; }
+  const prev = document.getElementById('scan_preview');
+  const prevImg = document.getElementById('scan_preview_img');
+  const prevName = document.getElementById('scan_preview_name');
+  if (prevName) prevName.textContent = file.name + ' (' + (file.size/1024).toFixed(0) + ' KB)';
+  if (file.type.startsWith('image/') && prevImg && prev) {
+    const reader = new FileReader();
+    reader.onload = e => { prevImg.src = e.target.result; prev.style.display = 'block'; };
+    reader.readAsDataURL(file);
+  } else if (prev) {
+    prev.style.display = 'block';
+    if (prevImg) prevImg.style.display = 'none';
+  }
+}
+window.billScanFileSelected = billScanFileSelected;
+
+async function runBillScan() {
+  const input = document.getElementById('scan_file_inp');
+  if (!input || !input.files[0]) { toast('Select an invoice file first', 'error'); return; }
+  const file = input.files[0];
+
+  const runBtn = document.getElementById('scan_run_btn');
+  const cancelBtn = document.getElementById('scan_cancel_btn');
+  const processing = document.getElementById('scan_processing');
+  const dropArea = document.getElementById('scan_drop_area');
+  const preview = document.getElementById('scan_preview');
+  const errEl = document.getElementById('scan_error');
+
+  if (runBtn) { runBtn.disabled = true; runBtn.textContent = 'Scanning…'; }
+  if (cancelBtn) cancelBtn.disabled = true;
+  if (processing) processing.style.display = 'block';
+  if (dropArea) dropArea.style.display = 'none';
+  if (preview) preview.style.display = 'none';
+  if (errEl) errEl.style.display = 'none';
+
+  try {
+    const base64 = await new Promise((res, rej) => {
+      const r = new FileReader();
+      r.onload = e => res(e.target.result.split(',')[1]);
+      r.onerror = () => rej(new Error('File read failed'));
+      r.readAsDataURL(file);
+    });
+    const mimeType = file.type || 'image/jpeg';
+
+    // Call server-side scan endpoint (server calls Claude API with key)
+    const resp = await fetch('/api/data/scan-invoice', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + (window.getAuthToken ? getAuthToken() : '') },
+      body: JSON.stringify({ imageData: base64, mimeType, filename: file.name }),
+    });
+    if (!resp.ok) throw new Error('Server error: ' + resp.status);
+    const result = await resp.json();
+    if (!result.success) throw new Error(result.error || 'Scan failed');
+
+    if (processing) processing.style.display = 'none';
+    renderBillScanResults(result.data);
+    if (runBtn) runBtn.style.display = 'none';
+    if (cancelBtn) { cancelBtn.textContent = 'Close'; cancelBtn.disabled = false; }
+  } catch (e) {
+    if (processing) processing.style.display = 'none';
+    if (dropArea) dropArea.style.display = 'block';
+    if (errEl) { errEl.style.display = 'block'; errEl.textContent = '⚠ ' + e.message; }
+    if (runBtn) { runBtn.disabled = false; runBtn.textContent = 'Scan Invoice →'; }
+    if (cancelBtn) cancelBtn.disabled = false;
+  }
+}
+window.runBillScan = runBillScan;
+
+function renderBillScanResults(data) {
+  const area = document.getElementById('scan_results_area');
+  if (!area) return;
+  const prods = data.products || [];
+  if (!prods.length) { area.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-3)">No products found in this invoice</div>'; area.style.display='block'; return; }
+
+  // Store globally for confirmBillItem to access
+  window._billScanData = data;
+
+  const existingSkus = new Set((window._lubesProducts||[]).map(p=>p.sku).filter(Boolean));
+  const existingNames = new Map((window._lubesProducts||[]).map(p=>[p.name.toLowerCase(), p]));
+
+  let html = `<div style="padding:8px 12px;background:rgba(55,138,221,0.08);border-radius:var(--radius-sm);font-size:12px;margin-bottom:12px">
+    <strong style="color:var(--text-1)">${sanitize(data.supplier||'Supplier')}</strong>
+    &nbsp;·&nbsp; Invoice ${sanitize(data.invoiceNo||'')}
+    &nbsp;·&nbsp; ${sanitize(data.invoiceDate||'')}
+    &nbsp;·&nbsp; Total: ₹${(data.totalAmount||0).toLocaleString('en-IN')}
+  </div>
+  <div style="font-size:12px;color:var(--text-2);margin-bottom:8px;font-weight:700">${prods.length} product${prods.length!==1?'s':''} found:</div>`;
+
+  prods.forEach((prod, idx) => {
+    const matchBySkuProd = prod.sku ? (window._lubesProducts||[]).find(p=>p.sku === prod.sku) : null;
+    const matchByName = existingNames.get((prod.name||'').toLowerCase());
+    const match = matchBySkuProd || matchByName;
+    const pieces = prod.isCartonPacked ? (prod.cartonsOrdered||0)*(prod.packQty||1) : (prod.cartonsOrdered||0);
+    const packStr = prod.isCartonPacked && prod.packQty > 1 ? `${prod.packQty}×${prod.packSize} ${prod.packType}` : (prod.packSize || prod.packType || '');
+
+    html += `<div id="billitem_${idx}" style="border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px;margin-bottom:8px">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px">
+        <div style="flex:1">
+          <div style="font-weight:700;font-size:13px">${sanitize(prod.name||'')}</div>
+          <div style="font-size:10px;color:var(--text-3);margin-top:2px">
+            ${prod.sku?'SKU '+sanitize(prod.sku)+' · ':''}HSN ${sanitize(prod.hsn||'')} · GST ${prod.gstPct||18}% · ${prod.cartonsOrdered||0} ${prod.isCartonPacked?'CAR':'nos'} @ ₹${(prod.ratePerCarton||0).toLocaleString('en-IN',{maximumFractionDigits:2})}
+            ${packStr?'<br><span style="background:rgba(99,153,34,0.12);color:#27500A;padding:0 5px;border-radius:3px">'+sanitize(packStr)+'</span>':''}
+          </div>
+        </div>
+        <div style="text-align:right;flex-shrink:0">
+          ${match
+            ? `<div style="font-size:10px;color:#185FA5;margin-bottom:4px">↺ Update stock</div>
+               <button class="btn btn-accent btn-sm" style="font-size:11px" onclick="confirmBillItem(${idx})">+ ${pieces.toLocaleString('en-IN')} pcs</button>`
+            : `<div style="font-size:10px;color:#27500A;margin-bottom:4px">New product</div>
+               <button class="btn btn-accent btn-sm" style="font-size:11px;background:#22c55e" onclick="confirmBillItem(${idx})">Add →</button>`
+          }
+        </div>
+      </div>
+    </div>`;
+  });
+
+  area.innerHTML = html;
+  area.style.display = 'block';
+}
+window.renderBillScanResults = renderBillScanResults;
+
+async function confirmBillItem(idx) {
+  const data = window._billScanData;
+  if (!data) return;
+  const prod = data.products[idx];
+  if (!prod) return;
+
+  const btn = document.querySelector(`#billitem_${idx} button`);
+  if (btn) { btn.disabled = true; btn.textContent = '✓ Done'; }
+
+  const pieces = prod.isCartonPacked ? Math.round((prod.cartonsOrdered||0)*(prod.packQty||1)) : (prod.cartonsOrdered||0);
+
+  // Check if product already exists by SKU or name
+  const existingBySku  = prod.sku ? (window._lubesProducts||[]).find(p=>p.sku===prod.sku) : null;
+  const existingByName = (window._lubesProducts||[]).find(p=>p.name.toLowerCase()===(prod.name||'').toLowerCase());
+  const existing = existingBySku || existingByName;
+
+  if (existing) {
+    // Update stock + cost price on existing product
+    existing.stock = (existing.stock||0) + pieces;
+    if (prod.ratePerCarton > 0) existing.costPrice = prod.ratePerCarton;
+    if (prod.mrp > 0) existing.mrp = prod.mrp;
+    if (prod.sku && !existing.sku) existing.sku = prod.sku;
+    lubes_save();
+    toast(`✅ ${sanitize(prod.name)} — stock +${pieces.toLocaleString('en-IN')}`, 'success');
+  } else {
+    // Add new product — close scan modal and open add modal pre-filled
+    closeModal();
+    openAddLubeModal({
+      name:          prod.name || '',
+      brand:         'Indian Oil / Servo',
+      sku:           prod.sku || '',
+      hsn:           prod.hsn || '',
+      gstPct:        prod.gstPct || 18,
+      costPrice:     prod.ratePerCarton || 0,
+      mrp:           prod.mrp || 0,
+      isCartonPacked: prod.isCartonPacked,
+      qtyPerCarton:  prod.packQty || 0,
+      indSize:       prod.packSize || '',
+      packType:      prod.packType || 'Pouch',
+      cartons:       prod.cartonsOrdered || 0,
+      category:      'Engine Oil',
+      unit:          'Nos',
+    });
+    return;
+  }
+}
+window.confirmBillItem = confirmBillItem;
 
 window.renderLubes = renderLubes;
 
