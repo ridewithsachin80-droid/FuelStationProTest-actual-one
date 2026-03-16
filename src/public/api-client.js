@@ -194,6 +194,15 @@ class FuelDB {
       console.warn('[FuelDB] setSetting failed:', key, e.message);
     }
   }
+
+  // PIN-HASH FIX: Dedicated method that sends raw PIN to the server endpoint
+  // which bcrypts it — avoids SHA-256 vs bcrypt mismatch bug
+  async setEmployeePin(employeeId, rawPin) {
+    return apiFetch('/data/employees/' + encodeURIComponent(employeeId) + '/set-pin', {
+      method: 'POST',
+      body: JSON.stringify({ pin: rawPin })
+    });
+  }
 }
 
 // ── Globals ───────────────────────────────────────────────────────────────

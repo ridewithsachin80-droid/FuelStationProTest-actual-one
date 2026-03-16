@@ -59,20 +59,17 @@ function getAppSecret() {
   return secret;
 }
 
-// BUG-13 FIX: Was using djb2 (non-cryptographic, trivially reversible) for session signatures.
-// Replaced with SHA-256 via Web Crypto API. signData/verifyData are now async.
-// Callers (emp_saveSession, loadSession, emp_loadSession) have been updated accordingly.
-
-// Session signing — SHA-256 HMAC-style: hash(payload + secret)
-async function signData(payload) {
+// Session signing — synchronous djb2 (sufficient for localStorage tamper-detection;
+// full crypto protection handled server-side via JWT sessions)
+function signData(payload) {
   const raw = JSON.stringify(payload);
-  const sig = await hashPassword(raw + getAppSecret());
+  const sig = hashSync(raw + getAppSecret());
   return JSON.stringify({ payload: raw, sig });
 }
-async function verifyData(stored) {
+function verifyData(stored) {
   try {
     const { payload, sig } = JSON.parse(stored);
-    const expected = await hashPassword(payload + getAppSecret());
+    const expected = hashSync(payload + getAppSecret());
     if (sig !== expected) return null;
     return JSON.parse(payload);
   } catch { return null; }

@@ -598,6 +598,31 @@ function dataRoutes(db) {
     }
   });
 
+  // ── Dedicated employee PIN set endpoint ──────────────────────────────────
+  // PIN-HASH FIX: The generic PUT /employees route stores whatever pinHash the client sends
+  // (SHA-256 from admin.js sha256()). The server uses bcrypt for verification. This endpoint
+  // accepts the RAW 4-digit PIN and bcrypts it server-side before storing, ensuring the
+  // stored hash is always bcrypt-compatible with verifyPassword() in verify-pin.
+  router.post('/employees/:id/set-pin', async (req, res) => {
+    try {
+      const { pin } = req.body;
+      if (!pin || !/^\d{4,8}$/.test(String(pin))) {
+        return res.status(400).json({ error: 'PIN must be 4–8 digits' });
+      }
+      // bcrypt-hash the raw PIN (same as schema.js hashPassword)
+      const bcryptHash = await hashPassword(String(pin));
+      await pool.query(
+        'UPDATE employees SET pin_hash = $1 WHERE id = $2 AND tenant_id = $3 AND active = 1',
+        [bcryptHash, req.params.id, req.tenantId]
+      );
+      await auditLog(req, 'SET_PIN', 'employees', req.params.id, '');
+      res.json({ success: true });
+    } catch (e) {
+      console.error('[set-pin]', e.message);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // ── Generic store POST (create) ───────────────────────────────────────────
   router.post('/:store', checkDayLock, async (req, res) => {
     const meta = STORE_MAP[req.params.store];

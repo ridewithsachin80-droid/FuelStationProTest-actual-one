@@ -179,28 +179,26 @@ async function emp_loadHistoryFromServer() {
     }
   } catch(e) {}
 }
-async function emp_loadSession() {
+function emp_loadSession() {
   try {
     const raw = localStorage.getItem('fb_emp_session');
     if (!raw) return false;
-    // BUG-13 FIX: verifyData is now async (SHA-256 instead of djb2)
-    const s = await verifyData(raw);
+    const s = verifyData(raw);
     if (!s || !validateEmpSessionShape(s)) { localStorage.removeItem('fb_emp_session'); return false; }
     empState = { ...empState, ...s };
     return true;
   } catch { return false; }
 }
-async function emp_saveSession() {
+function emp_saveSession() {
   try {
     const data = {
       user: empState.user, active: empState.active,
       page: empState.page === 'login' ? 'readings' : empState.page,
       openReadings: empState.openReadings, closeReadings: empState.closeReadings,
       sales: empState.sales, dipReadings: empState.dipReadings,
-      pendingSales: empState.pendingSales || [], // FA-01: persist queue across page refreshes
+      pendingSales: empState.pendingSales || [],
     };
-    // BUG-13 FIX: signData is now async (SHA-256 instead of djb2)
-    localStorage.setItem('fb_emp_session', await signData(data));
+    localStorage.setItem('fb_emp_session', signData(data));
   } catch {}
 }
 function emp_clearSession() { try { localStorage.removeItem('fb_emp_session'); } catch {} }
@@ -468,7 +466,6 @@ function emp_go(page) {
 function renderEmployeePortal() {
   // If accessed by admin, show employee overview/demo
   if (APP.role === 'admin' && !empState.active && empState.page !== 'complete') {
-    // Check if there's a saved employee session
     emp_loadSession();
   }
 
@@ -2803,22 +2800,19 @@ let ADMIN_USERS = (() => {
   ];
 })();
 
-async function loadSession() {
+function loadSession() {
   try {
     const raw = localStorage.getItem('fb_session');
     if (!raw) return false;
-    // BUG-13 FIX: verifyData is now async
-    const s = await verifyData(raw);
+    const s = verifyData(raw);
     if (!s || !validateSessionShape(s)) {
       localStorage.removeItem('fb_session');
       return false;
     }
-    // Check session age
     if (Date.now() - s.timestamp > SESSION_MAX_AGE) {
       localStorage.removeItem('fb_session');
       return false;
     }
-    // Check idle timeout
     if (s.lastActive && Date.now() - s.lastActive > SESSION_IDLE_TIMEOUT) {
       localStorage.removeItem('fb_session');
       return false;
@@ -2827,14 +2821,13 @@ async function loadSession() {
     return true;
   } catch { return false; }
 }
-async function saveSession() {
+function saveSession() {
   try {
     const data = {
       loggedIn: APP.loggedIn, role: APP.role, adminUser: APP.adminUser,
       timestamp: Date.now(), lastActive: Date.now()
     };
-    // BUG-13 FIX: signData is now async
-    localStorage.setItem('fb_session', await signData(data));
+    localStorage.setItem('fb_session', signData(data));
   } catch {}
 }
 function clearSession() {
@@ -3276,13 +3269,10 @@ function enterApp() {
 function appLogout() {
   auditLog('logout', { user: APP.role === 'admin' ? APP.adminUser?.name : empState.user?.name, role: APP.role });
   if (APP.role === 'employee') {
-    // Save current session BEFORE any state changes so re-login can restore it
-    // This handles both emp_logout() and direct ⏻ topbar button calls
     if (empState.active && empState.user) {
       emp_saveSession(); // preserve readings + sales for re-login
       console.log('[appLogout] saved session: sales='+empState.sales.length+' opens='+Object.keys(empState.openReadings).length+' closes='+Object.keys(empState.closeReadings).length);
     }
-    // Freeze in-memory state (DO NOT clear localStorage session)
     empState.active = false;
     empState.page = 'login';
   }

@@ -9355,12 +9355,16 @@ async function addEmployee() {
 
     // AUTO-SET DEFAULT PIN: last 4 digits of mobile number
     // e.g. phone 9945046740 → default PIN 6740
+    // PIN-HASH FIX: Was storing SHA-256(pin) via db.put — server bcrypts PINs so that
+    // would never verify. Now call setEmployeePin() which bcrypts server-side.
     const defaultPin = phone.slice(-4);
     try {
+      if (db && typeof db.setEmployeePin === 'function') {
+        await db.setEmployeePin(newEmp.id, defaultPin);
+      }
+      // Also store SHA-256 locally for offline PIN fallback (verify-pin falls back to this)
       const pinHash = await sha256(defaultPin);
       newEmp.pinHash = pinHash;
-      await db.put('employees', newEmp);
-      // Also write to local PIN cache so employee portal picks it up immediately
       const pins = loadEmpPins();
       pins[newEmp.id] = pinHash;
       saveEmpPins(pins);
@@ -9503,9 +9507,20 @@ async function saveEmployeePIN() {
   const emp = APP.data.employees.find(e => parseInt(e.id) === parseInt(empId));
   if (!emp) { toast('Employee not found — please refresh and try again', 'error'); return; }
   try {
+    // PIN-HASH FIX: Was computing SHA-256(pin) client-side and storing that hash.
+    // Server bcrypts PINs — SHA-256 hash stored in DB would never match bcrypt.compare().
+    // Now send raw PIN to dedicated /set-pin endpoint which bcrypts server-side.
+    if (db && typeof db.setEmployeePin === 'function') {
+      await db.setEmployeePin(empId, pin);
+    } else {
+      // Fallback: also store SHA-256 locally for offline verification only
+      const hash = await sha256(pin);
+      emp.pinHash = hash;
+      await db.put('employees', emp);
+    }
+    // Store SHA-256 locally for offline PIN fallback
     const hash = await sha256(pin);
     emp.pinHash = hash;
-    await db.put('employees', emp);
     const pins = loadEmpPins();
     pins[empId] = hash;
     saveEmpPins(pins);
