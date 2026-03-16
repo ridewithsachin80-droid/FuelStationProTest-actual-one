@@ -1213,7 +1213,11 @@ async function mt_subSettingsFromBilling(tenantId, stationName) {
 
     function calcEnd(planId, gd) {
       var p = PLANS.find(function(x){return x.id===planId;});
-      if (!p || p.months === 0) return '';
+      if (!p || p.months === 0) {
+        // FIX: For trial plan, end = today + trial_days (from sub data)
+        var td2 = new Date(); td2.setDate(td2.getDate() + (sub.trial_days || 30));
+        return td2.toISOString().slice(0,10);
+      }
       var d = new Date(); d.setMonth(d.getMonth()+p.months); d.setDate(d.getDate()+(parseInt(gd)||0));
       return d.toISOString().slice(0,10);
     }
@@ -1249,14 +1253,18 @@ async function mt_subSettingsFromBilling(tenantId, stationName) {
       + '<div><label style="font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase">Grace Days</label><input id="ss_grace" type="number" value="'+graceDays+'" min="0" max="30" oninput="mt_ssUpdateEndDate()" style="width:100%;margin-top:4px;padding:8px;background:var(--bg-0);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px" /></div>'
       + '</div>'
       + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">'
-      + '<div><label style="font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase">Trial Days</label><input id="ss_trial" type="number" value="'+(sub.trial_days||30)+'" min="0" style="width:100%;margin-top:4px;padding:8px;background:var(--bg-0);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px" /></div>'
+      + '<div><label style="font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase">Trial Days</label><input id="ss_trial" type="number" value="'+(sub.trial_days||30)+'" min="1" oninput="mt_ssUpdateEndDate()" style="width:100%;margin-top:4px;padding:8px;background:var(--bg-0);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px" /></div>'
       + '<div><label style="font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase">Owner WhatsApp</label><input id="ss_phone" type="tel" value="'+(sub.owner_phone||'')+'" placeholder="+91XXXXXXXXXX" style="width:100%;margin-top:4px;padding:8px;background:var(--bg-0);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px" /></div>'
       + '</div></div>'
       + '<div style="background:var(--bg-2);border-radius:8px;padding:12px;margin-bottom:12px">'
       + '<div style="font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase;margin-bottom:10px">Select Plan & Set Price</div>'
       + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">'+planCards+'</div>'
       + '<input type="hidden" id="ss_plan" value="'+activePlan+'" />'
-      + '<div id="ss_end_display" style="padding:10px;background:var(--bg-0);border-radius:6px;font-size:12px">\ud83d\udcc5 Ends: <span style="color:var(--accent-light);font-weight:700">'+fmtDate(endDate)+'</span><input type="hidden" id="ss_subend" value="'+endDate+'" /></div>'
+      + '<div id="ss_end_display" style="padding:10px;background:var(--bg-0);border:1px solid var(--border);border-radius:6px;font-size:12px">'
+      + (activePlan==='trial'
+          ? '\ud83d\udcc5 Trial ends: <span style="color:var(--accent-light);font-weight:700">'+fmtDate(endDate)+'</span> <span style="color:var(--text-3);font-size:11px">('+( sub.trial_days||30)+' days from today)</span>'
+          : '\ud83d\udcc5 Ends: <span style="color:var(--accent-light);font-weight:700">'+fmtDate(endDate)+'</span>')
+      + '<input type="hidden" id="ss_subend" value="'+endDate+'" /></div>'
       + '</div>'
       + '<div style="display:flex;gap:8px">'
       + '<button onclick="mt_ssClose()" style="flex:1;background:var(--bg-2);border:1px solid var(--border);color:var(--text-2);border-radius:8px;padding:12px;font-size:13px;font-weight:700;cursor:pointer">Cancel</button>'
@@ -1291,8 +1299,16 @@ function mt_ssUpdateEndDate() {
   var display = document.getElementById('ss_end_display');
   if (!hidden||!display) return;
   if (!months) {
-    hidden.value='';
-    display.innerHTML='\ud83d\udcc5 Ends: <span style="color:var(--text-3)">No end date (trial only)</span><input type="hidden" id="ss_subend" value="" />';
+    // FIX: For Trial plan, calculate end date from today + trial days entered by user.
+    // Previously showed "No end date" and ignored the trial days field entirely.
+    var trialDays = parseInt(document.getElementById('ss_trial')?.value) || 30;
+    var td = new Date(); td.setDate(td.getDate() + trialDays);
+    var tIso = td.toISOString().slice(0, 10);
+    var tLbl = td.toLocaleDateString('en-IN', {day:'numeric', month:'short', year:'numeric'});
+    hidden.value = tIso;
+    display.innerHTML = '\ud83d\udcc5 Trial ends: <span style="color:var(--accent-light);font-weight:700">' + tLbl + '</span>'
+      + ' <span style="color:var(--text-3);font-size:11px">(' + trialDays + ' days from today)</span>'
+      + '<input type="hidden" id="ss_subend" value="' + tIso + '" />';
   } else {
     var d=new Date(); d.setMonth(d.getMonth()+months); d.setDate(d.getDate()+grace);
     var iso=d.toISOString().slice(0,10);
