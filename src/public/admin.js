@@ -1160,6 +1160,7 @@ function renderStaff(D) {
   // ═══ EMPLOYEE DIRECTORY ═══
   const empRows = D.employees.map(e => {
     const hasPIN = !!getEmpPinHash(e.id);
+    const isDefaultPIN = hasPIN && e.phone && e.phone.length >= 4; // set by auto-default
     const pendingBal = e.pendingBalance || 0;
     const pendingEntries = (e.balanceEntries || []).filter(b => b.status === 'pending');
     return `<tr>
@@ -1182,7 +1183,7 @@ function renderStaff(D) {
           : `<span style="font-size:11px;color:var(--green);font-weight:600">✅ No balance</span>`
         }
       </td>
-      <td class="r">${hasPIN ? '<span style="color:var(--green);font-size:11px;font-weight:700">✓ PIN Set</span>' : '<span style="color:var(--red);font-size:11px;font-weight:700">⚠ No PIN</span>'}</td>
+      <td class="r">${hasPIN ? '<span style="color:var(--green);font-size:11px;font-weight:700">✓ PIN Set</span>' : '<span style="color:var(--orange);font-size:11px;font-weight:700">⚠ No PIN</span>'}</td>
       <td class="r">
         <div style="display:flex;gap:4px;justify-content:flex-end">
           <button class="btn btn-ghost btn-sm" onclick="openEditEmployeeModal(${e.id})" title="Edit">✏️</button>
@@ -8845,10 +8846,26 @@ async function addEmployee() {
   try {
     const insertedId = await db.add('employees', newEmp);
     if (insertedId !== undefined && insertedId !== null) newEmp.id = insertedId;
+
+    // AUTO-SET DEFAULT PIN: last 4 digits of mobile number
+    // e.g. phone 9945046740 → default PIN 6740
+    const defaultPin = phone.slice(-4);
+    try {
+      const pinHash = await sha256(defaultPin);
+      newEmp.pinHash = pinHash;
+      await db.put('employees', newEmp);
+      // Also write to local PIN cache so employee portal picks it up immediately
+      const pins = loadEmpPins();
+      pins[newEmp.id] = pinHash;
+      saveEmpPins(pins);
+    } catch(pinErr) {
+      console.warn('[addEmployee] Default PIN setup failed:', pinErr.message);
+    }
+
     APP.data.employees.push(newEmp);
     closeModal();
     const granted = Object.entries(permissions).filter(([,v])=>v).map(([k])=>EMP_OPTIONAL_PERMISSIONS.find(p=>p.id===k)?.label).filter(Boolean);
-    toast(`${name} added · ${granted.length ? granted.join(', ') : 'No extra permissions'}`, 'success');
+    toast(`${name} added · Default PIN: ${defaultPin} (last 4 digits of mobile)`, 'success');
     renderPage();
   } catch (e) {
     toast((e && e.message) ? e.message : 'Failed to save employee', 'error');
