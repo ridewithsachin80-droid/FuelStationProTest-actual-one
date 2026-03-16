@@ -198,7 +198,7 @@ async function mt_showSelector() {
                 <div style="flex:1;min-width:0;cursor:${isActive?'pointer':'default'}" onclick="${isActive ? `mt_selectTenant('${t.id}')` : ''}">
                   <div style="font-weight:900;color:${isActive?'var(--accent-light)':'var(--text-3)'};font-size:14px;letter-spacing:-0.2px">${t.name}</div>
                   <div style="display:flex;align-items:center;gap:6px;margin-top:2px;flex-wrap:wrap">
-                    ${(function(){var OMC_COLORS={iocl:'#ef4444',bpcl:'#3b82f6',hpcl:'#22c55e',mrpl:'#f97316',private:'#9498a5'};var OMC_LABELS={iocl:'IOCL',bpcl:'BPCL',hpcl:'HPCL',mrpl:'MRPL',private:'Private'};var omc=(t.omc||'iocl').toLowerCase();var col=OMC_COLORS[omc]||'#9498a5';var lbl=OMC_LABELS[omc]||omc.toUpperCase();return '<span style="font-size:9px;font-weight:800;padding:1px 7px;border-radius:4px;background:'+col+'22;color:'+col+';border:1px solid '+col+'44">'+lbl+'</span>';})()}
+                    ${(function(){var OMC_COLORS={iocl:'#ef4444',bpcl:'#3b82f6',hpcl:'#22c55e',mrpl:'#f97316',private:'#9498a5'};var OMC_LABELS={iocl:'IOCL',bpcl:'BPCL',hpcl:'HPCL',mrpl:'MRPL',private:'Private'};var omc=((t&&t.omc)||'iocl').toLowerCase();var col=OMC_COLORS[omc]||'#9498a5';var lbl=OMC_LABELS[omc]||omc.toUpperCase();return '<span style="font-size:9px;font-weight:800;padding:1px 7px;border-radius:4px;background:'+col+'22;color:'+col+';border:1px solid '+col+'44">'+lbl+'</span>';})()}
                     <span style="font-size:10px;color:var(--text-3)">${t.location||''} ${isActive ? '' : '· <span style="color:var(--red);font-weight:600">INACTIVE</span>'}</span>
                   </div>
                 </div>

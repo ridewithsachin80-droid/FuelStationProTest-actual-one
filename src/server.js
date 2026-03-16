@@ -605,11 +605,19 @@ async function startServer() {
   // "SELECT...RETURNING id" which is invalid PostgreSQL syntax.
   const listTenantsPublic = async (req, res) => {
     try {
-      const result = await pool.query(
-        'SELECT id, name, location, owner_name, phone, icon, color, color_light, active, station_code, omc FROM tenants ORDER BY name'
-      );
-      // BUG-A FIX: Normalize snake_case DB columns → camelCase expected by multitenant.js
-      // color_light → colorLight, station_code → stationCode, owner_name → ownerName
+      // Try with omc column first; fall back gracefully if column not yet migrated
+      let result;
+      try {
+        result = await pool.query(
+          'SELECT id, name, location, owner_name, phone, icon, color, color_light, active, station_code, omc FROM tenants ORDER BY name'
+        );
+      } catch(colErr) {
+        // omc column may not exist on older deployments — retry without it
+        console.warn('[Tenants] omc column missing, falling back:', colErr.message.slice(0,60));
+        result = await pool.query(
+          'SELECT id, name, location, owner_name, phone, icon, color, color_light, active, station_code FROM tenants ORDER BY name'
+        );
+      }
       const rows = result.rows.map(t => ({
         id:          t.id,
         name:        t.name,
@@ -618,7 +626,7 @@ async function startServer() {
         phone:       t.phone || '',
         icon:        t.icon,
         color:       t.color,
-        colorLight:  t.color_light,   // multitenant.js uses t.colorLight for gradient
+        colorLight:  t.color_light,
         active:      t.active,
         stationCode: t.station_code || '',
         omc:         t.omc || 'iocl',

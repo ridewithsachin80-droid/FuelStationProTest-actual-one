@@ -178,7 +178,17 @@
         await TenantAPI.create({ name, location, ownerName, phone, icon, omc, adminUser, adminPass });
         if (typeof mt_toast === 'function') mt_toast(name + ' created!', 'success');
       }
-      await mt_getTenants_async();
+      // Fetch fresh list from server (includes updated omc field)
+      const freshTenants = await mt_getTenants_async();
+      // Patch any tenant in the list that is missing omc — defensive for stale cache
+      if (Array.isArray(freshTenants)) {
+        freshTenants.forEach(function(t) {
+          if (!t.omc) t.omc = 'iocl';
+          // If this is the station we just saved, force its omc to what the user selected
+          if (isEdit && String(t.id) === String(id)) t.omc = omc;
+        });
+        localStorage.setItem('fb_tenants', JSON.stringify(freshTenants));
+      }
       if (typeof mt_showSelector === 'function') mt_showSelector();
     } catch (e) {
       if (typeof mt_toast === 'function') mt_toast(e.message || 'Failed to save', 'error');
