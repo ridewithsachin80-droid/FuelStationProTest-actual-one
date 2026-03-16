@@ -6925,20 +6925,46 @@ function _pumpForPut(p) {
 function _tankChartType(tank) {
   if (!tank) return null;
   const cap = parseInt(tank.capacity);
-  if (cap === 10000) return '10K';
-  if (cap === 20000) return '20K';
+  const omc = (APP?.tenant?.omc || 'iocl').toLowerCase();
+  if (cap === 10000) return omc + '_10K';
+  if (cap === 20000) return omc + '_20K';
   return null;
 }
 
 function _chartLabel(type) {
-  if (type === '10K') return '📊 IOCL 10,000L Chart (1–194 cm)';
-  if (type === '20K') return '📊 IOCL 20,000L Chart (1–210 cm)';
+  if (!type) return null;
+  const OMC_NAMES = { iocl:'IOCL', bpcl:'BPCL', hpcl:'HPCL', mrpl:'MRPL', private:'Custom' };
+  const DIP_TABLES = {
+    iocl_10K: typeof IOCL_DIP_10K !== 'undefined' && IOCL_DIP_10K,
+    iocl_20K: typeof IOCL_DIP_20K !== 'undefined' && IOCL_DIP_20K,
+    bpcl_10K: typeof BPCL_DIP_10K !== 'undefined' && BPCL_DIP_10K,
+    bpcl_20K: typeof BPCL_DIP_20K !== 'undefined' && BPCL_DIP_20K,
+    hpcl_10K: typeof HPCL_DIP_10K !== 'undefined' && HPCL_DIP_10K,
+    hpcl_20K: typeof HPCL_DIP_20K !== 'undefined' && HPCL_DIP_20K,
+    mrpl_10K: typeof MRPL_DIP_10K !== 'undefined' && MRPL_DIP_10K,
+    mrpl_20K: typeof MRPL_DIP_20K !== 'undefined' && MRPL_DIP_20K,
+  };
+  const key   = type.toLowerCase();       // e.g. 'bpcl_10k'
+  const parts = key.split('_');
+  const omcId = parts[0];
+  const size  = parts[1] === '10k' ? '10,000L' : '20,000L';
+  const cm    = parts[1] === '10k' ? '1–194 cm' : '1–210 cm';
+  const omcName = OMC_NAMES[omcId] || omcId.toUpperCase();
+  const hasTable = DIP_TABLES[key];
+  if (hasTable) {
+    return '📊 ' + omcName + ' ' + size + ' Chart (' + cm + ')';
+  } else if (omcId !== 'iocl') {
+    // Fallback to IOCL — show warning
+    return '⚠ ' + omcName + ' chart pending — using IOCL chart as fallback (' + cm + ')';
+  }
   return null;
 }
 
 function _cmRange(type) {
-  if (type === '10K') return { min: 1, max: 194, placeholder: 'e.g. 87' };
-  if (type === '20K') return { min: 1, max: 210, placeholder: 'e.g. 105' };
+  if (!type) return null;
+  const k = type.toLowerCase();
+  if (k.endsWith('_10k') || k === '10k') return { min: 1, max: 194, placeholder: 'e.g. 87' };
+  if (k.endsWith('_20k') || k === '20k') return { min: 1, max: 210, placeholder: 'e.g. 105' };
   return null;
 }
 
@@ -7080,7 +7106,11 @@ function updateDipPreview() {
 
   if (ct === '10K') {
     if (cm < 1 || cm > 194) { preview.style.display = 'none'; return; }
-    row = IOCL_DIP_10K[cm];
+    const _dipTable10 = (typeof BPCL_DIP_10K !== 'undefined' && BPCL_DIP_10K && APP?.tenant?.omc === 'bpcl') ? BPCL_DIP_10K
+                      : (typeof HPCL_DIP_10K !== 'undefined' && HPCL_DIP_10K && APP?.tenant?.omc === 'hpcl') ? HPCL_DIP_10K
+                      : (typeof MRPL_DIP_10K !== 'undefined' && MRPL_DIP_10K && APP?.tenant?.omc === 'mrpl') ? MRPL_DIP_10K
+                      : IOCL_DIP_10K;
+    row = _dipTable10[cm];
   } else if (ct === '20K') {
     // Show below-range notice if cm < 127
     if (cm < IOCL_20K_MIN_CM) {
@@ -7088,7 +7118,11 @@ function updateDipPreview() {
       return;
     }
     if (cm > IOCL_20K_MAX_CM) { preview.style.display = 'none'; return; }
-    row = IOCL_DIP_20K[cm];
+    const _dipTable20 = (typeof BPCL_DIP_20K !== 'undefined' && BPCL_DIP_20K && APP?.tenant?.omc === 'bpcl') ? BPCL_DIP_20K
+                      : (typeof HPCL_DIP_20K !== 'undefined' && HPCL_DIP_20K && APP?.tenant?.omc === 'hpcl') ? HPCL_DIP_20K
+                      : (typeof MRPL_DIP_20K !== 'undefined' && MRPL_DIP_20K && APP?.tenant?.omc === 'mrpl') ? MRPL_DIP_20K
+                      : IOCL_DIP_20K;
+    row = _dipTable20[cm];
   }
 
   if (!row) { preview.style.display = 'none'; return; }

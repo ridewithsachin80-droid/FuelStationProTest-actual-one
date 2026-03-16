@@ -678,6 +678,55 @@ const IOCL_DIP_20K = {
 const IOCL_20K_MIN_CM = 1;
 const IOCL_20K_MAX_CM = 210;
 
+
+// ══════════════════════════════════════════════════════════════════════════════
+// OMC DIP CHART TABLES — BPCL / HPCL / MRPL
+// ══════════════════════════════════════════════════════════════════════════════
+//
+// STATUS: Placeholder — awaiting official booklets from each OMC.
+//
+// HOW TO ADD DIP CHARTS WHEN YOU GET THE BOOKLETS:
+// ─────────────────────────────────────────────────
+// 1. Obtain the official dip chart booklet from the OMC dealer or regional office.
+//    Each booklet has a table with columns: Depth (cm), Volume (L), Diff per mm.
+//
+// 2. Copy the format exactly from IOCL_DIP_10K above:
+//       BPCL_DIP_10K = {
+//         1:   { vol: XX.XX, diff: X.XX },
+//         2:   { vol: XX.XX, diff: X.XX },
+//         ...
+//         194: { vol: XXXXX.XX, diff: X.XX },
+//       };
+//
+// 3. Add 4 tables total (one per OMC per tank size):
+//       BPCL_DIP_10K, BPCL_DIP_20K
+//       HPCL_DIP_10K, HPCL_DIP_20K
+//       MRPL_DIP_10K, MRPL_DIP_20K
+//    (MRPL often uses the same chart as HPCL — verify from booklet)
+//
+// 4. Update getDipChart() and ioclDipToLiters*() below — they already check
+//    for OMC and will use these tables automatically once they are filled.
+//
+// 5. The dip modal will show the correct chart name badge automatically:
+//       BPCL station → "📊 BPCL 10,000L Chart"
+//       HPCL station → "📊 HPCL 10,000L Chart"
+//
+// Until these tables are filled, all OMCs fall back to IOCL charts
+// and show a "⚠ Using IOCL chart as fallback" warning in the dip modal.
+// ══════════════════════════════════════════════════════════════════════════════
+
+// BPCL DIP CHARTS — replace null with data from BPCL official booklet
+const BPCL_DIP_10K = null; // TODO: enter from BPCL 10,000L dip chart booklet
+const BPCL_DIP_20K = null; // TODO: enter from BPCL 20,000L dip chart booklet
+
+// HPCL DIP CHARTS — replace null with data from HPCL official booklet
+const HPCL_DIP_10K = null; // TODO: enter from HPCL 10,000L dip chart booklet
+const HPCL_DIP_20K = null; // TODO: enter from HPCL 20,000L dip chart booklet
+
+// MRPL DIP CHARTS — often same as HPCL, verify from booklet before copying
+const MRPL_DIP_10K = null; // TODO: enter from MRPL 10,000L dip chart booklet
+const MRPL_DIP_20K = null; // TODO: enter from MRPL 20,000L dip chart booklet
+
 function ioclDipToLiters20K(dipCm, dipMm) {
   dipMm = Math.max(0, Math.min(9, Math.round(dipMm)));
   if (dipCm < IOCL_20K_MIN_CM) return null; // below chart range
@@ -691,8 +740,10 @@ function ioclDipToLiters20K(dipCm, dipMm) {
 function getDipChart(tank) {
   if (!tank) return null;
   const cap = Number(tank.capacity);
-  if (cap === 10000) return '10K';
-  if (cap === 20000) return '20K';
+  // Read OMC from APP global — set when tenant is loaded
+  const omc = (typeof APP !== 'undefined' && APP.tenant?.omc) ? APP.tenant.omc.toLowerCase() : 'iocl';
+  if (cap === 10000) return omc + '_10K';
+  if (cap === 20000) return omc + '_20K';
   return null;
 }
 

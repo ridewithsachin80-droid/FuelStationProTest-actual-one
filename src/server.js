@@ -606,7 +606,7 @@ async function startServer() {
   const listTenantsPublic = async (req, res) => {
     try {
       const result = await pool.query(
-        'SELECT id, name, location, owner_name, phone, icon, color, color_light, active, station_code FROM tenants ORDER BY name'
+        'SELECT id, name, location, owner_name, phone, icon, color, color_light, active, station_code, omc FROM tenants ORDER BY name'
       );
       // BUG-A FIX: Normalize snake_case DB columns → camelCase expected by multitenant.js
       // color_light → colorLight, station_code → stationCode, owner_name → ownerName
@@ -621,6 +621,7 @@ async function startServer() {
         colorLight:  t.color_light,   // multitenant.js uses t.colorLight for gradient
         active:      t.active,
         stationCode: t.station_code || '',
+        omc:         t.omc || 'iocl',
       }));
       res.json(rows);
     } catch (e) {
@@ -848,14 +849,16 @@ async function startServer() {
 
   // POST create tenant
   app.post('/api/data/tenants', authMiddleware(db), reqRole('super'), async (req, res) => {
-    const { id, name, location, ownerName, phone, icon, color, colorLight, stationCode, adminUser, adminPass } = req.body;
+    const { id, name, location, ownerName, phone, icon, color, colorLight, stationCode,
+            omc, adminUser, adminPass } = req.body;
     if (!name || name.length < 2) return res.status(400).json({ error: 'Station name required' });
     try {
-      const tenantId = id || ('stn_' + Date.now());
-      const existing = await db.prepare('SELECT id FROM tenants WHERE name = $1').get(name);
+      const tenantId  = id || ('stn_' + Date.now());
+      const omcValue  = (omc || 'iocl').toLowerCase();
+      const existing  = await db.prepare('SELECT id FROM tenants WHERE name = $1').get(name);
       if (existing) return res.status(409).json({ error: 'Station name already exists' });
-      await db.prepare('INSERT INTO tenants (id, name, location, owner_name, phone, icon, color, color_light, station_code, active) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)')
-        .run(tenantId, name, location||'', ownerName||'', phone||'', icon||'⛽', color||'#d4940f', colorLight||'#f0b429', stationCode||'', 1);
+      await db.prepare('INSERT INTO tenants (id, name, location, owner_name, phone, icon, color, color_light, station_code, omc, active) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)')
+        .run(tenantId, name, location||'', ownerName||'', phone||'', icon||'⛽', color||'#d4940f', colorLight||'#f0b429', stationCode||'', omcValue, 1);
       if (adminUser && adminPass) {
         try {
           const ownerHash = await hashPw(adminPass);
@@ -864,6 +867,70 @@ async function startServer() {
         } catch (e2) { console.warn('[Tenant] Admin creation failed:', e2.message); }
       }
       await auLog(req, 'CREATE_TENANT', 'tenants', tenantId, name);
+
+      // ── Auto-seed lube catalog based on OMC ────────────────────────────────
+      // Pre-loads the correct brand's products (SERVO/MAK/HP/APSARA) into the
+      // station's lubes_products table with price=0 and stock=0.
+      // Station admin sets prices on first login. HSN codes and GST are pre-filled.
+      const OMC_CATALOGS = {
+        iocl: [
+          { name:'Servo 2T Supreme(JFC) 300×40ml', brand:'Indian Oil / Servo', category:'Engine Oil', unit:'Nos', hsn:'271019', gst_pct:18, sku:'2900125' },
+          { name:'Servo 2T Supreme(JFC) 200×60ml', brand:'Indian Oil / Servo', category:'Engine Oil', unit:'Nos', hsn:'271019', gst_pct:18, sku:'2900145' },
+          { name:'Servo 2T Supreme 600×20ml',      brand:'Indian Oil / Servo', category:'Engine Oil', unit:'Nos', hsn:'271019', gst_pct:18, sku:'2900103' },
+          { name:'Servo Super 20W-40 MG 20×1L',   brand:'Indian Oil / Servo', category:'Engine Oil', unit:'L',   hsn:'271019', gst_pct:18, sku:'7485184' },
+          { name:'Servo Pride TC 15W-40 HDPE 20L', brand:'Indian Oil / Servo', category:'Engine Oil', unit:'L',   hsn:'271019', gst_pct:18, sku:'7556184' },
+          { name:'IOCL Clear Blue 5 Ltr',          brand:'IOCL',               category:'Coolant',    unit:'Nos', hsn:'31021000', gst_pct:18, sku:'' },
+          { name:'IOCL Clear Blue 10 Ltr',         brand:'IOCL',               category:'Coolant',    unit:'Nos', hsn:'31021000', gst_pct:18, sku:'' },
+          { name:'IOCL Clear Blue 20 Ltr',         brand:'IOCL',               category:'Coolant',    unit:'Nos', hsn:'31021000', gst_pct:18, sku:'' },
+          { name:'Servo Gear MP80 EP 90',          brand:'Indian Oil / Servo', category:'Gear Oil',   unit:'L',   hsn:'271019', gst_pct:18, sku:'' },
+          { name:'Servo Brake Fluid FL3',          brand:'Indian Oil / Servo', category:'Brake Fluid',unit:'Nos', hsn:'271019', gst_pct:18, sku:'' },
+        ],
+        bpcl: [
+          { name:'MAK 2T Extra',             brand:'BPCL / MAK', category:'Engine Oil', unit:'Nos', hsn:'271019', gst_pct:18, sku:'' },
+          { name:'MAK Cruise 20W-40 1L',     brand:'BPCL / MAK', category:'Engine Oil', unit:'L',   hsn:'271019', gst_pct:18, sku:'' },
+          { name:'MAK Activ 4T 10W-30',      brand:'BPCL / MAK', category:'Engine Oil', unit:'L',   hsn:'271019', gst_pct:18, sku:'' },
+          { name:'MAK Activ 4T 20W-40',      brand:'BPCL / MAK', category:'Engine Oil', unit:'L',   hsn:'271019', gst_pct:18, sku:'' },
+          { name:'MAK Protec 4T 10W-40',     brand:'BPCL / MAK', category:'Engine Oil', unit:'L',   hsn:'271019', gst_pct:18, sku:'' },
+          { name:'MAK Coolant EG 1L',        brand:'BPCL / MAK', category:'Coolant',    unit:'Nos', hsn:'38200000', gst_pct:18, sku:'' },
+          { name:'MAK Gear EP90 1L',         brand:'BPCL / MAK', category:'Gear Oil',   unit:'L',   hsn:'271019', gst_pct:18, sku:'' },
+          { name:'MAK Brake Fluid DOT3 500ml',brand:'BPCL / MAK',category:'Brake Fluid',unit:'Nos', hsn:'271019', gst_pct:18, sku:'' },
+          { name:'MAK Hydraulic 46 1L',      brand:'BPCL / MAK', category:'Hydraulic Oil',unit:'L', hsn:'271019', gst_pct:18, sku:'' },
+        ],
+        hpcl: [
+          { name:'HP 2T Plus',               brand:'HPCL / HP Lubricants', category:'Engine Oil', unit:'Nos', hsn:'271019', gst_pct:18, sku:'' },
+          { name:'HP Milcy 4T 20W-40 1L',   brand:'HPCL / HP Lubricants', category:'Engine Oil', unit:'L',   hsn:'271019', gst_pct:18, sku:'' },
+          { name:'HP Racer4 10W-40 1L',     brand:'HPCL / HP Lubricants', category:'Engine Oil', unit:'L',   hsn:'271019', gst_pct:18, sku:'' },
+          { name:'HP Milcy 4T 10W-30 1L',   brand:'HPCL / HP Lubricants', category:'Engine Oil', unit:'L',   hsn:'271019', gst_pct:18, sku:'' },
+          { name:'HP Coolant 1L',            brand:'HPCL / HP Lubricants', category:'Coolant',    unit:'Nos', hsn:'38200000', gst_pct:18, sku:'' },
+          { name:'HP Gear EP90 1L',          brand:'HPCL / HP Lubricants', category:'Gear Oil',   unit:'L',   hsn:'271019', gst_pct:18, sku:'' },
+          { name:'HP Brake Fluid DOT3',      brand:'HPCL / HP Lubricants', category:'Brake Fluid',unit:'Nos', hsn:'271019', gst_pct:18, sku:'' },
+          { name:'HP Enklo 46 Hydraulic 1L', brand:'HPCL / HP Lubricants', category:'Hydraulic Oil',unit:'L',hsn:'271019', gst_pct:18, sku:'' },
+        ],
+        mrpl: [
+          { name:'Apsara 2T',                brand:'MRPL / Apsara', category:'Engine Oil', unit:'Nos', hsn:'271019', gst_pct:18, sku:'' },
+          { name:'Apsara 4T 20W-40 1L',     brand:'MRPL / Apsara', category:'Engine Oil', unit:'L',   hsn:'271019', gst_pct:18, sku:'' },
+          { name:'Apsara 4T 10W-30 1L',     brand:'MRPL / Apsara', category:'Engine Oil', unit:'L',   hsn:'271019', gst_pct:18, sku:'' },
+          { name:'Apsara Gear Oil EP90 1L',  brand:'MRPL / Apsara', category:'Gear Oil',   unit:'L',   hsn:'271019', gst_pct:18, sku:'' },
+          { name:'Apsara Hydraulic 46 1L',   brand:'MRPL / Apsara', category:'Hydraulic Oil',unit:'L',hsn:'271019', gst_pct:18, sku:'' },
+          { name:'Apsara Brake Fluid DOT3',  brand:'MRPL / Apsara', category:'Brake Fluid',unit:'Nos', hsn:'271019', gst_pct:18, sku:'' },
+        ],
+      };
+      const catalog = OMC_CATALOGS[omcValue] || OMC_CATALOGS.iocl;
+      try {
+        for (const prod of catalog) {
+          await pool.query(
+            `INSERT INTO lubes_products
+               (tenant_id, name, brand, category, unit, cost_price, sell_price,
+                stock, min_stock, hsn_code, gst_pct, data_json)
+             VALUES ($1,$2,$3,$4,$5,0,0,0,5,$6,$7,$8)
+             ON CONFLICT DO NOTHING`,
+            [tenantId, prod.name, prod.brand, prod.category, prod.unit,
+             prod.hsn, prod.gst_pct,
+             JSON.stringify({ sku: prod.sku, source: 'omc_template', omc: omcValue })]
+          );
+        }
+        console.log(`[Tenant] Seeded ${catalog.length} ${omcValue.toUpperCase()} lube products for ${tenantId}`);
+      } catch(ce) { console.warn('[Tenant] Catalog seed failed:', ce.message); }
 
       // Auto-create subscription record from request body if provided
       const { trialDays, trialEnabled, selectedPlan, graceDays, ownerWA,
@@ -912,10 +979,10 @@ async function startServer() {
 
   // PUT update tenant
   app.put('/api/data/tenants/:id', authMiddleware(db), reqRole('super'), async (req, res) => {
-    const { name, location, ownerName, phone, icon, active, stationCode } = req.body;
+    const { name, location, ownerName, phone, icon, active, stationCode, omc } = req.body;
     try {
-      await db.prepare('UPDATE tenants SET name=COALESCE($1,name), location=COALESCE($2,location), owner_name=COALESCE($3,owner_name), phone=COALESCE($4,phone), icon=COALESCE($5,icon), active=COALESCE($6,active), station_code=COALESCE($7,station_code), updated_at=NOW() WHERE id=$8')
-        .run(name, location, ownerName, phone, icon, active !== undefined ? (active ? 1 : 0) : null, stationCode, req.params.id);
+      await db.prepare('UPDATE tenants SET name=COALESCE($1,name), location=COALESCE($2,location), owner_name=COALESCE($3,owner_name), phone=COALESCE($4,phone), icon=COALESCE($5,icon), active=COALESCE($6,active), station_code=COALESCE($7,station_code), omc=COALESCE($9,omc), updated_at=NOW() WHERE id=$8')
+        .run(name, location, ownerName, phone, icon, active !== undefined ? (active ? 1 : 0) : null, stationCode, req.params.id, omc||null);
       res.json({ success: true });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });

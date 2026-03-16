@@ -249,6 +249,7 @@ async function initDatabase() {
       color TEXT DEFAULT '#d4940f',
       color_light TEXT DEFAULT '#f0b429',
       station_code TEXT DEFAULT '',
+      omc TEXT DEFAULT 'iocl',
       active INTEGER DEFAULT 1,
       created_at TIMESTAMPTZ DEFAULT NOW(),
       updated_at TIMESTAMPTZ DEFAULT NOW(),
@@ -646,6 +647,18 @@ async function initDatabase() {
   }
 
   console.log('[Schema] Database schema initialized successfully');
+
+  // ── Non-breaking column additions for existing deployments ─────────────────
+  // These ADD COLUMN IF NOT EXISTS statements are safe to run repeatedly.
+  const safeAlters = [
+    "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS omc TEXT DEFAULT 'iocl'",
+  ];
+  for (const sql of safeAlters) {
+    try { await pool.query(sql); } catch(e) {
+      console.warn('[Schema] Safe alter skipped:', e.message.slice(0, 80));
+    }
+  }
+
   return new Database(pool);
 }
 
