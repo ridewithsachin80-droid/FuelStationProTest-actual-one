@@ -592,7 +592,11 @@ async function mt_openBillingDashboard() {
       <div style="display:flex;align-items:center;gap:12px;margin-bottom:24px;position:sticky;top:0;background:var(--bg-0);padding:12px 0;z-index:1">
         <button onclick="document.getElementById('billingOverlay').remove()" style="background:var(--bg-2);border:1px solid var(--border);color:var(--text-2);border-radius:8px;padding:8px 14px;cursor:pointer;font-size:13px;font-weight:600">← Back</button>
         <h2 style="font-size:20px;font-weight:800;color:var(--text-0)">💳 Subscriptions & Billing</h2>
-        <button onclick="_billingCache=null;mt_loadBillingData()" style="margin-left:auto;background:var(--bg-2);border:1px solid var(--border);color:var(--text-2);border-radius:8px;padding:6px 12px;cursor:pointer;font-size:12px">🔄 Refresh</button>
+        <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
+          <button id="bill-tab-stations" onclick="mt_billingTab('stations')" style="background:rgba(212,148,15,0.12);border:1px solid var(--accent);color:var(--accent-light);border-radius:8px;padding:6px 14px;cursor:pointer;font-size:12px;font-weight:700">💳 Stations</button>
+          <button id="bill-tab-reports" onclick="mt_billingTab('reports')" style="background:var(--bg-2);border:1px solid var(--border);color:var(--text-2);border-radius:8px;padding:6px 14px;cursor:pointer;font-size:12px;font-weight:700">📊 Reports</button>
+          <button onclick="_billingCache=null;mt_loadBillingData()" id="bill-refresh-btn" style="background:var(--bg-2);border:1px solid var(--border);color:var(--text-2);border-radius:8px;padding:6px 12px;cursor:pointer;font-size:12px">🔄</button>
+        </div>
       </div>
       <div id="billingContent" style="text-align:center;padding:60px;color:var(--text-3)">
         <div style="font-size:36px;margin-bottom:12px">⏳</div>
@@ -606,6 +610,250 @@ async function mt_openBillingDashboard() {
 // Store billing data globally so filter buttons can re-render without re-fetching
 var _billingCache = null;
 var _billingFilter = 'all'; // current active filter
+var _billingTab = 'stations'; // 'stations' | 'reports'
+
+function mt_billingTab(tab) {
+  _billingTab = tab;
+  var btnS = document.getElementById('bill-tab-stations');
+  var btnR = document.getElementById('bill-tab-reports');
+  var ACC_ON  = 'background:rgba(212,148,15,0.12);border:1px solid var(--accent);color:var(--accent-light)';
+  var ACC_OFF = 'background:var(--bg-2);border:1px solid var(--border);color:var(--text-2)';
+  if (btnS) btnS.style.cssText = btnS.style.cssText.replace(/background:[^;]+;border:[^;]+;color:[^;]+/, tab==='stations'?ACC_ON:ACC_OFF);
+  if (btnR) btnR.style.cssText = btnR.style.cssText.replace(/background:[^;]+;border:[^;]+;color:[^;]+/, tab==='reports'?ACC_ON:ACC_OFF);
+  var el = document.getElementById('billingContent');
+  if (!el) return;
+  if (tab === 'reports') {
+    mt_renderBillingReports(_billingCache || []);
+  } else {
+    mt_loadBillingData(_billingFilter);
+  }
+}
+
+async function mt_renderBillingReports(subs) {
+  var el = document.getElementById('billingContent');
+  if (!el) return;
+
+  // Fetch ALL payment records for revenue timeline
+  el.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-3)"><div style="font-size:28px">⏳</div><div style="margin-top:8px">Building reports…</div></div>';
+
+  var allPayments = [];
+  try {
+    var token = typeof getAuthToken === 'function' ? getAuthToken() : '';
+    // Fetch payment history for each station in parallel (max 10 concurrent)
+    var payFetches = (subs||[]).map(function(s) {
+      return fetch('/api/subscriptions/' + encodeURIComponent(s.tenant_id) + '/payments',
+        { headers: { 'Authorization': 'Bearer ' + token } })
+        .then(function(r){ return r.ok ? r.json() : []; })
+        .then(function(rows){ return rows.map(function(p){ return Object.assign({}, p, { station_name: s.station_name, location: s.location }); }); })
+        .catch(function(){ return []; });
+    });
+    var results = await Promise.all(payFetches);
+    results.forEach(function(r){ allPayments = allPayments.concat(r); });
+    // Sort newest first
+    allPayments.sort(function(a,b){ return (b.payment_date||'').localeCompare(a.payment_date||''); });
+  } catch(e) {}
+
+  var now = new Date();
+  var active   = (subs||[]).filter(function(s){return s.effective_status==='active';});
+  var trial    = (subs||[]).filter(function(s){return s.effective_status==='trial';});
+  var expired  = (subs||[]).filter(function(s){return s.effective_status==='expired'||s.effective_status==='grace';});
+  var expiring30 = (subs||[]).filter(function(s){var dl=s.days_left!==null?s.days_left:(s.trial_days_left||0);return dl>=0&&dl<=30&&s.effective_status!=='expired';});
+
+  var mrr      = active.reduce(function(a,s){return a+(parseFloat(s.price_monthly)||0);},0);
+  var arr      = mrr * 12;
+  var totalCollected = (subs||[]).reduce(function(a,s){return a+(parseFloat(s.total_paid)||0);},0);
+  var paidCount = (subs||[]).filter(function(s){return parseFloat(s.total_paid)>0;}).length;
+  var collectionRate = subs&&subs.length ? Math.round(paidCount/subs.length*100) : 0;
+
+  // Plan distribution
+  var planCounts = {};
+  (subs||[]).forEach(function(s){ var p=s.plan||'trial'; planCounts[p]=(planCounts[p]||0)+1; });
+  var planColors = {trial:'#60a5fa',monthly:'#f59e0b',quarterly:'#22c55e',halfyearly:'#a855f7',yearly:'#ef4444'};
+  var planLabels = {trial:'Trial',monthly:'Monthly',quarterly:'Quarterly',halfyearly:'Half-Yearly',yearly:'Yearly'};
+
+  // Monthly collections (last 6 months)
+  var monthlyMap = {};
+  allPayments.forEach(function(p) {
+    var d = (p.payment_date||'').slice(0,7); // YYYY-MM
+    if (!d) return;
+    monthlyMap[d] = (monthlyMap[d]||0) + (parseFloat(p.amount)||0);
+  });
+  var months6 = [];
+  for (var i=5; i>=0; i--) {
+    var d2 = new Date(now.getFullYear(), now.getMonth()-i, 1);
+    var key = d2.getFullYear()+'-'+String(d2.getMonth()+1).padStart(2,'0');
+    var lbl = d2.toLocaleString('en-IN',{month:'short'})+" '"+String(d2.getFullYear()).slice(2);
+    months6.push({key:key, label:lbl, amount:monthlyMap[key]||0});
+  }
+  var maxMonthly = Math.max.apply(null, months6.map(function(m){return m.amount;})) || 1;
+
+  // Recent 15 payments
+  var recent = allPayments.slice(0,15);
+
+  // Expiry pipeline (next 60 days)
+  var pipeline = (subs||[])
+    .filter(function(s){var dl=s.days_left!==null?s.days_left:(s.trial_days_left||0);return dl>=0&&dl<=60&&s.effective_status!=='expired';})
+    .sort(function(a,b){var da=a.days_left!==null?a.days_left:(a.trial_days_left||999);var db=b.days_left!==null?b.days_left:(b.trial_days_left||999);return da-db;});
+
+  function cur(n){ return '₹'+(n||0).toLocaleString('en-IN',{maximumFractionDigits:0}); }
+  function card(content, extra) { return '<div style="background:var(--bg-2);border:1px solid var(--border);border-radius:10px;padding:16px;'+(extra||'')+'">'+content+'</div>'; }
+  function secHead(icon,title) { return '<div style="font-size:14px;font-weight:800;color:var(--text-0);margin-bottom:14px">'+icon+' '+title+'</div>'; }
+
+  // ── KPI row ──────────────────────────────────────────────────────────────
+  var kpiRow = '<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:14px">'
+    + '<div style="background:var(--bg-2);border:1px solid var(--border);border-radius:10px;padding:14px">'
+      + '<div style="font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:1px">MRR</div>'
+      + '<div style="font-size:22px;font-weight:800;color:#22c55e;margin:4px 0">'+cur(mrr)+'</div>'
+      + '<div style="font-size:11px;color:var(--text-3)">ARR: <strong style="color:var(--text-1)">'+cur(arr)+'</strong></div>'
+    + '</div>'
+    + '<div style="background:var(--bg-2);border:1px solid var(--border);border-radius:10px;padding:14px">'
+      + '<div style="font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:1px">Total Collected</div>'
+      + '<div style="font-size:22px;font-weight:800;color:var(--accent-light);margin:4px 0">'+cur(totalCollected)+'</div>'
+      + '<div style="font-size:11px;color:var(--text-3)">Collection rate: <strong style="color:'+(collectionRate>=80?'#22c55e':collectionRate>=50?'#f59e0b':'#ef4444')+'">'+collectionRate+'%</strong></div>'
+    + '</div>'
+    + '<div style="background:var(--bg-2);border:1px solid var(--border);border-radius:10px;padding:14px">'
+      + '<div style="font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:1px">Active Stations</div>'
+      + '<div style="font-size:22px;font-weight:800;color:#22c55e;margin:4px 0">'+active.length+'</div>'
+      + '<div style="font-size:11px;color:var(--text-3)">of '+(subs||[]).length+' total stations</div>'
+    + '</div>'
+    + '<div style="background:var(--bg-2);border:1px solid var(--border);border-radius:10px;padding:14px">'
+      + '<div style="font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:1px">Renewals Due</div>'
+      + '<div style="font-size:22px;font-weight:800;color:'+(expiring30.length>0?'#f97316':'var(--text-0)')+';margin:4px 0">'+expiring30.length+'</div>'
+      + '<div style="font-size:11px;color:var(--text-3)">expiring within 30 days</div>'
+    + '</div>'
+    + '</div>';
+
+  // ── Plan distribution bar ─────────────────────────────────────────────────
+  var planTotal = (subs||[]).length || 1;
+  var planBars = Object.keys(planCounts).map(function(p) {
+    var pct = Math.round(planCounts[p]/planTotal*100);
+    return '<div style="margin-bottom:8px">'
+      + '<div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:3px">'
+        + '<span style="color:var(--text-1);font-weight:600">'+(planLabels[p]||p)+'</span>'
+        + '<span style="color:var(--text-3)">'+planCounts[p]+' &nbsp;·&nbsp; '+pct+'%</span>'
+      + '</div>'
+      + '<div style="background:var(--bg-0);border-radius:4px;height:8px;overflow:hidden">'
+        + '<div style="background:'+(planColors[p]||'#888')+';width:'+pct+'%;height:100%;border-radius:4px;transition:width 0.6s"></div>'
+      + '</div>'
+    + '</div>';
+  }).join('');
+
+  // ── Monthly collections bar chart ─────────────────────────────────────────
+  var barMaxH = 80;
+  var monthBars = months6.map(function(m) {
+    var h = Math.max(4, Math.round((m.amount/maxMonthly)*barMaxH));
+    var isCurrentMonth = m.key === (now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0'));
+    return '<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:4px">'
+      + '<div style="font-size:10px;color:var(--text-3);font-family:monospace">'+(m.amount>0?cur(m.amount):'—')+'</div>'
+      + '<div style="width:100%;display:flex;align-items:flex-end;height:'+barMaxH+'px">'
+        + '<div style="width:100%;height:'+h+'px;background:'+(isCurrentMonth?'var(--accent)':'rgba(212,148,15,0.4)')+';border-radius:3px 3px 0 0"></div>'
+      + '</div>'
+      + '<div style="font-size:10px;color:'+(isCurrentMonth?'var(--accent-light)':'var(--text-3)')+';font-weight:'+(isCurrentMonth?'700':'400')+'">'+m.label+'</div>'
+    + '</div>';
+  }).join('');
+
+  // ── Expiry pipeline ────────────────────────────────────────────────────────
+  var pipelineRows = pipeline.length > 0 ? pipeline.map(function(s) {
+    var dl = s.days_left!==null?s.days_left:(s.trial_days_left||0);
+    var urgColor = dl<=7?'#ef4444':dl<=30?'#f97316':'#f59e0b';
+    var statusBg = s.effective_status==='trial'?'#3b82f622':'#22c55e22';
+    var statusC  = s.effective_status==='trial'?'#60a5fa':'#22c55e';
+    return '<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--border-light)">'
+      + '<div style="flex:1;min-width:0">'
+        + '<div style="font-size:13px;font-weight:700;color:var(--text-0);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+s.station_name+'</div>'
+        + '<div style="font-size:11px;color:var(--text-3)">'+s.location+'</div>'
+      + '</div>'
+      + '<div style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:20px;background:'+statusBg+';color:'+statusC+';white-space:nowrap">'+s.effective_status+'</div>'
+      + '<div style="text-align:right;flex-shrink:0">'
+        + '<div style="font-size:13px;font-weight:800;color:'+urgColor+'">'+dl+'d</div>'
+        + '<div style="font-size:10px;color:var(--text-3)">remaining</div>'
+      + '</div>'
+    + '</div>';
+  }).join('') : '<div style="text-align:center;padding:20px;color:var(--text-3);font-size:13px">✅ No renewals due in the next 60 days</div>';
+
+  // ── Recent payments table ─────────────────────────────────────────────────
+  var paymentRows = recent.length > 0 ? recent.map(function(p) {
+    var modeColor = {upi:'#60a5fa',cash:'#22c55e',bank:'#a855f7',cheque:'#f59e0b'}[p.payment_mode]||'#888';
+    var planLabel = (planLabels[p.plan]||p.plan||'—');
+    return '<tr>'
+      + '<td style="padding:9px 10px;font-size:12px;color:var(--text-2)">'+(p.payment_date||'').slice(0,10)+'</td>'
+      + '<td style="padding:9px 10px;font-size:12px;font-weight:700;color:var(--text-0);max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+p.station_name+'</td>'
+      + '<td style="padding:9px 10px;font-size:12px;color:var(--text-2)">'+planLabel+'</td>'
+      + '<td style="padding:9px 10px;font-size:12px;font-weight:800;color:#22c55e;text-align:right">'+cur(p.amount)+'</td>'
+      + '<td style="padding:9px 10px;text-align:center"><span style="font-size:10px;font-weight:700;padding:2px 7px;border-radius:20px;background:'+modeColor+'22;color:'+modeColor+'">'+(p.payment_mode||'—').toUpperCase()+'</span></td>'
+      + '<td style="padding:9px 10px;font-size:11px;color:var(--text-3);max-width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+(p.reference||'—')+'</td>'
+    + '</tr>';
+  }).join('') : '<tr><td colspan="6" style="text-align:center;padding:24px;color:var(--text-3)">No payments recorded yet</td></tr>';
+
+  // ── Station health table ──────────────────────────────────────────────────
+  var healthRows = (subs||[]).map(function(s) {
+    var statusColors = {active:'#22c55e',trial:'#60a5fa',grace:'#f97316',expired:'#ef4444',suspended:'#9ca3af'};
+    var sc = statusColors[s.effective_status]||'#888';
+    var dl = s.days_left!==null?s.days_left:(s.trial_days_left||0);
+    var dlStr = dl!==null ? (dl>0?dl+'d':'Exp') : '—';
+    var dlColor = dl<=0?'#ef4444':dl<=7?'#ef4444':dl<=30?'#f97316':'var(--text-2)';
+    return '<tr>'
+      + '<td style="padding:8px 10px;font-size:12px;font-weight:700;color:var(--text-0)">'+s.station_name+'</td>'
+      + '<td style="padding:8px 10px"><span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:20px;background:'+sc+'22;color:'+sc+'">'+s.effective_status+'</span></td>'
+      + '<td style="padding:8px 10px;font-size:12px;color:var(--text-2)">'+(planLabels[s.plan]||s.plan||'—')+'</td>'
+      + '<td style="padding:8px 10px;font-size:12px;font-weight:700;color:'+dlColor+';text-align:center">'+dlStr+'</td>'
+      + '<td style="padding:8px 10px;font-size:12px;color:#22c55e;text-align:right;font-family:monospace">'+cur(s.price_monthly||0)+'/mo</td>'
+      + '<td style="padding:8px 10px;font-size:12px;color:var(--accent-light);text-align:right;font-family:monospace">'+cur(s.total_paid||0)+'</td>'
+    + '</tr>';
+  }).join('');
+
+  function thStyle(){ return 'padding:8px 10px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text-3);border-bottom:1px solid var(--border);text-align:left;white-space:nowrap;background:var(--bg-3)'; }
+  function thR(){ return thStyle().replace('text-align:left','text-align:right'); }
+  function thC(){ return thStyle().replace('text-align:left','text-align:center'); }
+
+  el.innerHTML =
+    // KPI summary cards
+    kpiRow
+
+    // Row 1: Plan distribution + Monthly collections
+    + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">'
+      + card(secHead('📋','Plan Distribution') + planBars)
+      + card(secHead('📈','Monthly Collections') + '<div style="display:flex;align-items:flex-end;gap:4px;height:'+barMaxH+'px">'+monthBars+'</div>')
+    + '</div>'
+
+    // Row 2: Expiry pipeline + Station health
+    + '<div style="display:grid;grid-template-columns:1fr;gap:10px;margin-bottom:14px">'
+      + card(secHead('🔔','Renewal Pipeline — Next 60 Days') + pipelineRows)
+    + '</div>'
+
+    // Row 3: Recent payments
+    + card(secHead('💵','Recent Payments') +
+        '<div style="overflow-x:auto">'
+        + '<table style="width:100%;border-collapse:collapse">'
+          + '<thead><tr>'
+            + '<th style="'+thStyle()+'">Date</th>'
+            + '<th style="'+thStyle()+'">Station</th>'
+            + '<th style="'+thStyle()+'">Plan</th>'
+            + '<th style="'+thR()+'">Amount</th>'
+            + '<th style="'+thC()+'">Mode</th>'
+            + '<th style="'+thStyle()+'">Reference</th>'
+          + '</tr></thead>'
+          + '<tbody>'+paymentRows+'</tbody>'
+        + '</table>'
+        + '</div>', 'margin-bottom:14px')
+
+    // Row 4: Full station health matrix
+    + card(secHead('🏪','All Stations Health Matrix') +
+        '<div style="overflow-x:auto">'
+        + '<table style="width:100%;border-collapse:collapse">'
+          + '<thead><tr>'
+            + '<th style="'+thStyle()+'">Station</th>'
+            + '<th style="'+thStyle()+'">Status</th>'
+            + '<th style="'+thStyle()+'">Plan</th>'
+            + '<th style="'+thC()+'">Days Left</th>'
+            + '<th style="'+thR()+'">Rate</th>'
+            + '<th style="'+thR()+'">Collected</th>'
+          + '</tr></thead>'
+          + '<tbody>'+healthRows+'</tbody>'
+        + '</table>'
+        + '</div>');
+}
+
 
 async function mt_loadBillingData(filter) {
   if (filter !== undefined) _billingFilter = filter;
