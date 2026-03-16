@@ -72,6 +72,52 @@ function mt_isSuperLoggedIn() {
 }
 
 // ── Tenant Selector UI ──
+// ── OMC Selector helpers ──────────────────────────────────────────────────
+const _OMC_OPTS = [
+  {id:'iocl',    label:'IOCL',    sub:'Indian Oil',     color:'#ef4444'},
+  {id:'bpcl',    label:'BPCL',    sub:'Bharat Petro',   color:'#3b82f6'},
+  {id:'hpcl',    label:'HPCL',    sub:'Hindustan',      color:'#22c55e'},
+  {id:'mrpl',    label:'MRPL',    sub:'Mangalore',      color:'#f97316'},
+  {id:'private', label:'Private', sub:'Independent',    color:'#9498a5'},
+];
+function mt_omcSelectorHTML(selected) {
+  var cur = selected || 'iocl';
+  var btns = _OMC_OPTS.map(function(o) {
+    var sel  = cur === o.id;
+    var bc   = sel ? o.color : 'var(--border)';
+    var bg   = sel ? o.color + '18' : 'var(--bg-0)';
+    var lc   = sel ? o.color : 'var(--text-2)';
+    return '<label style="flex:1;min-width:52px;cursor:pointer">'
+      + '<input type="radio" name="tOmc" value="' + o.id + '" ' + (sel ? 'checked' : '')
+      + ' style="display:none" onchange="mt_omcSelect(this)">'
+      + '<div data-omc-color="' + o.color + '" class="omc-opt" style="border:2px solid ' + bc + ';background:' + bg + ';border-radius:8px;padding:8px 4px;text-align:center;transition:all 0.15s">'
+      + '<div class="omc-lb" style="font-size:12px;font-weight:800;color:' + lc + '">' + o.label + '</div>'
+      + '<div style="font-size:9px;color:var(--text-3);margin-top:1px">' + o.sub + '</div>'
+      + '</div></label>';
+  }).join('');
+  return '<div class="form-group" style="margin-top:4px">'
+    + '<label class="form-label">Oil Marketing Company (OMC)</label>'
+    + '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">' + btns + '</div></div>';
+}
+function mt_omcSelect(radio) {
+  var row = radio.closest('div[style*="display:flex"]') || radio.closest('.form-group');
+  if (!row) return;
+  row.querySelectorAll('.omc-opt').forEach(function(d) {
+    d.style.borderColor = 'var(--border)';
+    d.style.background  = 'var(--bg-0)';
+    var lb = d.querySelector('.omc-lb');
+    if (lb) lb.style.color = 'var(--text-2)';
+  });
+  var chosen = radio.nextElementSibling;
+  if (chosen) {
+    var col = chosen.getAttribute('data-omc-color') || '#ef4444';
+    chosen.style.borderColor = col;
+    chosen.style.background  = col + '18';
+    var lb = chosen.querySelector('.omc-lb');
+    if (lb) lb.style.color = col;
+  }
+}
+
 async function mt_showSelector() {
   const tenants = mt_getTenants();
   const app = document.getElementById('app');
@@ -262,6 +308,7 @@ function mt_showTenantForm(existing) {
               </select>
             </div>
           </div>
+          ${mt_omcSelectorHTML(existing && existing.omc ? existing.omc : 'iocl')}
           ${!isEdit ? `
           <div style="background:var(--bg-0);border-radius:var(--radius-sm);border:1px solid var(--border-light);padding:14px;margin-top:4px">
             <div style="font-size:11px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px">Admin Credentials for this Station</div>
