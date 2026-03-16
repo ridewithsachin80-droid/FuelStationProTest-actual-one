@@ -576,7 +576,14 @@
       try {
         await TenantAPI.remove(id);
         const active = (typeof mt_getActiveTenant === 'function') ? mt_getActiveTenant() : null;
-        if (active && active.id === id && typeof mt_clearActiveTenant === 'function') mt_clearActiveTenant();
+        if (active && active.id === id) {
+          if (typeof mt_clearActiveTenant === 'function') mt_clearActiveTenant();
+          // FIX: Clear ALL stale data for this station from localStorage.
+          // Otherwise deleted station's employees/data reappear next time any station is opened.
+          try { localStorage.removeItem('fb_data_snapshot'); } catch(e) {}
+          try { localStorage.removeItem('fb_api_cache'); } catch(e) {}
+          try { localStorage.removeItem('fb_emp_pins'); } catch(e) {}
+        }
         await mt_getTenants_async();
         if (typeof mt_toast === 'function') mt_toast('Station deleted', 'success');
         if (typeof mt_showSelector === 'function') mt_showSelector();
@@ -749,6 +756,10 @@
       }
       sessionStorage.removeItem('fb_session');
       clearAuth();
+      // FIX: Clear snapshot on logout so stale data never persists across sessions.
+      try { localStorage.removeItem('fb_data_snapshot'); } catch(e) {}
+      try { localStorage.removeItem('fb_api_cache'); } catch(e) {}
+      try { localStorage.removeItem('fb_emp_pins'); } catch(e) {}
       location.reload();
     };
 
@@ -760,6 +771,12 @@
       if (t.active === false) { if (typeof mt_toast === 'function') mt_toast('This station is inactive', 'error'); return; }
       if (typeof mt_setActiveTenant === 'function') mt_setActiveTenant(t);
       setTenantId(id);
+      // FIX: Clear stale offline snapshot and API cache from the previous station.
+      // Without this, employees/tanks/sales from a deleted or different station
+      // kept appearing because the old snapshot was restored on load.
+      try { localStorage.removeItem('fb_data_snapshot'); } catch(e) {}
+      try { localStorage.removeItem('fb_api_cache'); } catch(e) {}
+      try { localStorage.removeItem('fb_emp_pins'); } catch(e) {}
       window.db = new FuelDB('FuelBunkPro_' + id);
       location.reload();
     };
