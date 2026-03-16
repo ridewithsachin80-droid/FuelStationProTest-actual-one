@@ -1218,7 +1218,7 @@ function renderStaff(D) {
     : window.staffTab === 'allocation'
     ? `<button class="btn btn-ghost btn-sm" onclick="window.allocWeekAnchor=(()=>{const _a=window.allocWeekAnchor?new Date(window.allocWeekAnchor):new Date();_a.setDate(_a.getDate()-7);return _a.toISOString().slice(0,10);})();renderPage()">◀ Prev</button><button class="btn btn-ghost btn-sm" onclick="window.allocWeekAnchor=(()=>{const _a=window.allocWeekAnchor?new Date(window.allocWeekAnchor):new Date();_a.setDate(_a.getDate()+7);return _a.toISOString().slice(0,10);})();renderPage()">Next ▶</button><button class="btn btn-ghost btn-sm" onclick="autoAssignAlloc()">⚡ Auto</button><button class="btn btn-ghost btn-sm" onclick="clearShiftAllocConfirm()">🗑 Clear</button>`
     : window.staffTab === 'attendance'
-    ? `<input type="date" class="form-input" style="padding:6px 12px;font-size:13px;width:160px" value="${window._attDate||(()=>{const _d=new Date();return _d.getFullYear()+'-'+String(_d.getMonth()+1).padStart(2,'0')+'-'+String(_d.getDate()).padStart(2,'0');})()}" onchange="window._attDate=this.value;renderPage()" /><button class="btn btn-accent btn-sm" onclick="attSave()">💾 Save</button><button class="btn btn-ghost btn-sm" onclick="attMarkAllPresent('${window._attDate||(()=>{const _d=new Date();return _d.getFullYear()+'-'+String(_d.getMonth()+1).padStart(2,'0')+'-'+String(_d.getDate()).padStart(2,'0');})()}')">✅ All Present</button>`
+    ? `<input type="date" class="form-input" style="padding:6px 12px;font-size:13px;width:160px" value="${window._attDate||(()=>{const _d=new Date();return _d.getFullYear()+'-'+String(_d.getMonth()+1).padStart(2,'0')+'-'+String(_d.getDate()).padStart(2,'0');})()}" onchange="window._attDate=this.value;renderPage()" /><button class="btn btn-ghost btn-sm" onclick="attMarkAllPresent('${window._attDate||(()=>{const _d=new Date();return _d.getFullYear()+'-'+String(_d.getMonth()+1).padStart(2,'0')+'-'+String(_d.getDate()).padStart(2,'0');})()}')">✅ All Present</button>`
     : window.staffTab === 'roster'
     ? `<button class="btn btn-ghost btn-sm" onclick="rosterNavWeek(-1)">◀ Prev</button><button class="btn btn-ghost btn-sm" onclick="rosterNavWeek(1)">Next ▶</button>${(()=>{const _o=window._rosterWeekOffset||0;const _t=new Date();const _d=_t.getDay()===0?6:_t.getDay()-1;const _w=new Date(_t);_w.setDate(_t.getDate()-_d+_o*7);_w.setHours(0,0,0,0);const _m=new Date(_t);_m.setDate(_t.getDate()-_d);_m.setHours(0,0,0,0);return _w<_m?'':'';})()}`
     : `<button class="btn btn-accent" onclick="openEmployeeModal()">+ Add Employee</button>`;
@@ -2440,8 +2440,8 @@ function renderAttendance(D) {
     <div class="page-hdr"><h3>✅ Attendance</h3>
       <div style="display:flex;gap:8px;align-items:center">
         <input type="date" class="form-input" style="padding:6px 12px;font-size:13px;width:160px" value="${attDate}" onchange="window._attDate=this.value;renderPage()" />
-        <button class="btn btn-accent btn-sm" onclick="attSave()">💾 Save</button>
         <button class="btn btn-ghost btn-sm" onclick="attMarkAllPresent('${dateKey}')">✅ All Present</button>
+        <span id="att-autosave-ind" style="display:none;font-size:11px;font-weight:700;margin-left:4px"></span>
       </div>
     </div>
 
@@ -2482,11 +2482,13 @@ function attSetStatus(empId, dateKey, status) {
   if (!window._attendanceData[dateKey]) window._attendanceData[dateKey] = {};
   window._attendanceData[dateKey][empId] = { ...(window._attendanceData[dateKey][empId]||{}), status };
   renderPage();
+  attAutoSave(); // auto-save on status change
 }
 function attSetNote(empId, dateKey, note) {
   if (!window._attendanceData) window._attendanceData = {};
   if (!window._attendanceData[dateKey]) window._attendanceData[dateKey] = {};
   window._attendanceData[dateKey][empId] = { ...(window._attendanceData[dateKey][empId]||{}), note };
+  attAutoSave(); // auto-save on note change
 }
 function attMarkAllPresent(dateKey) {
   const emps = APP.data?.employees || [];
@@ -2494,6 +2496,7 @@ function attMarkAllPresent(dateKey) {
   if (!window._attendanceData[dateKey]) window._attendanceData[dateKey] = {};
   emps.forEach(e => { window._attendanceData[dateKey][e.id] = { ...(window._attendanceData[dateKey][e.id]||{}), status:'present' }; });
   renderPage();
+  attAutoSave(); // auto-save after bulk mark
 }
 async function attSave() {
   try {
@@ -2503,11 +2506,35 @@ async function attSave() {
     toast('Failed to save: ' + (e.message||e), 'error');
   }
 }
+
+// Auto-save: debounced 600ms — fires after last status/note/mark change
+let _attAutoSaveTimer = null;
+function attAutoSave() {
+  const ind = document.getElementById('att-autosave-ind');
+  if (ind) { ind.textContent = '⟳ Saving…'; ind.style.color = 'var(--text-3)'; ind.style.display = 'inline'; }
+  clearTimeout(_attAutoSaveTimer);
+  _attAutoSaveTimer = setTimeout(async function() {
+    try {
+      await db.setSetting('attendance_data', window._attendanceData || {});
+      const ind2 = document.getElementById('att-autosave-ind');
+      if (ind2) {
+        ind2.textContent = '✓ Saved';
+        ind2.style.color = 'var(--green)';
+        setTimeout(function(){ if(ind2) ind2.style.display = 'none'; }, 2000);
+      }
+    } catch(e) {
+      const ind2 = document.getElementById('att-autosave-ind');
+      if (ind2) { ind2.textContent = '⚠ Save failed'; ind2.style.color = 'var(--red)'; }
+      console.warn('[Attendance] Auto-save failed:', e.message);
+    }
+  }, 600);
+}
 window.renderAttendance = renderAttendance;
 window.attSetStatus = attSetStatus;
 window.attSetNote = attSetNote;
 window.attMarkAllPresent = attMarkAllPresent;
 window.attSave = attSave;
+window.attAutoSave = attAutoSave;
 window.mt_showSelector = mt_showSelector;
 window.mt_toggleStation = mt_toggleStation;
 window.mt_viewStationData = mt_viewStationData;
