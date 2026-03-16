@@ -1217,7 +1217,7 @@ function renderStaff(D) {
     : window.staffTab === 'attendance'
     ? `<input type="date" class="form-input" style="padding:6px 12px;font-size:13px;width:160px" value="${window._attDate||(()=>{const _d=new Date();return _d.getFullYear()+'-'+String(_d.getMonth()+1).padStart(2,'0')+'-'+String(_d.getDate()).padStart(2,'0');})()}" onchange="window._attDate=this.value;renderPage()" /><button class="btn btn-accent btn-sm" onclick="attSave()">💾 Save</button><button class="btn btn-ghost btn-sm" onclick="attMarkAllPresent('${window._attDate||(()=>{const _d=new Date();return _d.getFullYear()+'-'+String(_d.getMonth()+1).padStart(2,'0')+'-'+String(_d.getDate()).padStart(2,'0');})()}')">✅ All Present</button>`
     : window.staffTab === 'roster'
-    ? `<button class="btn btn-ghost btn-sm" onclick="rosterNavWeek(-1)">◀ Prev</button><button class="btn btn-ghost btn-sm" onclick="rosterNavWeek(1)">Next ▶</button>${(()=>{const _o=window._rosterWeekOffset||0;const _t=new Date();const _d=_t.getDay()===0?6:_t.getDay()-1;const _w=new Date(_t);_w.setDate(_t.getDate()-_d+_o*7);_w.setHours(0,0,0,0);const _m=new Date(_t);_m.setDate(_t.getDate()-_d);_m.setHours(0,0,0,0);return _w<_m?'':'<button class="btn btn-accent btn-sm" onclick="rosterSave()">💾 Save</button>';})()}`
+    ? `<button class="btn btn-ghost btn-sm" onclick="rosterNavWeek(-1)">◀ Prev</button><button class="btn btn-ghost btn-sm" onclick="rosterNavWeek(1)">Next ▶</button>${(()=>{const _o=window._rosterWeekOffset||0;const _t=new Date();const _d=_t.getDay()===0?6:_t.getDay()-1;const _w=new Date(_t);_w.setDate(_t.getDate()-_d+_o*7);_w.setHours(0,0,0,0);const _m=new Date(_t);_m.setDate(_t.getDate()-_d);_m.setHours(0,0,0,0);return _w<_m?'':'';})()}`
     : `<button class="btn btn-accent" onclick="openEmployeeModal()">+ Add Employee</button>`;
 
   // ── Tab content ───────────────────────────────────────────────
@@ -2256,10 +2256,10 @@ function renderRoster(D) {
 
   return `
     <div class="page-hdr"><h3>🗓️ Shift Roster</h3>
-      <div style="display:flex;gap:8px">
+      <div style="display:flex;gap:8px;align-items:center">
         <button class="btn btn-ghost btn-sm" onclick="rosterNavWeek(-1)">◀ Prev Week</button>
         <button class="btn btn-ghost btn-sm" onclick="rosterNavWeek(1)">Next Week ▶</button>
-        ${isPastWeek ? '' : `<button class="btn btn-accent btn-sm" onclick="rosterSave()">💾 Save Roster</button>`}
+        <span id="roster-autosave-ind" style="display:none;font-size:11px;font-weight:700;margin-left:4px"></span>
       </div>
     </div>
 
@@ -2320,26 +2320,54 @@ function rosterAssign(date, shiftName, empId) {
     window._rosterData[key].push(String(empId));
   }
   renderPage();
+  rosterAutoSave(); // auto-save on every assign
 }
 function rosterUnassign(date, shiftName, empId) {
   const key = date + '_' + shiftName;
   if (!window._rosterData || !window._rosterData[key]) return;
   window._rosterData[key] = window._rosterData[key].filter(id => String(id) !== String(empId));
   renderPage();
+  rosterAutoSave(); // auto-save on every unassign
 }
 async function rosterSave() {
   try {
     await db.setSetting('shift_roster', window._rosterData || {});
-    toast('Roster saved successfully', 'success');
+    toast('Roster saved', 'success');
   } catch(e) {
     toast('Failed to save roster: ' + (e.message||e), 'error');
   }
+}
+
+// Auto-save: debounced 600ms — fires after last assign/unassign action
+// Shows a subtle "Saving…" → "✓ Saved" indicator in the breadcrumb area
+let _rosterAutoSaveTimer = null;
+function rosterAutoSave() {
+  // Show saving indicator
+  const ind = document.getElementById('roster-autosave-ind');
+  if (ind) { ind.textContent = '⟳ Saving…'; ind.style.color = 'var(--text-3)'; ind.style.display = 'inline'; }
+  clearTimeout(_rosterAutoSaveTimer);
+  _rosterAutoSaveTimer = setTimeout(async function() {
+    try {
+      await db.setSetting('shift_roster', window._rosterData || {});
+      const ind2 = document.getElementById('roster-autosave-ind');
+      if (ind2) {
+        ind2.textContent = '✓ Saved';
+        ind2.style.color = 'var(--green)';
+        setTimeout(function(){ if(ind2) ind2.style.display = 'none'; }, 2000);
+      }
+    } catch(e) {
+      const ind2 = document.getElementById('roster-autosave-ind');
+      if (ind2) { ind2.textContent = '⚠ Save failed'; ind2.style.color = 'var(--red)'; }
+      console.warn('[Roster] Auto-save failed:', e.message);
+    }
+  }, 600);
 }
 window.renderRoster = renderRoster;
 window.rosterNavWeek = rosterNavWeek;
 window.rosterAssign = rosterAssign;
 window.rosterUnassign = rosterUnassign;
 window.rosterSave = rosterSave;
+window.rosterAutoSave = rosterAutoSave;
 
 // ── ATTENDANCE ────────────────────────────────────────────────
 function renderAttendance(D) {
