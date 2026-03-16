@@ -4443,13 +4443,67 @@ async function runBillScan() {
   if (errEl) errEl.style.display = 'none';
 
   try {
-    const base64 = await new Promise((res, rej) => {
-      const r = new FileReader();
-      r.onload = e => res(e.target.result.split(',')[1]);
-      r.onerror = () => rej(new Error('File read failed'));
-      r.readAsDataURL(file);
-    });
-    const mimeType = file.type || 'image/jpeg';
+    const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+
+    let base64, mimeType;
+
+    if (isPdf) {
+      // PDFs: send raw bytes directly — Canvas can't process PDFs
+      base64 = await new Promise((res, rej) => {
+        const r = new FileReader();
+        r.onload = e => res(e.target.result.split(',')[1]);
+        r.onerror = () => rej(new Error('File read failed'));
+        r.readAsDataURL(file);
+      });
+      mimeType = 'application/pdf';
+    } else {
+      // SCAN FIX: Process images through Canvas before sending to Anthropic.
+      // Raw PNG/screenshot bytes can contain ICC color profiles, EXIF metadata,
+      // or non-standard color spaces that cause Anthropic API 400 "Could not process image".
+      // Drawing through Canvas: strips all metadata, normalises color space to sRGB,
+      // outputs clean JPEG that Anthropic always accepts.
+      // Also resizes large screenshots (max 1600px) to keep payload small.
+      base64 = await new Promise((res, rej) => {
+        const img = new Image();
+        const objUrl = URL.createObjectURL(file);
+        img.onload = () => {
+          URL.revokeObjectURL(objUrl);
+          try {
+            // Resize to max 1600px on longest side (good for OCR, well within Anthropic limits)
+            const MAX_DIM = 1600;
+            let { naturalWidth: w, naturalHeight: h } = img;
+            if (w > MAX_DIM || h > MAX_DIM) {
+              const ratio = Math.min(MAX_DIM / w, MAX_DIM / h);
+              w = Math.round(w * ratio);
+              h = Math.round(h * ratio);
+            }
+            const canvas = document.createElement('canvas');
+            canvas.width  = w;
+            canvas.height = h;
+            const ctx = canvas.getContext('2d');
+            // White background (important for transparent PNGs)
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, w, h);
+            ctx.drawImage(img, 0, 0, w, h);
+            // Export as JPEG quality 0.92 — clean, no metadata, universally accepted
+            const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+            res(dataUrl.split(',')[1]);
+          } catch (canvasErr) {
+            rej(canvasErr);
+          }
+        };
+        img.onerror = () => {
+          URL.revokeObjectURL(objUrl);
+          // Canvas failed — fall back to raw base64 as last resort
+          const r = new FileReader();
+          r.onload = e => res(e.target.result.split(',')[1]);
+          r.onerror = () => rej(new Error('Could not read image file'));
+          r.readAsDataURL(file);
+        };
+        img.src = objUrl;
+      });
+      mimeType = 'image/jpeg'; // always JPEG after canvas processing
+    }
 
     // Call server-side scan endpoint (server calls Claude API with key)
     const resp = await fetch('/api/data/scan-invoice', {
@@ -4457,8 +4511,6 @@ async function runBillScan() {
       headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + (window.getAuthToken ? getAuthToken() : '') },
       body: JSON.stringify({ imageData: base64, mimeType, filename: file.name }),
     });
-    // FIX: Was throwing 'Server error: 502' with no detail — impossible to diagnose.
-    // Now extract the actual error message from the response body.
     if (!resp.ok) {
       let errMsg = 'Server error: ' + resp.status;
       try {

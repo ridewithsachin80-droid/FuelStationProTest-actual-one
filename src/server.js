@@ -1070,14 +1070,24 @@ Pack decoding: "300x40ML-POU"=packQty:300,packSize:"40ml",packType:"Pouch",isCar
     try {
       const isPdf = (mimeType === 'application/pdf') || (filename||'').toLowerCase().endsWith('.pdf');
 
-      // FIX: Normalise mimeType — browsers sometimes send 'image/jpg' (invalid) instead of 'image/jpeg'
+      // Guard: base64 size check — Anthropic hard limit is 5MB decoded (~6.7MB base64)
+      const base64SizeBytes = Math.ceil(imageData.length * 0.75);
+      if (base64SizeBytes > 5 * 1024 * 1024) {
+        return res.status(400).json({
+          error: `Image too large (${(base64SizeBytes/1024/1024).toFixed(1)} MB decoded). Please use a smaller or lower-resolution image.`
+        });
+      }
+
+      // Normalise mimeType — client now always sends image/jpeg for non-PDF, but guard anyway
       const safeMime = (() => {
         if (isPdf) return 'application/pdf';
         const m = (mimeType || 'image/jpeg').toLowerCase();
         if (m === 'image/jpg') return 'image/jpeg';
         if (['image/jpeg','image/png','image/gif','image/webp'].includes(m)) return m;
-        return 'image/jpeg'; // safe fallback
+        return 'image/jpeg';
       })();
+
+      console.log(`[Bill Scan] ${filename||'image'} | mime:${safeMime} | size:${(base64SizeBytes/1024).toFixed(0)}KB`);
 
       const contentBlock = isPdf
         ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: imageData } }
