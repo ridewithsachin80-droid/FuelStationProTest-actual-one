@@ -1074,20 +1074,23 @@ function renderStaff(D) {
           </td>`;
         }
 
+        // FIX: Show dropdown ONLY when no employee is assigned.
+        // When assigned — show chip + ✕ only. Dropdown reappears after removal.
         return `<td style="padding:5px;background:${cellHasConflict?'rgba(239,68,68,0.05)':isSelected?'rgba(212,148,15,0.04)':isToday?'rgba(34,197,94,0.03)':'transparent'};border-right:1px solid ${cellHasConflict?'rgba(239,68,68,0.3)':'var(--border-light)'};vertical-align:middle;min-width:110px">
           ${emp ? `
-            <div style="display:flex;align-items:center;gap:5px;background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.25);border-radius:7px;padding:5px 7px;margin-bottom:4px">
+            <div style="display:flex;align-items:center;gap:5px;background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.25);border-radius:7px;padding:5px 7px">
               <span style="width:22px;height:22px;border-radius:6px;background:${empColor(emp)};display:grid;place-items:center;color:#fff;font-size:9px;font-weight:800;flex-shrink:0">${empInitials(emp.name)}</span>
               <span style="font-size:11px;font-weight:700;color:var(--green);flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${sanitize(emp.name)}</span>
               <button style="background:none;border:none;color:var(--red);cursor:pointer;font-size:12px;padding:0;line-height:1;opacity:0.7" title="Remove"
                 onclick="allocDate='${date}';removeAllocForDate(${p.id},'${n}','${date}')">✕</button>
             </div>
-          ` : ''}
-          <select onchange="allocDate='${date}';assignNozzleForDate(${p.id},'${n}','${date}',this.value);this.value=''"
-            style="width:100%;font-size:11px;padding:5px 7px;border-radius:7px;background:var(--bg-1);border:1px solid var(--border);color:var(--text-2);cursor:pointer;outline:none">
-            <option value="">${emp ? '↺ Change' : '＋ Assign'}</option>
-            ${selectOpts}
-          </select>
+          ` : `
+            <select onchange="allocDate='${date}';assignNozzleForDate(${p.id},'${n}','${date}',this.value);this.value=''"
+              style="width:100%;font-size:11px;padding:5px 7px;border-radius:7px;background:var(--bg-1);border:1px dashed var(--border);color:var(--text-3);cursor:pointer;outline:none">
+              <option value="">＋ Assign</option>
+              ${selectOpts}
+            </select>
+          `}
         </td>`;
       }).join('');
 
