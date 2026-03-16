@@ -27,10 +27,12 @@
   const DEBOUNCE_MS    = 1200;                 // save 1.2s after last keystroke
   const STORAGE_PREFIX = 'fb_autosave_';
 
-  // Titles of modals that must NOT be auto-saved (passwords, PINs, destructive actions)
+  // Titles of modals that must NOT be auto-saved (passwords, PINs, destructive actions,
+  // and file-upload-only modals where there is nothing text-based to restore)
   const SKIP_TITLES = [
     'change', 'password', 'pin', 'reset', 'delete', 'remove', 'lock', 'unlock',
     'confirm', 'logout', 'session', 'gst settings',
+    'scan supplier invoice', 'scan invoice',  // file-only modal — nothing to autosave
   ];
 
   let _debounceTimer = null;
@@ -79,7 +81,11 @@
     container.querySelectorAll('input, select, textarea').forEach(function(el) {
       var k = el.id || el.name;
       if (!k) return;
-      if (el.type === 'password' || el.type === 'hidden' || el.type === 'submit') return;
+      // BUG FIX: Exclude file inputs — browsers store a fake 'C:\fakepath\filename' value
+      // and then throw InvalidStateError when _applyData tries to set it back.
+      // File inputs cannot be restored programmatically (security restriction).
+      if (el.type === 'password' || el.type === 'hidden' ||
+          el.type === 'submit'   || el.type === 'file') return;
       if (el.type === 'checkbox') { data[k] = el.checked; }
       else if (el.type === 'radio') { if (el.checked) data[k] = el.value; }
       else { data[k] = el.value; }
@@ -93,6 +99,8 @@
       var el = container.querySelector('#' + k) ||
                container.querySelector('[name="' + k + '"]');
       if (!el) return;
+      // BUG FIX: Never try to set value on file inputs — throws InvalidStateError
+      if (el.type === 'file') return;
       if (el.type === 'checkbox') { el.checked = !!v; }
       else if (el.type === 'radio') { el.checked = el.value === v; }
       else {
@@ -152,7 +160,7 @@
     };
 
     modalBody.querySelectorAll('input, select, textarea').forEach(function(el) {
-      if (el.type === 'password' || el.type === 'hidden') return;
+      if (el.type === 'password' || el.type === 'hidden' || el.type === 'file') return;
       el.addEventListener('input',  save, { passive: true });
       el.addEventListener('change', save, { passive: true });
     });
@@ -165,7 +173,7 @@
           var els = node.matches('input,select,textarea') ? [node]
                   : Array.from(node.querySelectorAll('input,select,textarea'));
           els.forEach(function(el) {
-            if (el.type === 'password' || el.type === 'hidden') return;
+            if (el.type === 'password' || el.type === 'hidden' || el.type === 'file') return;
             el.addEventListener('input',  save, { passive: true });
             el.addEventListener('change', save, { passive: true });
           });
