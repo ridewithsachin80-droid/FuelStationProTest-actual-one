@@ -4457,7 +4457,16 @@ async function runBillScan() {
       headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + (window.getAuthToken ? getAuthToken() : '') },
       body: JSON.stringify({ imageData: base64, mimeType, filename: file.name }),
     });
-    if (!resp.ok) throw new Error('Server error: ' + resp.status);
+    // FIX: Was throwing 'Server error: 502' with no detail — impossible to diagnose.
+    // Now extract the actual error message from the response body.
+    if (!resp.ok) {
+      let errMsg = 'Server error: ' + resp.status;
+      try {
+        const errBody = await resp.json();
+        if (errBody.error) errMsg = errBody.error;
+      } catch {}
+      throw new Error(errMsg);
+    }
     const result = await resp.json();
     if (!result.success) throw new Error(result.error || 'Scan failed');
 

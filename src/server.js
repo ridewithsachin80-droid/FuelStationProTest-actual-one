@@ -1066,34 +1066,76 @@ Pack decoding: "300x40ML-POU"=packQty:300,packSize:"40ml",packType:"Pouch",isCar
     const { imageData, mimeType, filename } = req.body;
     if (!imageData) return res.status(400).json({ error: 'No image data provided' });
     const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not set on server' });
+    if (!apiKey) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not set on server. Add it in Railway → Variables.' });
     try {
       const isPdf = (mimeType === 'application/pdf') || (filename||'').toLowerCase().endsWith('.pdf');
+
+      // FIX: Normalise mimeType — browsers sometimes send 'image/jpg' (invalid) instead of 'image/jpeg'
+      const safeMime = (() => {
+        if (isPdf) return 'application/pdf';
+        const m = (mimeType || 'image/jpeg').toLowerCase();
+        if (m === 'image/jpg') return 'image/jpeg';
+        if (['image/jpeg','image/png','image/gif','image/webp'].includes(m)) return m;
+        return 'image/jpeg'; // safe fallback
+      })();
+
       const contentBlock = isPdf
         ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: imageData } }
-        : { type: 'image',    source: { type: 'base64', media_type: mimeType || 'image/jpeg', data: imageData } };
+        : { type: 'image',    source: { type: 'base64', media_type: safeMime, data: imageData } };
 
-      const apiResp = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-        body: JSON.stringify({
-          model: 'claude-sonnet-4-20250514',
-          max_tokens: 2000,
-          messages: [{ role: 'user', content: [ contentBlock, { type: 'text', text: INVOICE_SCAN_PROMPT } ] }],
-        }),
-      });
+      // FIX: Model was 'claude-sonnet-4-20250514' — that model string is deprecated and returns 404.
+      // Updated to current claude-sonnet-4-5 which supports vision/document inputs.
+      // FIX: Add 25s timeout — large invoice images can take time; Railway default is 30s
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 25000);
+
+      let apiResp;
+      try {
+        apiResp = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          signal: controller.signal,
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': apiKey,
+            'anthropic-version': '2023-06-01'
+          },
+          body: JSON.stringify({
+            model: 'claude-sonnet-4-5',
+            max_tokens: 2000,
+            messages: [{ role: 'user', content: [ contentBlock, { type: 'text', text: INVOICE_SCAN_PROMPT } ] }],
+          }),
+        });
+      } finally {
+        clearTimeout(timeoutId);
+      }
+
       if (!apiResp.ok) {
         const errBody = await apiResp.text();
-        return res.status(502).json({ error: 'Claude API error: ' + apiResp.status + ' ' + errBody.slice(0,200) });
+        // FIX: Expose actual API error status + message so admin can diagnose
+        let friendlyError = `Invoice scan failed (HTTP ${apiResp.status})`;
+        try {
+          const errJson = JSON.parse(errBody);
+          if (errJson?.error?.message) friendlyError += ': ' + errJson.error.message;
+          else if (errJson?.error?.type) friendlyError += ': ' + errJson.error.type;
+        } catch { friendlyError += ': ' + errBody.slice(0, 150); }
+        console.error('[Bill Scan] API error:', apiResp.status, errBody.slice(0, 300));
+        return res.status(502).json({ error: friendlyError });
       }
+
       const apiData = await apiResp.json();
       const rawText = (apiData.content || []).filter(b=>b.type==='text').map(b=>b.text).join('');
       const clean   = rawText.replace(/```json|```/g, '').trim();
       let parsed;
       try { parsed = JSON.parse(clean); }
-      catch(pe) { return res.status(422).json({ error: 'Could not parse AI response as JSON', raw: clean.slice(0, 500) }); }
+      catch(pe) {
+        console.error('[Bill Scan] JSON parse failed. Raw:', clean.slice(0, 300));
+        return res.status(422).json({ error: 'Could not parse AI response as JSON', raw: clean.slice(0, 500) });
+      }
       res.json({ success: true, data: parsed });
     } catch (e) {
+      if (e.name === 'AbortError') {
+        return res.status(504).json({ error: 'Invoice scan timed out (25s). Try a clearer or smaller image.' });
+      }
       console.error('[Bill Scan]', e.message);
       res.status(500).json({ error: e.message });
     }
