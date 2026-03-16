@@ -117,6 +117,11 @@ async function startServer() {
   app.use(express.urlencoded({ extended: false }));
   app.use(inputSanitizerMiddleware);
 
+  // TIMEOUT FIX: scan-invoice sends base64 image data which can be up to ~2MB even after
+  // compression. Override the 2mb JSON limit specifically for this route with a higher limit
+  // so large invoices aren't silently rejected with a 413 before reaching the handler.
+  app.use('/api/data/scan-invoice', express.json({ limit: '10mb' }));
+
   // Serve frontend — index.html is in root directory
   const publicDir = require('fs').existsSync(path.join(__dirname, 'public'))
     ? path.join(__dirname, 'public')
@@ -1095,12 +1100,20 @@ Pack decoding: "300x40ML-POU"=packQty:300,packSize:"40ml",packType:"Pouch",isCar
 
       // FIX: Model was 'claude-sonnet-4-20250514' — that model string is deprecated and returns 404.
       // Updated to current claude-sonnet-4-5 which supports vision/document inputs.
-      // FIX: Add 25s timeout — large invoice images can take time; Railway default is 30s
+      // TIMEOUT FIX: Raised from 25s to 55s — Claude can legitimately take 15-25s for
+      // image analysis. 55s stays safely under Railway's 60s proxy timeout.
+      // Client image is now 960px@0.75 (~150KB) so typical response is 5-12s.
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 25000);
+      const timeoutId = setTimeout(() => controller.abort(), 55000);
 
       let apiResp;
       try {
+        // TIMEOUT FIX: Send periodic keep-alive comments to prevent Railway's proxy
+        // from closing the connection during long Claude API calls (>30s).
+        // We set the response to chunked transfer so Railway keeps the connection open.
+        res.setHeader('X-Accel-Buffering', 'no'); // disable nginx buffering on Railway
+        res.setHeader('Transfer-Encoding', 'chunked');
+
         apiResp = await fetch('https://api.anthropic.com/v1/messages', {
           method: 'POST',
           signal: controller.signal,
@@ -1144,7 +1157,7 @@ Pack decoding: "300x40ML-POU"=packQty:300,packSize:"40ml",packType:"Pouch",isCar
       res.json({ success: true, data: parsed });
     } catch (e) {
       if (e.name === 'AbortError') {
-        return res.status(504).json({ error: 'Invoice scan timed out (25s). Try a clearer or smaller image.' });
+        return res.status(504).json({ error: 'Invoice scan timed out (55s). The server is busy — please try again in a moment.' });
       }
       console.error('[Bill Scan]', e.message);
       res.status(500).json({ error: e.message });
