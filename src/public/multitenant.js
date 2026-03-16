@@ -1198,147 +1198,315 @@ async function mt_recordPaymentFromBilling(tenantId, stationName, defaultPrice) 
 async function mt_subSettingsFromBilling(tenantId, stationName) {
   try {
     var token = typeof getAuthToken === 'function' ? getAuthToken() : '';
-    var resp = await fetch('/api/subscriptions/' + encodeURIComponent(tenantId), { headers: { 'Authorization': 'Bearer ' + token } });
-    var sub = await resp.json();
-    var sp = {}; try { var m2=(sub.notes||'').match(/Prices: ({.*})/); if(m2) sp=JSON.parse(m2[1]); } catch(e2){}
-    var graceDays = sub.grace_days || 3;
-    var PLANS = [
-      {id:'monthly',    label:'Monthly',     dur:'1 month',   months:1},
-      {id:'quarterly',  label:'Quarterly',   dur:'3 months',  months:3},
-      {id:'halfyearly', label:'Half-Yearly', dur:'6 months',  months:6},
-      {id:'yearly',     label:'Yearly',      dur:'12 months', months:12},
-      {id:'trial',      label:'Trial Only',  dur:'no billing',months:0},
-    ];
-    var activePlan = sub.plan || 'trial';
+    var resp  = await fetch('/api/subscriptions/' + encodeURIComponent(tenantId), { headers: { 'Authorization': 'Bearer ' + token } });
+    var sub   = await resp.json();
 
-    function calcEnd(planId, gd) {
-      var p = PLANS.find(function(x){return x.id===planId;});
-      if (!p || p.months === 0) {
-        // FIX: For trial plan, end = today + trial_days (from sub data)
-        var td2 = new Date(); td2.setDate(td2.getDate() + (sub.trial_days || 30));
-        return td2.toISOString().slice(0,10);
-      }
-      var d = new Date(); d.setMonth(d.getMonth()+p.months); d.setDate(d.getDate()+(parseInt(gd)||0));
-      return d.toISOString().slice(0,10);
-    }
+    // Parse per-plan prices stored in notes field
+    var sp = {};
+    try { var m2 = (sub.notes||'').match(/Prices: ({.*})/); if (m2) sp = JSON.parse(m2[1]); } catch(e2) {}
+
+    var graceDays  = sub.grace_days || 3;
+    var activePlan = sub.plan || 'trial';
+    // Trial toggle: ON if current plan is trial-only OR if trial_days > 0 on a paid plan
+    var trialOn    = activePlan === 'trial' || (sub.trial_days > 0 && activePlan !== 'trial');
+
+    var PLANS = [
+      {id:'monthly',    label:'Monthly',     dur:'1 month',    months:1},
+      {id:'quarterly',  label:'Quarterly',   dur:'3 months',   months:3},
+      {id:'halfyearly', label:'Half-Yearly', dur:'6 months',   months:6},
+      {id:'yearly',     label:'Yearly',      dur:'12 months',  months:12},
+      {id:'trial',      label:'Trial Only',  dur:'no billing', months:0},
+    ];
+
     function fmtDate(iso) {
       if (!iso) return 'No end date';
-      return new Date(iso).toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'});
+      return new Date(iso).toLocaleDateString('en-IN', {day:'numeric', month:'short', year:'numeric'});
     }
 
-    var planCards = PLANS.map(function(p) {
+    // Build plan cards (excluding Trial Only — it moves to its own row)
+    var paidPlans = PLANS.filter(function(p){ return p.id !== 'trial'; });
+    var planCards = paidPlans.map(function(p) {
       var active = activePlan === p.id;
-      var priceField = p.id !== 'trial'
-        ? '<div style="display:flex;align-items:center;gap:4px;margin-top:6px"><span style="color:var(--text-3);font-size:12px">\u20b9</span><input id="ss_price_'+p.id+'" type="number" value="'+(sp[p.id]||0)+'" min="0" placeholder="0" onclick="event.stopPropagation()" style="font-size:13px;font-weight:700;padding:5px 8px;background:var(--bg-0);border:1px solid var(--border);border-radius:6px;color:var(--text-1);width:100%" /></div>'
-        : '';
-      return '<div id="ss_card_'+p.id+'" data-plan="'+p.id+'" onclick="mt_ssSelectPlan(this.dataset.plan)" style="display:flex;flex-direction:column;background:var(--bg-2);border:2px solid '+(active?'var(--accent)':'var(--border)')+';border-radius:8px;padding:10px;cursor:pointer;transition:border 0.15s"><div style="display:flex;align-items:center;gap:8px"><div id="ss_dot_'+p.id+'" style="width:16px;height:16px;border-radius:50%;background:'+(active?'var(--accent)':'transparent')+';border:2px solid '+(active?'var(--accent)':'var(--text-3)')+';flex-shrink:0"></div><div><div style="font-size:12px;font-weight:700;color:var(--text-0)">'+p.label+'</div><div style="font-size:10px;color:var(--text-3)">'+p.dur+'</div></div></div>'+priceField+'</div>';
+      return '<div id="ss_card_'+p.id+'" data-plan="'+p.id+'" onclick="mt_ssSelectPlan(this.dataset.plan)" style="display:flex;flex-direction:column;background:var(--bg-2);border:2px solid '+(active?'var(--accent)':'var(--border)')+';border-radius:8px;padding:10px;cursor:pointer;transition:border 0.15s">'
+        + '<div style="display:flex;align-items:center;gap:8px">'
+          + '<div id="ss_dot_'+p.id+'" style="width:16px;height:16px;border-radius:50%;background:'+(active?'var(--accent)':'transparent')+';border:2px solid '+(active?'var(--accent)':'var(--text-3)')+';flex-shrink:0"></div>'
+          + '<div><div style="font-size:12px;font-weight:700;color:var(--text-0)">'+p.label+'</div><div style="font-size:10px;color:var(--text-3)">'+p.dur+'</div></div>'
+        + '</div>'
+        + '<div style="display:flex;align-items:center;gap:4px;margin-top:6px">'
+          + '<span style="color:var(--text-3);font-size:12px">\u20b9</span>'
+          + '<input id="ss_price_'+p.id+'" type="number" value="'+(sp[p.id]||0)+'" min="0" placeholder="0" onclick="event.stopPropagation()" style="font-size:13px;font-weight:700;padding:5px 8px;background:var(--bg-0);border:1px solid var(--border);border-radius:6px;color:var(--text-1);width:100%" />'
+        + '</div>'
+      + '</div>';
     }).join('');
 
-    var endDate = calcEnd(activePlan, graceDays);
+    // Trial Only standalone card
+    var trialOnlyActive = activePlan === 'trial';
+    var trialOnlyCard = '<div id="ss_card_trial" data-plan="trial" onclick="mt_ssSelectPlan(this.dataset.plan)" style="display:flex;align-items:center;gap:8px;background:var(--bg-2);border:2px solid '+(trialOnlyActive?'var(--accent)':'var(--border)')+';border-radius:8px;padding:10px;cursor:pointer;transition:border 0.15s">'
+      + '<div id="ss_dot_trial" style="width:16px;height:16px;border-radius:50%;background:'+(trialOnlyActive?'var(--accent)':'transparent')+';border:2px solid '+(trialOnlyActive?'var(--accent)':'var(--text-3)')+';flex-shrink:0"></div>'
+      + '<div><div style="font-size:12px;font-weight:700;color:var(--text-0)">Trial Only</div><div style="font-size:10px;color:var(--text-3)">no billing</div></div>'
+    + '</div>';
+
+    // Trial-days toggle card
+    var trialDays    = sub.trial_days || 30;
+    var trialCardOn  = trialOn && activePlan !== 'trial'; // toggle ON only for paid-plan combos
+    var trialToggleCard = '<div id="ss_trial_card" onclick="mt_ssToggleTrial()" style="display:flex;align-items:center;justify-content:space-between;background:var(--bg-2);border:2px solid '+(trialCardOn?'var(--accent)':'var(--border)')+';border-radius:8px;padding:10px 12px;cursor:pointer;transition:border 0.15s;margin-top:8px">'
+      + '<div style="display:flex;align-items:center;gap:10px">'
+        + '<div id="ss_trial_dot" style="width:16px;height:16px;border-radius:50%;background:'+(trialCardOn?'var(--accent)':'transparent')+';border:2px solid '+(trialCardOn?'var(--accent)':'var(--text-3)')+';flex-shrink:0"></div>'
+        + '<div>'
+          + '<div style="font-size:12px;font-weight:700;color:var(--text-0)">\ud83c\udf81 Add Trial Period</div>'
+          + '<div style="font-size:10px;color:var(--text-3)">Free days before billing starts</div>'
+        + '</div>'
+      + '</div>'
+      + '<div id="ss_trial_toggle_lbl" style="font-size:10px;font-weight:700;padding:3px 10px;border-radius:20px;background:'+(trialCardOn?'rgba(212,148,15,0.15)':'var(--bg-0)')+';color:'+(trialCardOn?'var(--accent-light)':'var(--text-3)')+';">'+(trialCardOn?'ON':'OFF')+'</div>'
+    + '</div>'
+    + '<div id="ss_trial_input_wrap" style="margin-top:8px;display:'+(trialCardOn?'flex':'none')+';align-items:center;gap:8px;padding:10px 12px;background:var(--bg-0);border:1px solid var(--border);border-radius:8px">'
+      + '<button onclick="event.stopPropagation();mt_ssTrialAdj(-5)" style="width:32px;height:32px;border-radius:6px;border:1px solid var(--border);background:var(--bg-2);color:var(--text-1);font-size:16px;font-weight:700;cursor:pointer;flex-shrink:0">-</button>'
+      + '<button onclick="event.stopPropagation();mt_ssTrialAdj(-1)" style="width:32px;height:32px;border-radius:6px;border:1px solid var(--border);background:var(--bg-2);color:var(--text-1);font-size:16px;font-weight:700;cursor:pointer;flex-shrink:0">\u2212</button>'
+      + '<div style="flex:1;text-align:center">'
+        + '<input id="ss_trial" type="number" value="'+trialDays+'" min="1" max="365" oninput="mt_ssUpdateEndDate()" style="width:80px;padding:6px;background:transparent;border:none;color:var(--accent-light);font-size:20px;font-weight:800;font-family:monospace;text-align:center;outline:none" />'
+        + '<div style="font-size:10px;color:var(--text-3);margin-top:2px">trial days</div>'
+      + '</div>'
+      + '<button onclick="event.stopPropagation();mt_ssTrialAdj(1)" style="width:32px;height:32px;border-radius:6px;border:1px solid var(--border);background:var(--bg-2);color:var(--text-1);font-size:16px;font-weight:700;cursor:pointer;flex-shrink:0">+</button>'
+      + '<button onclick="event.stopPropagation();mt_ssTrialAdj(5)" style="width:32px;height:32px;border-radius:6px;border:1px solid var(--border);background:var(--bg-2);color:var(--text-1);font-size:16px;font-weight:700;cursor:pointer;flex-shrink:0">+5</button>'
+    + '</div>';
+
+    // Compute initial end date
+    function calcInitEnd(planId, gd, td, trialEnabled) {
+      var p = PLANS.find(function(x){ return x.id === planId; });
+      if (!p || p.months === 0) {
+        // Trial Only
+        var t = new Date(); t.setDate(t.getDate() + (td || 30));
+        return t.toISOString().slice(0,10);
+      }
+      var d = new Date();
+      if (trialEnabled && td > 0) d.setDate(d.getDate() + td); // trial period first
+      d.setMonth(d.getMonth() + p.months);
+      d.setDate(d.getDate() + (parseInt(gd)||0));
+      return d.toISOString().slice(0,10);
+    }
+    var endDate = calcInitEnd(activePlan, graceDays, trialDays, trialCardOn);
+
+    function endLabel(planId, trialEnabled, td, endIso) {
+      var p = PLANS.find(function(x){ return x.id === planId; });
+      if (!p || p.months === 0) {
+        return '\ud83d\udcc5 Trial ends: <span style="color:var(--accent-light);font-weight:700">'+fmtDate(endIso)+'</span>'
+          + ' <span style="color:var(--text-3);font-size:11px">('+td+' days from today)</span>';
+      }
+      if (trialEnabled && td > 0) {
+        return '\ud83c\udf81 <span style="color:var(--accent-light);font-weight:700">'+td+' trial days</span>'
+          + ' \u2192 then '
+          + '<span style="color:var(--text-0);font-weight:700">'+(p.label)+'</span>'
+          + ' until <span style="color:var(--accent-light);font-weight:700">'+fmtDate(endIso)+'</span>';
+      }
+      return '\ud83d\udcc5 Ends: <span style="color:var(--accent-light);font-weight:700">'+fmtDate(endIso)+'</span>';
+    }
+
     var existing = document.getElementById('settingsOverlay');
     if (existing) existing.remove();
     var ov = document.createElement('div');
     ov.id = 'settingsOverlay';
     ov.style.cssText = 'position:fixed;inset:0;background:var(--bg-0);z-index:10025;overflow-y:auto';
     ov.innerHTML = '<div style="max-width:500px;margin:0 auto;padding:16px">'
-      + '<div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;position:sticky;top:0;background:var(--bg-0);padding:8px 0;border-bottom:1px solid var(--border-light)">'
-      + '<button onclick="mt_ssClose()" style="background:var(--bg-2);border:1px solid var(--border);color:var(--text-2);border-radius:8px;padding:6px 12px;cursor:pointer;font-size:13px;font-weight:600">← Back</button>'
-      + '<h2 style="font-size:16px;font-weight:800;color:var(--text-0)">&amp;#9881;&#65039; Settings \u2014 '+stationName+'</h2>'
+      // ── Sticky header
+      + '<div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;position:sticky;top:0;background:var(--bg-0);padding:8px 0;border-bottom:1px solid var(--border-light);z-index:1">'
+        + '<button onclick="mt_ssClose()" style="background:var(--bg-2);border:1px solid var(--border);color:var(--text-2);border-radius:8px;padding:6px 12px;cursor:pointer;font-size:13px;font-weight:600">\u2190 Back</button>'
+        + '<h2 style="font-size:16px;font-weight:800;color:var(--text-0)">&amp;#9881;&#65039; Settings \u2014 '+stationName+'</h2>'
       + '</div>'
+      // ── Status / Grace / WhatsApp
       + '<div style="background:var(--bg-2);border-radius:8px;padding:12px;margin-bottom:12px">'
-      + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">'
-      + '<div><label style="font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase">Status</label><select id="ss_status" style="width:100%;margin-top:4px;padding:8px;background:var(--bg-0);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px">'
-      + ['trial','active','suspended'].map(function(s){return '<option value="'+s+'" '+(sub.status===s?'selected':'')+'>'+{trial:'Trial',active:'Active',suspended:'Suspended'}[s]+'</option>';}).join('')
-      + '</select></div>'
-      + '<div><label style="font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase">Grace Days</label><input id="ss_grace" type="number" value="'+graceDays+'" min="0" max="30" oninput="mt_ssUpdateEndDate()" style="width:100%;margin-top:4px;padding:8px;background:var(--bg-0);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px" /></div>'
+        + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">'
+          + '<div><label style="font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase">Status</label>'
+            + '<select id="ss_status" style="width:100%;margin-top:4px;padding:8px;background:var(--bg-0);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px">'
+            + ['trial','active','suspended'].map(function(s){ return '<option value="'+s+'" '+(sub.status===s?'selected':'')+'>'+ {trial:'Trial',active:'Active',suspended:'Suspended'}[s]+'</option>'; }).join('')
+            + '</select></div>'
+          + '<div><label style="font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase">Grace Days</label>'
+            + '<input id="ss_grace" type="number" value="'+graceDays+'" min="0" max="30" oninput="mt_ssUpdateEndDate()" style="width:100%;margin-top:4px;padding:8px;background:var(--bg-0);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px" /></div>'
+        + '</div>'
+        + '<div><label style="font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase">Owner WhatsApp</label>'
+          + '<input id="ss_phone" type="tel" value="'+(sub.owner_phone||'')+'" placeholder="+91XXXXXXXXXX" style="width:100%;margin-top:4px;padding:8px;background:var(--bg-0);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px" /></div>'
       + '</div>'
-      + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">'
-      + '<div><label style="font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase">Trial Days</label><input id="ss_trial" type="number" value="'+(sub.trial_days||30)+'" min="1" oninput="mt_ssUpdateEndDate()" style="width:100%;margin-top:4px;padding:8px;background:var(--bg-0);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px" /></div>'
-      + '<div><label style="font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase">Owner WhatsApp</label><input id="ss_phone" type="tel" value="'+(sub.owner_phone||'')+'" placeholder="+91XXXXXXXXXX" style="width:100%;margin-top:4px;padding:8px;background:var(--bg-0);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px" /></div>'
-      + '</div></div>'
+      // ── Plan selection
       + '<div style="background:var(--bg-2);border-radius:8px;padding:12px;margin-bottom:12px">'
-      + '<div style="font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase;margin-bottom:10px">Select Plan & Set Price</div>'
-      + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">'+planCards+'</div>'
-      + '<input type="hidden" id="ss_plan" value="'+activePlan+'" />'
-      + '<div id="ss_end_display" style="padding:10px;background:var(--bg-0);border:1px solid var(--border);border-radius:6px;font-size:12px">'
-      + (activePlan==='trial'
-          ? '\ud83d\udcc5 Trial ends: <span style="color:var(--accent-light);font-weight:700">'+fmtDate(endDate)+'</span> <span style="color:var(--text-3);font-size:11px">('+( sub.trial_days||30)+' days from today)</span>'
-          : '\ud83d\udcc5 Ends: <span style="color:var(--accent-light);font-weight:700">'+fmtDate(endDate)+'</span>')
-      + '<input type="hidden" id="ss_subend" value="'+endDate+'" /></div>'
+        + '<div style="font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase;margin-bottom:10px">Select Plan &amp; Set Price</div>'
+        + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">'+planCards+'</div>'
+        + trialOnlyCard
+        + '<input type="hidden" id="ss_plan" value="'+activePlan+'" />'
+        // ── Trial period toggle (only shown for paid plans)
+        + '<div id="ss_trial_section" style="display:'+(activePlan==='trial'?'none':'block')+'">'
+          + trialToggleCard
+        + '</div>'
+        // ── End date display
+        + '<div id="ss_end_display" style="margin-top:10px;padding:10px;background:var(--bg-0);border:1px solid var(--border);border-radius:6px;font-size:12px">'
+          + endLabel(activePlan, trialCardOn, trialDays, endDate)
+          + '<input type="hidden" id="ss_subend" value="'+endDate+'" />'
+        + '</div>'
       + '</div>'
+      // ── Actions
       + '<div style="display:flex;gap:8px">'
-      + '<button onclick="mt_ssClose()" style="flex:1;background:var(--bg-2);border:1px solid var(--border);color:var(--text-2);border-radius:8px;padding:12px;font-size:13px;font-weight:700;cursor:pointer">Cancel</button>'
-      + '<button data-tid="'+tenantId+'" onclick="mt_ssDoSave(this.dataset.tid)" style="flex:2;background:var(--accent);border:none;color:#000;border-radius:8px;padding:12px;font-size:14px;font-weight:700;cursor:pointer">💾 Save Settings</button>'
-      + '</div></div>';
+        + '<button onclick="mt_ssClose()" style="flex:1;background:var(--bg-2);border:1px solid var(--border);color:var(--text-2);border-radius:8px;padding:12px;font-size:13px;font-weight:700;cursor:pointer">Cancel</button>'
+        + '<button data-tid="'+tenantId+'" onclick="mt_ssDoSave(this.dataset.tid)" style="flex:2;background:var(--accent);border:none;color:#000;border-radius:8px;padding:12px;font-size:14px;font-weight:700;cursor:pointer">\ud83d\udcbe Save Settings</button>'
+      + '</div>'
+    + '</div>';
     document.body.appendChild(ov);
   } catch(e) { mt_toast('Error: ' + e.message, 'error'); }
 }
 
-function mt_ssClose(){var o=document.getElementById("settingsOverlay");if(o)o.remove();}
+function mt_ssClose(){ var o = document.getElementById('settingsOverlay'); if (o) o.remove(); }
 
-function mt_ssSelectPlan(planId) {
-  var plans = ['monthly','quarterly','halfyearly','yearly','trial'];
-  plans.forEach(function(p) {
-    var card=document.getElementById('ss_card_'+p); var dot=document.getElementById('ss_dot_'+p);
-    if (!card||!dot) return;
-    var a = p===planId;
-    card.style.border = a?'2px solid var(--accent)':'2px solid var(--border)';
-    dot.style.background = a?'var(--accent)':'transparent';
-    dot.style.border = a?'2px solid var(--accent)':'2px solid var(--text-3)';
-  });
-  var h = document.getElementById('ss_plan'); if(h) h.value = planId;
+// ── Toggle trial period card ON/OFF ─────────────────────────────────────────
+function mt_ssToggleTrial() {
+  var card    = document.getElementById('ss_trial_card');
+  var dot     = document.getElementById('ss_trial_dot');
+  var lbl     = document.getElementById('ss_trial_toggle_lbl');
+  var wrap    = document.getElementById('ss_trial_input_wrap');
+  if (!card) return;
+  var isOn = card.getAttribute('data-trial-on') === '1';
+  var nowOn = !isOn;
+  card.setAttribute('data-trial-on', nowOn ? '1' : '0');
+  card.style.border           = nowOn ? '2px solid var(--accent)' : '2px solid var(--border)';
+  dot.style.background        = nowOn ? 'var(--accent)' : 'transparent';
+  dot.style.border            = nowOn ? '2px solid var(--accent)' : '2px solid var(--text-3)';
+  lbl.textContent             = nowOn ? 'ON' : 'OFF';
+  lbl.style.background        = nowOn ? 'rgba(212,148,15,0.15)' : 'var(--bg-0)';
+  lbl.style.color             = nowOn ? 'var(--accent-light)' : 'var(--text-3)';
+  wrap.style.display          = nowOn ? 'flex' : 'none';
   mt_ssUpdateEndDate();
 }
 
+// Initialise the data-trial-on attribute after DOM is ready
+(function _initTrialCard() {
+  var el = document.getElementById('ss_trial_card');
+  if (!el) return;
+  // Read current state from border colour
+  var isOn = el.style.border && el.style.border.includes('var(--accent)');
+  el.setAttribute('data-trial-on', isOn ? '1' : '0');
+})();
+
+// ── +/- buttons for trial days ─────────────────────────────────────────────
+function mt_ssTrialAdj(delta) {
+  var inp = document.getElementById('ss_trial');
+  if (!inp) return;
+  var v = (parseInt(inp.value) || 1) + delta;
+  inp.value = Math.max(1, Math.min(365, v));
+  mt_ssUpdateEndDate();
+}
+
+// ── Select plan card ────────────────────────────────────────────────────────
+function mt_ssSelectPlan(planId) {
+  var plans = ['monthly','quarterly','halfyearly','yearly','trial'];
+  plans.forEach(function(p) {
+    var card = document.getElementById('ss_card_'+p);
+    var dot  = document.getElementById('ss_dot_'+p);
+    if (!card || !dot) return;
+    var a = p === planId;
+    card.style.border    = a ? '2px solid var(--accent)' : '2px solid var(--border)';
+    dot.style.background = a ? 'var(--accent)' : 'transparent';
+    dot.style.border     = a ? '2px solid var(--accent)' : '2px solid var(--text-3)';
+  });
+  var h = document.getElementById('ss_plan');
+  if (h) h.value = planId;
+  // Show/hide trial toggle section (hide for Trial Only plan)
+  var trialSection = document.getElementById('ss_trial_section');
+  if (trialSection) trialSection.style.display = planId === 'trial' ? 'none' : 'block';
+  // When switching to Trial Only, turn off the trial toggle
+  if (planId === 'trial') {
+    var card = document.getElementById('ss_trial_card');
+    if (card) card.setAttribute('data-trial-on', '0');
+  }
+  mt_ssUpdateEndDate();
+}
+
+// ── Recalculate and display end date ───────────────────────────────────────
 function mt_ssUpdateEndDate() {
-  var planId = document.getElementById('ss_plan')?.value||'trial';
-  var grace  = parseInt(document.getElementById('ss_grace')?.value)||0;
-  var MONTHS = {monthly:1,quarterly:3,halfyearly:6,yearly:12,trial:0};
-  var months = MONTHS[planId]||0;
-  var hidden = document.getElementById('ss_subend');
-  var display = document.getElementById('ss_end_display');
-  if (!hidden||!display) return;
+  var planId    = document.getElementById('ss_plan')?.value || 'trial';
+  var grace     = parseInt(document.getElementById('ss_grace')?.value) || 0;
+  var trialCard = document.getElementById('ss_trial_card');
+  var trialOn   = trialCard && trialCard.getAttribute('data-trial-on') === '1';
+  var trialDays = parseInt(document.getElementById('ss_trial')?.value) || 30;
+  var hidden    = document.getElementById('ss_subend');
+  var display   = document.getElementById('ss_end_display');
+  if (!hidden || !display) return;
+
+  var MONTHS = {monthly:1, quarterly:3, halfyearly:6, yearly:12, trial:0};
+  var months  = MONTHS[planId] || 0;
+  var LABELS  = {monthly:'Monthly', quarterly:'Quarterly', halfyearly:'Half-Yearly', yearly:'Yearly'};
+
+  function fmtD(d) { return d.toLocaleDateString('en-IN', {day:'numeric', month:'short', year:'numeric'}); }
+
   if (!months) {
-    // FIX: For Trial plan, calculate end date from today + trial days entered by user.
-    // Previously showed "No end date" and ignored the trial days field entirely.
-    var trialDays = parseInt(document.getElementById('ss_trial')?.value) || 30;
+    // Trial Only plan
     var td = new Date(); td.setDate(td.getDate() + trialDays);
-    var tIso = td.toISOString().slice(0, 10);
-    var tLbl = td.toLocaleDateString('en-IN', {day:'numeric', month:'short', year:'numeric'});
+    var tIso = td.toISOString().slice(0,10);
     hidden.value = tIso;
-    display.innerHTML = '\ud83d\udcc5 Trial ends: <span style="color:var(--accent-light);font-weight:700">' + tLbl + '</span>'
+    display.innerHTML = '\ud83d\udcc5 Trial ends: <span style="color:var(--accent-light);font-weight:700">' + fmtD(td) + '</span>'
       + ' <span style="color:var(--text-3);font-size:11px">(' + trialDays + ' days from today)</span>'
       + '<input type="hidden" id="ss_subend" value="' + tIso + '" />';
+    return;
+  }
+
+  // Paid plan
+  var d = new Date();
+  if (trialOn && trialDays > 0) d.setDate(d.getDate() + trialDays); // trial window first
+  d.setMonth(d.getMonth() + months);
+  d.setDate(d.getDate() + grace);
+  var iso = d.toISOString().slice(0,10);
+  hidden.value = iso;
+
+  var endStr  = fmtD(d);
+  var planLbl = LABELS[planId] || planId;
+
+  if (trialOn && trialDays > 0) {
+    display.innerHTML = '\ud83c\udf81 <span style="color:var(--accent-light);font-weight:700">' + trialDays + ' trial days</span>'
+      + ' \u2192 then <span style="color:var(--text-0);font-weight:700">' + planLbl + '</span>'
+      + ' until <span style="color:var(--accent-light);font-weight:700">' + endStr + '</span>'
+      + '<input type="hidden" id="ss_subend" value="' + iso + '" />';
   } else {
-    var d=new Date(); d.setMonth(d.getMonth()+months); d.setDate(d.getDate()+grace);
-    var iso=d.toISOString().slice(0,10);
-    var lbl=d.toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'});
-    hidden.value=iso;
-    display.innerHTML='\ud83d\udcc5 Ends: <span style="color:var(--accent-light);font-weight:700">'+lbl+'</span><input type="hidden" id="ss_subend" value="'+iso+'" />';
+    display.innerHTML = '\ud83d\udcc5 Ends: <span style="color:var(--accent-light);font-weight:700">' + endStr + '</span>'
+      + '<input type="hidden" id="ss_subend" value="' + iso + '" />';
   }
 }
 
+// ── Save settings ──────────────────────────────────────────────────────────
 async function mt_ssDoSave(tenantId) {
-  var status = document.getElementById('ss_status')?.value||'trial';
-  var plan   = document.getElementById('ss_plan')?.value||'trial';
-  var trial  = parseInt(document.getElementById('ss_trial')?.value)||0;
-  var grace  = parseInt(document.getElementById('ss_grace')?.value)||3;
-  var phone  = document.getElementById('ss_phone')?.value?.trim()||'';
-  var subEnd = document.getElementById('ss_subend')?.value||null;
+  var status    = document.getElementById('ss_status')?.value || 'trial';
+  var plan      = document.getElementById('ss_plan')?.value || 'trial';
+  var trialCard = document.getElementById('ss_trial_card');
+  var trialOn   = trialCard && trialCard.getAttribute('data-trial-on') === '1';
+  var trial     = trialOn ? (parseInt(document.getElementById('ss_trial')?.value) || 0) : 0;
+  // For Trial Only plan, always save trial days from input
+  if (plan === 'trial') trial = parseInt(document.getElementById('ss_trial')?.value) || 30;
+  var grace  = parseInt(document.getElementById('ss_grace')?.value) || 3;
+  var phone  = document.getElementById('ss_phone')?.value?.trim() || '';
+  var subEnd = document.getElementById('ss_subend')?.value || null;
   var prices = {};
-  ['monthly','quarterly','halfyearly','yearly'].forEach(function(p){
-    var el=document.getElementById('ss_price_'+p); if(el) prices[p]=parseFloat(el.value)||0;
+  ['monthly','quarterly','halfyearly','yearly'].forEach(function(p) {
+    var el = document.getElementById('ss_price_'+p);
+    if (el) prices[p] = parseFloat(el.value) || 0;
   });
-  if (plan!=='trial'&&subEnd) status='active';
+  if (plan !== 'trial' && subEnd) status = 'active';
   try {
-    var tok=typeof getAuthToken==='function'?getAuthToken():'';
-    var r=await fetch('/api/subscriptions/'+encodeURIComponent(tenantId),{method:'PUT',headers:{'Content-Type':'application/json','Authorization':'Bearer '+tok},body:JSON.stringify({status,plan,trial_days:trial,price_monthly:prices.monthly||0,grace_days:grace,sub_end:subEnd||null,owner_phone:phone,notes:'Prices: '+JSON.stringify(prices)})});
-    if (!r.ok){var e2=await r.json();mt_toast(e2.error||'Save failed','error');return;}
-    mt_toast('\u2705 Settings saved!','success');
+    var tok = typeof getAuthToken === 'function' ? getAuthToken() : '';
+    var r = await fetch('/api/subscriptions/'+encodeURIComponent(tenantId), {
+      method:'PUT',
+      headers:{'Content-Type':'application/json', 'Authorization':'Bearer '+tok},
+      body: JSON.stringify({
+        status, plan,
+        trial_days: trial,
+        price_monthly: prices.monthly || 0,
+        grace_days: grace,
+        sub_end: subEnd || null,
+        owner_phone: phone,
+        notes: 'Prices: ' + JSON.stringify(prices)
+      })
+    });
+    if (!r.ok) { var e2 = await r.json(); mt_toast(e2.error || 'Save failed', 'error'); return; }
+    mt_toast('\u2705 Settings saved!', 'success');
     document.getElementById('settingsOverlay').remove();
-    _billingCache=null; await mt_loadBillingData();
-  } catch(e){mt_toast('Error: '+e.message,'error');}
+    _billingCache = null;
+    await mt_loadBillingData();
+  } catch(e) { mt_toast('Error: ' + e.message, 'error'); }
 }
+
 
 
 
