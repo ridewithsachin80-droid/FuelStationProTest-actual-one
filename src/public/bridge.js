@@ -652,7 +652,8 @@
       const location  = document.getElementById('tLocation')?.value?.trim();
       const ownerName = document.getElementById('tOwner')?.value?.trim();
       const phone     = document.getElementById('tPhone')?.value?.trim();
-      const icon      = document.getElementById('tIcon')?.value || '⛽';
+      const icon      = document.getElementById('tIcon')?.value || '\u26fd';
+      const omc       = (document.querySelector('input[name="tOmc"]:checked')?.value || 'iocl');
       const id        = document.getElementById('tId')?.value;
       const adminUser = document.getElementById('tAdminUser')?.value?.trim() || 'admin';
       const adminPass = document.getElementById('tAdminPass')?.value || 'admin123';
@@ -664,13 +665,17 @@
       }
       try {
         if (isEdit && id) {
-          await TenantAPI.update(id, { name, location, ownerName, phone, icon });
+          await TenantAPI.update(id, { name, location, ownerName, phone, icon, omc });
           if (typeof mt_toast === 'function') mt_toast(name + ' updated', 'success');
         } else {
-          await TenantAPI.create({ name, location, ownerName, phone, icon, adminUser, adminPass });
+          await TenantAPI.create({ name, location, ownerName, phone, icon, omc, adminUser, adminPass });
           if (typeof mt_toast === 'function') mt_toast(name + ' created!', 'success');
         }
-        await mt_getTenants_async();
+        const freshT = await mt_getTenants_async();
+        if (Array.isArray(freshT)) {
+          freshT.forEach(function(t) { if (!t.omc) t.omc = 'iocl'; if (isEdit && String(t.id) === String(id)) t.omc = omc; });
+          localStorage.setItem('fb_tenants', JSON.stringify(freshT));
+        }
         if (typeof mt_showSelector === 'function') mt_showSelector();
       } catch (e) {
         if (typeof mt_toast === 'function') mt_toast(e.message || 'Failed to save', 'error');

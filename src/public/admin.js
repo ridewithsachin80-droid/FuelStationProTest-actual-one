@@ -6925,39 +6925,33 @@ function _pumpForPut(p) {
 function _tankChartType(tank) {
   if (!tank) return null;
   const cap = parseInt(tank.capacity);
-  const omc = (APP?.tenant?.omc || 'iocl').toLowerCase();
-  if (cap === 10000) return omc + '_10K';
-  if (cap === 20000) return omc + '_20K';
+  if (cap === 10000) return '10K';
+  if (cap === 20000) return '20K';
   return null;
 }
 
 function _chartLabel(type) {
   if (!type) return null;
   const OMC_NAMES = { iocl:'IOCL', bpcl:'BPCL', hpcl:'HPCL', mrpl:'MRPL', private:'Custom' };
-  const DIP_TABLES = {
-    iocl_10K: typeof IOCL_DIP_10K !== 'undefined' && IOCL_DIP_10K,
-    iocl_20K: typeof IOCL_DIP_20K !== 'undefined' && IOCL_DIP_20K,
-    bpcl_10K: typeof BPCL_DIP_10K !== 'undefined' && BPCL_DIP_10K,
-    bpcl_20K: typeof BPCL_DIP_20K !== 'undefined' && BPCL_DIP_20K,
-    hpcl_10K: typeof HPCL_DIP_10K !== 'undefined' && HPCL_DIP_10K,
-    hpcl_20K: typeof HPCL_DIP_20K !== 'undefined' && HPCL_DIP_20K,
-    mrpl_10K: typeof MRPL_DIP_10K !== 'undefined' && MRPL_DIP_10K,
-    mrpl_20K: typeof MRPL_DIP_20K !== 'undefined' && MRPL_DIP_20K,
+  const omc = (APP?.tenant?.omc || 'iocl').toLowerCase();
+  const omcName = OMC_NAMES[omc] || 'IOCL';
+  // Check if the OMC has its own dip table; if not warn about fallback to IOCL
+  const HAS_TABLE = {
+    bpcl: typeof BPCL_DIP_10K !== 'undefined' && BPCL_DIP_10K,
+    hpcl: typeof HPCL_DIP_10K !== 'undefined' && HPCL_DIP_10K,
+    mrpl: typeof MRPL_DIP_10K !== 'undefined' && MRPL_DIP_10K,
   };
-  const key   = type.toLowerCase();       // e.g. 'bpcl_10k'
-  const parts = key.split('_');
-  const omcId = parts[0];
-  const size  = parts[1] === '10k' ? '10,000L' : '20,000L';
-  const cm    = parts[1] === '10k' ? '1–194 cm' : '1–210 cm';
-  const omcName = OMC_NAMES[omcId] || omcId.toUpperCase();
-  const hasTable = DIP_TABLES[key];
-  if (hasTable) {
-    return '📊 ' + omcName + ' ' + size + ' Chart (' + cm + ')';
-  } else if (omcId !== 'iocl') {
-    // Fallback to IOCL — show warning
-    return '⚠ ' + omcName + ' chart pending — using IOCL chart as fallback (' + cm + ')';
+  const is10K = type === '10K';
+  const size  = is10K ? '10,000L' : '20,000L';
+  const cm    = is10K ? '1–194 cm' : '1–210 cm';
+  if (omc === 'iocl' || !HAS_TABLE[omc]) {
+    if (omc !== 'iocl' && !HAS_TABLE[omc]) {
+      return '⚠ ' + omcName + ' chart pending — using IOCL chart as fallback (' + cm + ')';
+    }
+    if (type === '10K') return '📊 IOCL 10,000L Chart (1–194 cm)';
+    if (type === '20K') return '📊 IOCL 20,000L Chart (1–210 cm)';
   }
-  return null;
+  return '📊 ' + omcName + ' ' + size + ' Chart (' + cm + ')';
 }
 
 function _cmRange(type) {

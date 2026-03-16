@@ -740,10 +740,8 @@ function ioclDipToLiters20K(dipCm, dipMm) {
 function getDipChart(tank) {
   if (!tank) return null;
   const cap = Number(tank.capacity);
-  // Read OMC from APP global — set when tenant is loaded
-  const omc = (typeof APP !== 'undefined' && APP.tenant?.omc) ? APP.tenant.omc.toLowerCase() : 'iocl';
-  if (cap === 10000) return omc + '_10K';
-  if (cap === 20000) return omc + '_20K';
+  if (cap === 10000) return '10K';
+  if (cap === 20000) return '20K';
   return null;
 }
 

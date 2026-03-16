@@ -928,13 +928,16 @@ async function startServer() {
         for (const prod of catalog) {
           await pool.query(
             `INSERT INTO lubes_products
-               (tenant_id, name, brand, category, unit, cost_price, sell_price,
-                stock, min_stock, hsn_code, gst_pct, data_json)
-             VALUES ($1,$2,$3,$4,$5,0,0,0,5,$6,$7,$8)
-             ON CONFLICT DO NOTHING`,
-            [tenantId, prod.name, prod.brand, prod.category, prod.unit,
-             prod.hsn, prod.gst_pct,
-             JSON.stringify({ sku: prod.sku, source: 'omc_template', omc: omcValue })]
+               (id, tenant_id, name, brand, category, unit, cost_price, selling_price,
+                stock, min_stock, hsn, gst_pct, data_json)
+             VALUES ($1,$2,$3,$4,$5,$6,0,0,0,5,$7,$8,$9)
+             ON CONFLICT (id, tenant_id) DO NOTHING`,
+            [
+              'lp_' + tenantId + '_' + Date.now() + '_' + Math.random().toString(36).slice(2,7),
+              tenantId, prod.name, prod.brand, prod.category, prod.unit,
+              prod.hsn, prod.gst_pct,
+              JSON.stringify({ sku: prod.sku, source: 'omc_template', omc: omcValue })
+            ]
           );
         }
         console.log(`[Tenant] Seeded ${catalog.length} ${omcValue.toUpperCase()} lube products for ${tenantId}`);
