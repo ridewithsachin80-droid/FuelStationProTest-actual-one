@@ -760,11 +760,37 @@ function renderSales(D, filter = 'all') {
   const total   = filtered.reduce((a, s) => a + (s.amount || 0), 0);
   const liters  = filtered.reduce((a, s) => a + (s.liters || 0), 0);
 
-  // ── Fuel type filter chips ─────────────────────────────────
-  const fuelChips = [{ id: 'all', name: 'All' }, ...FUEL_TYPES].map(f =>
+  // ── Fuel type filter chips (include Lubes) ─────────────────
+  const fuelChips = [{ id: 'all', name: 'All' }, ...FUEL_TYPES, { id: 'lubes', name: 'Lubes', short: '🛢️ Lubes' }].map(f =>
     `<button class="filter-chip ${APP.salesFilter === f.id ? 'active' : ''}"
       onclick="APP.salesFilter='${f.id}';renderPage()">${f.short || f.name}</button>`
   ).join('');
+
+  // Lube sales for this date
+  const lubeSalesForDate = (window._lubesSales||[]).filter(s => (s.date||'').slice(0,10) === selDate);
+  const lubeFiltered = filter === 'lubes' ? lubeSalesForDate :
+    (filter === 'all' ? lubeSalesForDate : []);
+  const lubeEmpFiltered = APP.salesEmpFilter === 'all' ? lubeFiltered :
+    lubeFiltered.filter(s => s.employee === APP.salesEmpFilter);
+  const lubeSorted = [...lubeEmpFiltered].sort((a,b) => (a.time||'').localeCompare(b.time||''));
+
+  // Lube rows (appended if filter is 'all' or 'lubes')
+  const lubeRows = (filter === 'all' || filter === 'lubes') ? lubeSorted.map(s =>
+    `<tr style="background:rgba(212,148,15,0.04)">
+      <td class="mono" style="font-size:11px;white-space:nowrap">${s.time||'—'}</td>
+      <td style="font-size:11px;color:var(--text-3)">${s.customer ? sanitize(s.customer) : '—'}</td>
+      <td><span style="background:rgba(212,148,15,0.15);color:#d4940f;border-radius:4px;padding:2px 6px;font-size:10px;font-weight:700">🛢️ ${sanitize(s.productName||'Lube')}</span></td>
+      <td style="text-align:right;font-family:var(--mono)">${s.qty} ${sanitize(s.unit||'')}</td>
+      <td style="text-align:right;font-family:var(--mono);font-weight:700">${cur(s.amount)}</td>
+      <td style="font-size:11px;color:var(--text-3)">${s.employee ? sanitize(s.employee) : '—'}</td>
+      <td><span class="badge badge-${s.mode==='cash'?'green':s.mode==='upi'?'blue':s.mode==='card'?'purple':'orange'}">${(s.mode||'cash').toUpperCase()}</span></td>
+    </tr>`
+  ).join('') : '';
+
+  // Combined totals (fuel + lubes when showing all)
+  const lubeTotalAmt = lubeEmpFiltered.reduce((a,s)=>a+s.amount,0);
+  const grandTotal = total + (filter === 'all' ? lubeTotalAmt : 0);
+  const grandCount = filtered.length + (filter === 'all' ? lubeEmpFiltered.length : 0);
 
   // ── Per-employee summary cards ─────────────────────────────
   const empCards = empNames.map(emp => {
@@ -858,22 +884,23 @@ function renderSales(D, filter = 'all') {
     <div class="card">
       <div class="card-head">
         <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
-          <span style="color:var(--text-3);font-size:13px">${sorted.length} transaction${sorted.length!==1?'s':''}</span>
-          <span style="font-size:12px;color:var(--text-2)">· <span class="mono">${liters.toFixed(1)} L</span></span>
+          <span style="color:var(--text-3);font-size:13px">${grandCount} transaction${grandCount!==1?'s':''}</span>
+          <span style="font-size:12px;color:var(--text-2)">· <span class="mono">${liters.toFixed(1)} L fuel</span></span>
+          ${lubeTotalAmt > 0 && filter !== 'lubes' ? `<span style="font-size:12px;color:#d4940f">+ <span class="mono">${cur(lubeTotalAmt)}</span> lubes</span>` : ''}
         </div>
-        <span class="mono fw-700" style="color:var(--green);font-size:16px">Total: ${cur(total)}</span>
+        <span class="mono fw-700" style="color:var(--green);font-size:16px">Total: ${cur(grandTotal)}</span>
       </div>
       <div class="card-body">
         <div class="tbl-wrap">
           <table>
             <thead>
               <tr>
-                <th>Time</th><th>Vehicle</th><th>Fuel</th>
-                <th class="r">Liters</th><th class="r">Amount</th>
-                <th>Pump</th><th>Employee</th><th>Payment</th><th>Customer</th>
+                <th>Time</th><th>Vehicle</th><th>Fuel / Product</th>
+                <th class="r">Liters / Qty</th><th class="r">Amount</th>
+                <th>Employee</th><th>Payment</th>
               </tr>
             </thead>
-            <tbody>${rows}${emptyMsg}</tbody>
+            <tbody>${rows}${lubeRows}${emptyMsg}</tbody>
           </table>
         </div>
       </div>
@@ -3939,6 +3966,34 @@ const LUBES_GST_RATES  = [0, 5, 12, 18, 28];
 function renderLubes(D) {
   if (!window._lubesProducts) window._lubesProducts = [];
   if (!window._lubesSales)    window._lubesSales    = [];
+
+  // AUTO-REFRESH: poll DB every 30s so employee stock deductions show without page navigation
+  clearInterval(window._lubesRefreshTimer);
+  window._lubesRefreshTimer = setInterval(function() {
+    if (APP.page !== 'lubes') { clearInterval(window._lubesRefreshTimer); return; }
+    Promise.all([
+      db.getSetting('lubes_products'),
+      db.getSetting('lubes_sales'),
+    ]).then(function(res) {
+      var freshProds = res[0], freshSales = res[1];
+      var changed = false;
+      if (Array.isArray(freshProds) && freshProds.length > 0) {
+        // Check if any stock changed
+        var stockChanged = freshProds.some(function(fp) {
+          var old = (window._lubesProducts||[]).find(function(op){ return op.id === fp.id; });
+          return !old || old.stock !== fp.stock;
+        });
+        if (stockChanged) { window._lubesProducts = freshProds; changed = true; }
+      }
+      if (Array.isArray(freshSales)) {
+        if (freshSales.length !== (window._lubesSales||[]).length) { window._lubesSales = freshSales; changed = true; }
+      }
+      if (changed) {
+        var el3 = document.getElementById('content');
+        if (el3 && APP.page === 'lubes') try { el3.innerHTML = renderLubes(APP.data); } catch(e) {}
+      }
+    }).catch(function(){});
+  }, 30000); // refresh every 30 seconds
 
   const tab = window._lubesTab || 'catalogue';
   const prods = window._lubesProducts;

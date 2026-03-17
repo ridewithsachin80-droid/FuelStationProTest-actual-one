@@ -421,8 +421,14 @@ function emp_totalRev() {
       if (oRaw !== undefined && cRaw !== undefined && !isNaN(o) && !isNaN(c) && c > o) meterTotal += (c - o) * (EMP_PRICES[ft] || 0);
     });
   });
-  if (meterTotal > 0) return meterTotal;
-  return empState.sales.reduce((a, s) => a + (s.amount || 0), 0);
+  const fuelRev = meterTotal > 0 ? meterTotal : empState.sales.reduce((a, s) => a + (s.amount || 0), 0);
+  // Always add lube revenue on top
+  const today = emp_today();
+  const empName = empState.user?.name || '';
+  const lubeRev = (window._lubesSales||[])
+    .filter(s => s.date === today && s.employee === empName)
+    .reduce((a,s) => a + (s.amount||0), 0);
+  return fuelRev + lubeRev;
 }
 function emp_totalCash() {
   const fuelCash = empState.sales.reduce((a,s) => a + (s.mode==='cash'?s.amount:0), 0);
@@ -755,6 +761,11 @@ function emp_renderOverview() {
   const oc = Object.keys(empState.openReadings).length, tn = emp_totalNozzles();
   const cc = Object.keys(empState.closeReadings).length;
   const ts = emp_totalSold(), tr = emp_totalRev(), tc = emp_totalCash();
+  const today = emp_today();
+  const empName = empState.user?.name || '';
+  const myLubeSales = (window._lubesSales||[]).filter(s => s.date === today && s.employee === empName);
+  const lubeRev = myLubeSales.reduce((a,s)=>a+s.amount,0);
+  const fuelRev = tr - lubeRev; // fuel-only revenue
 
   return `
     <div style="background:linear-gradient(135deg,rgba(34,197,94,0.08),rgba(34,197,94,0.03));border:1px solid rgba(34,197,94,0.2);border-radius:var(--radius);padding:14px 16px;margin-bottom:16px;display:flex;justify-content:space-between;align-items:center">
@@ -763,7 +774,11 @@ function emp_renderOverview() {
     </div>
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:16px">
       <div class="card" style="text-align:center;padding:12px"><div class="mono fw-800" style="font-size:18px;color:var(--green)">${fmt(ts)}</div><div style="font-size:9px;color:var(--text-3);font-weight:700;text-transform:uppercase;margin-top:3px">Liters Sold</div></div>
-      <div class="card" style="text-align:center;padding:12px"><div class="mono fw-800" style="font-size:18px;color:var(--accent-light)">${cur(tr)}</div><div style="font-size:9px;color:var(--text-3);font-weight:700;text-transform:uppercase;margin-top:3px">Revenue</div></div>
+      <div class="card" style="text-align:center;padding:12px">
+        <div class="mono fw-800" style="font-size:18px;color:var(--accent-light)">${cur(tr)}</div>
+        <div style="font-size:9px;color:var(--text-3);font-weight:700;text-transform:uppercase;margin-top:3px">Revenue</div>
+        ${lubeRev > 0 ? `<div style="font-size:9px;color:#d4940f;margin-top:2px">🛢️ Lubes: ${cur(lubeRev)}</div>` : ''}
+      </div>
       <div class="card" style="text-align:center;padding:12px"><div class="mono fw-800" style="font-size:18px;color:var(--text-0)">${cur(tc)}</div><div style="font-size:9px;color:var(--text-3);font-weight:700;text-transform:uppercase;margin-top:3px">Cash</div></div>
     </div>
     <div class="card mb-16" style="margin-bottom:14px"><div class="card-head"><h4>📋 Progress</h4></div><div class="card-body">
@@ -1249,20 +1264,46 @@ function emp_buildHistoryBreakdown() {
 
 function emp_renderHistory() {
   const ts = emp_totalSold(), tr = emp_totalRev();
+  const today = emp_today();
+  const empName = empState.user?.name || '';
+  const myLubeSales = (window._lubesSales||[]).filter(s => s.date === today && s.employee === empName);
+  const lubeRev = myLubeSales.reduce((a,s)=>a+s.amount,0);
+  const totalTxns = empState.sales.length + myLubeSales.length;
+  // Payment breakdown including lubes
+  const modes = ['cash','upi','card','credit'];
+  const modeColors = {cash:'var(--green)',upi:'var(--blue)',card:'var(--accent-light)',credit:'var(--red)'};
+  const payRows = modes.map(m => {
+    const fuelAmt = empState.sales.filter(s=>s.mode===m).reduce((a,s)=>a+s.amount,0);
+    const lubeAmt = myLubeSales.filter(s=>s.mode===m).reduce((a,s)=>a+s.amount,0);
+    const t = fuelAmt + lubeAmt;
+    return t > 0 ? `<div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border-light)">
+      <span style="text-transform:capitalize;font-weight:600;color:var(--text-1)">${m}</span>
+      <span class="mono fw-700" style="color:${modeColors[m]}">${cur(t)}</span>
+    </div>` : '';
+  }).join('');
+
   return `
     <h3 class="fw-800" style="color:var(--text-0);font-size:18px;margin-bottom:4px">📊 Report</h3>
     <p style="font-size:11px;color:var(--text-3);margin-bottom:16px">Current session and past history</p>
     <div class="card" style="margin-bottom:16px"><div class="card-head"><h4>Current Summary</h4></div><div class="card-body">
       <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px">
         <div style="text-align:center;background:var(--bg-0);padding:10px;border-radius:var(--radius-sm)"><div class="mono fw-800" style="font-size:16px;color:var(--green)">${fmt(ts)}</div><div style="font-size:9px;color:var(--text-3);font-weight:700;text-transform:uppercase;margin-top:2px">Total Liters</div></div>
-        <div style="text-align:center;background:var(--bg-0);padding:10px;border-radius:var(--radius-sm)"><div class="mono fw-800" style="font-size:16px;color:var(--accent-light)">${cur(tr)}</div><div style="font-size:9px;color:var(--text-3);font-weight:700;text-transform:uppercase;margin-top:2px">Revenue</div></div>
-        <div style="text-align:center;background:var(--bg-0);padding:10px;border-radius:var(--radius-sm)"><div class="mono fw-800" style="font-size:16px;color:var(--text-0)">${empState.sales.length}</div><div style="font-size:9px;color:var(--text-3);font-weight:700;text-transform:uppercase;margin-top:2px">Transactions</div></div>
+        <div style="text-align:center;background:var(--bg-0);padding:10px;border-radius:var(--radius-sm)">
+          <div class="mono fw-800" style="font-size:16px;color:var(--accent-light)">${cur(tr)}</div>
+          <div style="font-size:9px;color:var(--text-3);font-weight:700;text-transform:uppercase;margin-top:2px">Revenue</div>
+          ${lubeRev > 0 ? `<div style="font-size:9px;color:#d4940f;margin-top:1px">🛢️ ${cur(lubeRev)}</div>` : ''}
+        </div>
+        <div style="text-align:center;background:var(--bg-0);padding:10px;border-radius:var(--radius-sm)"><div class="mono fw-800" style="font-size:16px;color:var(--text-0)">${totalTxns}</div><div style="font-size:9px;color:var(--text-3);font-weight:700;text-transform:uppercase;margin-top:2px">Transactions</div></div>
       </div>
       <div style="font-size:12px;font-weight:700;color:var(--text-2);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.5px">Pump-wise Breakdown</div>
       ${emp_buildHistoryBreakdown()}
+      ${myLubeSales.length > 0 ? `<div style="margin-top:10px;padding:10px;background:rgba(212,148,15,0.06);border-radius:8px;border:1px solid rgba(212,148,15,0.2)">
+        <div style="font-size:11px;font-weight:700;color:#d4940f;margin-bottom:6px">🛢️ Lubes & Products — ${myLubeSales.length} item(s) · ${cur(lubeRev)}</div>
+        ${myLubeSales.map(s=>`<div style="display:flex;justify-content:space-between;font-size:11px;padding:3px 0;border-bottom:1px solid rgba(212,148,15,0.1)"><span style="color:var(--text-2)">${sanitize(s.productName)} × ${s.qty}</span><span class="mono fw-700" style="color:var(--accent-light)">${cur(s.amount)}</span></div>`).join('')}
+      </div>` : ''}
       <div style="height:1px;background:var(--border);margin:14px 0"></div>
       <div style="font-size:12px;font-weight:700;color:var(--text-2);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.5px">Payment Breakdown</div>
-      ${['cash','upi','card','credit'].map(m=>{const t=empState.sales.filter(s=>s.mode===m).reduce((a,s)=>a+s.amount,0);const cs={cash:'var(--green)',upi:'var(--blue)',card:'var(--accent-light)',credit:'var(--red)'};return t>0?`<div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border-light)"><span style="text-transform:capitalize;font-weight:600;color:var(--text-1)">${m}</span><span class="mono fw-700" style="color:${cs[m]}">${cur(t)}</span></div>`:''}).join('')}
+      ${payRows}
       <button class="btn btn-ghost btn-block" onclick="${emp_hasPerm('print') ? 'emp_share()' : ''}" style="margin-top:12px;${emp_hasPerm('print') ? '' : 'display:none'}" >📤 Share Summary</button>
     </div></div>
     <div class="card"><div class="card-head"><h4>Past Sessions</h4>${badge(empState.sessionHistory.length,'badge-blue')}</div><div class="card-body">
