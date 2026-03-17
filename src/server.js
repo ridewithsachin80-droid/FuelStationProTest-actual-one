@@ -230,7 +230,7 @@ async function startServer() {
         `SELECT COUNT(*) as total FROM expenses WHERE category = 'Fuel Purchase'`
       );
 
-      // Strategy 1: dedup by data_json purchaseId (new-style entries)
+      // Strategy 1: dedup by data_json purchaseId — keep LATEST (highest id = most recent edit)
       const r1 = await pool.query(`
         DELETE FROM expenses e1
         USING expenses e2
@@ -240,11 +240,12 @@ async function startServer() {
           AND e1.data_json::jsonb->>'purchaseId' = e2.data_json::jsonb->>'purchaseId'
           AND e1.category = 'Fuel Purchase'
           AND e2.category = 'Fuel Purchase'
-          AND e1.id > e2.id
+          AND e1.id < e2.id
       `);
 
-      // Strategy 2: dedup by description+amount+date (catches all duplicates
-      // regardless of how data_json was stored — same purchase = same desc+amount+date)
+      // Strategy 2: dedup by description+amount+date — keep LATEST (highest id)
+      // because editing a purchase creates a newer expense entry with the updated values.
+      // Keeping the oldest would restore the pre-edit stale amount.
       const r2 = await pool.query(`
         DELETE FROM expenses e1
         USING expenses e2
@@ -254,7 +255,7 @@ async function startServer() {
           AND e1.description = e2.description
           AND e1.amount = e2.amount
           AND e1.date = e2.date
-          AND e1.id > e2.id
+          AND e1.id < e2.id
       `);
 
       // Count after
@@ -262,7 +263,22 @@ async function startServer() {
         `SELECT COUNT(*) as total FROM expenses WHERE category = 'Fuel Purchase'`
       );
 
-      const deleted = (r1.rowCount || 0) + (r2.rowCount || 0);
+      // Strategy 3: For edited purchases, old and new entries have different amounts
+      // but same description prefix (e.g. "Diesel — 20,000L @") — keep the latest.
+      // Uses LIKE matching on description up to the "@" sign.
+      const r3 = await pool.query(`
+        DELETE FROM expenses e1
+        USING expenses e2
+        WHERE e1.tenant_id = e2.tenant_id
+          AND e1.category = 'Fuel Purchase'
+          AND e2.category = 'Fuel Purchase'
+          AND e1.date = e2.date
+          AND e1.id < e2.id
+          AND SPLIT_PART(e1.description, '@', 1) = SPLIT_PART(e2.description, '@', 1)
+          AND SPLIT_PART(e1.description, '@', 1) != ''
+      `);
+
+      const deleted = (r1.rowCount || 0) + (r2.rowCount || 0) + (r3.rowCount || 0);
       res.json({
         success: true,
         message: deleted > 0

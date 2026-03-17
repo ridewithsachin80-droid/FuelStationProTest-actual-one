@@ -8450,16 +8450,42 @@ async function saveEditPurchase() {
   if (idx >= 0) APP.data.fuelPurchases[idx] = updatedP;
   try { await db.put('fuelPurchases', updatedP); } catch(e) { console.warn('[EditPurchase]', e.message); }
 
-  // Update linked expense entry (if any)
-  const expIdx = APP.data.expenses.findIndex(e => e.purchaseId === purchaseId);
-  if (expIdx >= 0) {
-    APP.data.expenses[expIdx] = {
-      ...APP.data.expenses[expIdx],
-      date, amount: total,
-      desc: `${fuelInfo.short} — ${fmt(liters)}L @ ₹${rate}/L${invoice ? ' · ' + invoice : ''}`,
+  // Update linked expense entry — type-safe: coerce both sides to String for comparison
+  // (data_json returns purchaseId as string from PostgreSQL, but purchaseId var is integer)
+  const newDesc = `${fuelInfo.short} — ${fmt(liters)}L @ ₹${rate}/L${invoice ? ' · ' + invoice : ''}`;
+  const linkedExps = APP.data.expenses.filter(e => String(e.purchaseId) === String(purchaseId));
+
+  if (linkedExps.length > 0) {
+    // Keep the first (oldest) entry, update it, delete any extras (stale duplicates)
+    const keepExp = linkedExps[0];
+    const deleteExps = linkedExps.slice(1);
+
+    // Update the kept entry
+    keepExp.date = date;
+    keepExp.amount = total;
+    keepExp.desc = newDesc;
+    keepExp.description = newDesc;
+    try { await db.put('expenses', keepExp); } catch(e) {}
+
+    // Delete stale duplicate entries
+    for (const delExp of deleteExps) {
+      APP.data.expenses = APP.data.expenses.filter(e => e !== delExp);
+      try { await db.delete('expenses', delExp.id); } catch(e) {}
+    }
+  } else {
+    // No linked expense found — create one fresh
+    const newExp = {
+      id: purchaseId + 0.1,
+      date, category: 'Fuel Purchase',
+      desc: newDesc, description: newDesc,
+      amount: total,
+      source: 'fuel_purchase',
+      purchaseId,
     };
-    try { await db.put('expenses', APP.data.expenses[expIdx]); } catch(e) {}
+    APP.data.expenses.unshift(newExp);
+    try { await db.add('expenses', newExp); } catch(e) {}
   }
+  APP.data.expenses.sort((a, b) => (b.id || 0) - (a.id || 0));
 
   // Refresh tank data
   try { const ft = await db.getAll('tanks'); if (ft&&ft.length) APP.data.tanks = ft.map(_normTank); } catch(e) {}
@@ -8519,11 +8545,11 @@ async function deletePurchase(purchaseId) {
   APP.data.fuelPurchases = APP.data.fuelPurchases.filter(x => x.id !== purchaseId);
   try { await db.delete('fuelPurchases', purchaseId); } catch(e) { console.warn('[DeletePurchase]', e.message); }
 
-  // Remove linked expense entry
-  const linkedExp = APP.data.expenses.find(e => e.purchaseId === purchaseId);
-  if (linkedExp) {
-    APP.data.expenses = APP.data.expenses.filter(e => e.purchaseId !== purchaseId);
-    try { await db.delete('expenses', linkedExp.id); } catch(e) {}
+  // Remove linked expense entry — type-safe String comparison
+  const linkedExps = APP.data.expenses.filter(e => String(e.purchaseId) === String(purchaseId));
+  for (const exp of linkedExps) {
+    APP.data.expenses = APP.data.expenses.filter(e => e !== exp);
+    try { await db.delete('expenses', exp.id); } catch(e) {}
   }
 
   // Refresh tanks
