@@ -483,7 +483,19 @@ function renderTanks(D) {
     const ft = r.fuelType || r.fuel_type || '';
     const fuel = getFuel(ft);
     const total = r.total || r.amount || (r.liters * r.rate) || 0;
-    return `<tr><td>${r.date}</td><td style="color:${fuel.color}" class="fw-600">${fuel.name}</td><td class="r mono">${fmt(r.liters)}</td><td class="r mono">${cur(r.rate)}</td><td class="r mono fw-700">${cur(total)}</td><td class="mono" style="font-size:12px">${r.invoice||'—'}</td><td class="mono" style="font-size:11px;color:var(--text-3)">${r.supplier||''}</td></tr>`;
+    return `<tr>
+      <td>${r.date}</td>
+      <td style="color:${fuel.color}" class="fw-600">${fuel.name}</td>
+      <td class="r mono">${fmt(r.liters)}</td>
+      <td class="r mono">${cur(r.rate)}</td>
+      <td class="r mono fw-700">${cur(total)}</td>
+      <td class="mono" style="font-size:12px">${r.invoice||'—'}</td>
+      <td class="mono" style="font-size:11px;color:var(--text-3)">${r.supplier||''}</td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-ghost btn-sm" style="padding:4px 10px;font-size:11px" onclick="openEditPurchaseModal(${r.id})" title="Edit purchase">✏️</button>
+        <button class="btn btn-ghost btn-sm" style="padding:4px 10px;font-size:11px;color:var(--red)" onclick="confirmDeletePurchase(${r.id})" title="Delete purchase">🗑</button>
+      </td>
+    </tr>`;
   }).join('');
 
   return `
@@ -502,7 +514,7 @@ function renderTanks(D) {
     </div>
     <div class="card">
       <div class="card-head"><h4>🚛 Fuel Purchases</h4></div>
-      <div class="card-body"><div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Fuel</th><th class="r">Qty (L)</th><th class="r">Rate/L</th><th class="r">Total</th><th>Invoice</th><th>Supplier</th></tr></thead><tbody>${purchaseRows}</tbody></table></div></div>
+      <div class="card-body"><div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Fuel</th><th class="r">Qty (L)</th><th class="r">Rate/L</th><th class="r">Total</th><th>Invoice</th><th>Supplier</th><th>Actions</th></tr></thead><tbody>${purchaseRows}</tbody></table></div></div>
     </div>`;
 }
 
@@ -3909,10 +3921,7 @@ function renderLubes(D) {
       const isExpired = p.expiryDate && p.expiryDate < today;
       const expiringSoon = p.expiryDate && !isExpired && p.expiryDate <= new Date(Date.now()+30*86400000).toISOString().slice(0,10);
       const stockBg  = isLow ? 'rgba(239,68,68,0.08)' : '';
-      const effectiveCost = (p.isCartonPacked && p.qtyPerCarton > 0)
-        ? (p.costPrice / p.qtyPerCarton)
-        : p.costPrice;
-      const margin   = p.sellingPrice && effectiveCost ? (((p.sellingPrice - effectiveCost) / p.sellingPrice) * 100).toFixed(0) : '—';
+      const margin   = p.sellingPrice && p.costPrice ? (((p.sellingPrice-p.costPrice)/p.sellingPrice)*100).toFixed(0) : '—';
       return `<tr style="background:${stockBg}">
         <td>
           <div class="fw-700" style="font-size:13px;color:var(--text-0)">${sanitize(p.name)}</div>
@@ -3928,13 +3937,9 @@ function renderLubes(D) {
           ${isLow?badge('LOW','badge-red'):''}
           ${isExpired?badge('EXPIRED','badge-red'):expiringSoon?badge('EXPIRING','badge-accent'):''}
         </td>
-        <td class="r mono" style="font-size:11px">
-          ${p.isCartonPacked && p.qtyPerCarton > 0
-            ? `<span style="color:var(--text-1)">${cur(effectiveCost)}</span><br><span style="color:var(--text-3);font-size:9px">÷${p.qtyPerCarton}/ctn</span>`
-            : cur(p.costPrice||0)}
-        </td>
+        <td class="r mono">${cur(p.costPrice||0)}</td>
         <td class="r mono fw-700" style="color:var(--accent-light)">${cur(p.sellingPrice||0)}</td>
-        <td class="r" style="font-size:11px;color:${margin==='—'?'var(--text-3)':parseInt(margin)>=20?'var(--green)':parseInt(margin)>=0?'var(--orange)':'var(--red)'}">${margin==='—'?margin:margin+'%'}</td>
+        <td class="r" style="font-size:11px;color:${parseInt(margin)>=20?'var(--green)':'var(--orange)'}">${margin}%</td>
         <td style="font-size:11px;color:var(--text-3)">${p.gstPct||0}%</td>
         <td style="white-space:nowrap">
           <button onclick="openLubeSaleModal(${p.id})" style="padding:4px 10px;background:rgba(212,148,15,0.1);border:1px solid rgba(212,148,15,0.3);color:var(--accent-light);border-radius:6px;cursor:pointer;font-size:11px;font-weight:700;margin-right:4px">🛒 Sell</button>
@@ -4595,35 +4600,19 @@ function renderBillScanResults(data) {
   const prods = data.products || [];
   if (!prods.length) { area.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-3)">No products found in this invoice</div>'; area.style.display='block'; return; }
 
-  // Store globally for confirmBillItem / bulk actions to access
+  // Store globally for confirmBillItem to access
   window._billScanData = data;
-  window._billScanSelected = new Set(prods.map((_,i)=>i)); // all selected by default
-  window._billScanDone = new Set();
 
+  const existingSkus = new Set((window._lubesProducts||[]).map(p=>p.sku).filter(Boolean));
   const existingNames = new Map((window._lubesProducts||[]).map(p=>[p.name.toLowerCase(), p]));
 
-  // Build header row with Select All checkbox + Confirm All Selected button
-  let html = `
-  <div style="padding:8px 12px;background:rgba(55,138,221,0.08);border-radius:var(--radius-sm);font-size:12px;margin-bottom:12px">
+  let html = `<div style="padding:8px 12px;background:rgba(55,138,221,0.08);border-radius:var(--radius-sm);font-size:12px;margin-bottom:12px">
     <strong style="color:var(--text-1)">${sanitize(data.supplier||'Supplier')}</strong>
     &nbsp;·&nbsp; Invoice ${sanitize(data.invoiceNo||'')}
     &nbsp;·&nbsp; ${sanitize(data.invoiceDate||'')}
     &nbsp;·&nbsp; Total: ₹${(data.totalAmount||0).toLocaleString('en-IN')}
   </div>
-
-  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:8px;flex-wrap:wrap">
-    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;font-weight:700;color:var(--text-1);user-select:none">
-      <input type="checkbox" id="bill_select_all" checked
-        style="width:16px;height:16px;cursor:pointer;accent-color:var(--accent)"
-        onchange="billScanToggleAll(this.checked)" />
-      <span id="bill_sel_count">${prods.length} of ${prods.length} selected</span>
-    </label>
-    <button id="bill_confirm_all_btn" class="btn btn-accent"
-      style="font-size:12px;padding:6px 14px;border-radius:7px"
-      onclick="confirmAllBillItems()">
-      ✅ Add All Selected (${prods.length})
-    </button>
-  </div>`;
+  <div style="font-size:12px;color:var(--text-2);margin-bottom:8px;font-weight:700">${prods.length} product${prods.length!==1?'s':''} found:</div>`;
 
   prods.forEach((prod, idx) => {
     const matchBySkuProd = prod.sku ? (window._lubesProducts||[]).find(p=>p.sku === prod.sku) : null;
@@ -4631,201 +4620,61 @@ function renderBillScanResults(data) {
     const match = matchBySkuProd || matchByName;
     const pieces = prod.isCartonPacked ? (prod.cartonsOrdered||0)*(prod.packQty||1) : (prod.cartonsOrdered||0);
     const packStr = prod.isCartonPacked && prod.packQty > 1 ? `${prod.packQty}×${prod.packSize} ${prod.packType}` : (prod.packSize || prod.packType || '');
-    const isNew = !match;
 
-    html += `
-    <div id="billitem_${idx}"
-      style="border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px;margin-bottom:8px;transition:background 0.15s,opacity 0.2s;cursor:pointer"
-      onclick="billScanToggleItem(${idx}, event)">
-      <div style="display:flex;align-items:flex-start;gap:10px">
-
-        <!-- Checkbox -->
-        <div style="padding-top:1px;flex-shrink:0" onclick="event.stopPropagation()">
-          <input type="checkbox" class="bill_item_chk" data-idx="${idx}" checked
-            style="width:16px;height:16px;cursor:pointer;accent-color:var(--accent)"
-            onchange="billScanItemChecked(${idx}, this.checked)" />
-        </div>
-
-        <!-- Product info -->
-        <div style="flex:1;min-width:0">
+    html += `<div id="billitem_${idx}" style="border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px;margin-bottom:8px">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px">
+        <div style="flex:1">
           <div style="font-weight:700;font-size:13px">${sanitize(prod.name||'')}</div>
           <div style="font-size:10px;color:var(--text-3);margin-top:2px">
-            ${prod.sku?'SKU '+sanitize(prod.sku)+' · ':''}HSN ${sanitize(prod.hsn||'')}
-            &nbsp;·&nbsp; GST ${prod.gstPct||18}%
-            &nbsp;·&nbsp; ${prod.cartonsOrdered||0} ${prod.isCartonPacked?'CAR':'nos'} @ ₹${(prod.ratePerCarton||0).toLocaleString('en-IN',{maximumFractionDigits:2})}
-            ${packStr?'<br><span style="background:rgba(99,153,34,0.12);color:#27500A;padding:0 5px;border-radius:3px;display:inline-block;margin-top:3px">'+sanitize(packStr)+'</span>':''}
+            ${prod.sku?'SKU '+sanitize(prod.sku)+' · ':''}HSN ${sanitize(prod.hsn||'')} · GST ${prod.gstPct||18}% · ${prod.cartonsOrdered||0} ${prod.isCartonPacked?'CAR':'nos'} @ ₹${(prod.ratePerCarton||0).toLocaleString('en-IN',{maximumFractionDigits:2})}
+            ${packStr?'<br><span style="background:rgba(99,153,34,0.12);color:#27500A;padding:0 5px;border-radius:3px">'+sanitize(packStr)+'</span>':''}
           </div>
         </div>
-
-        <!-- Action badge + individual button -->
         <div style="text-align:right;flex-shrink:0">
-          <div id="billitem_badge_${idx}" style="font-size:10px;margin-bottom:4px;color:${isNew?'#27500A':'#185FA5'}">
-            ${isNew ? 'New product' : '↺ Update stock'}
-          </div>
-          <button id="billitem_btn_${idx}" class="btn btn-sm"
-            style="font-size:11px;padding:4px 10px;${isNew?'background:#22c55e;color:#fff;border:none':'background:rgba(55,138,221,0.1);border:1px solid rgba(55,138,221,0.3);color:#185FA5'}"
-            onclick="event.stopPropagation();confirmBillItem(${idx})">
-            ${isNew ? 'Add →' : `+ ${Math.round(pieces).toLocaleString('en-IN')} pcs`}
-          </button>
+          ${match
+            ? `<div style="font-size:10px;color:#185FA5;margin-bottom:4px">↺ Update stock</div>
+               <button class="btn btn-accent btn-sm" style="font-size:11px" onclick="confirmBillItem(${idx})">+ ${pieces.toLocaleString('en-IN')} pcs</button>`
+            : `<div style="font-size:10px;color:#27500A;margin-bottom:4px">New product</div>
+               <button class="btn btn-accent btn-sm" style="font-size:11px;background:#22c55e" onclick="confirmBillItem(${idx})">Add →</button>`
+          }
         </div>
-
       </div>
     </div>`;
   });
 
   area.innerHTML = html;
   area.style.display = 'block';
-
-  // Update footer Close→Close (scan done shows Close)
-  _billScanRefreshHeader();
 }
 window.renderBillScanResults = renderBillScanResults;
 
-// Toggle a single item row selected/deselected
-function billScanToggleItem(idx, event) {
-  // Don't fire if click was on the checkbox itself (handled by onchange)
-  if (event && event.target && (event.target.type === 'checkbox' || event.target.tagName === 'BUTTON')) return;
-  const chk = document.querySelector(`.bill_item_chk[data-idx="${idx}"]`);
-  if (!chk) return;
-  const nowChecked = !chk.checked;
-  chk.checked = nowChecked;
-  billScanItemChecked(idx, nowChecked);
-}
-window.billScanToggleItem = billScanToggleItem;
-
-// Called whenever an individual checkbox changes
-function billScanItemChecked(idx, checked) {
-  const done = window._billScanDone || new Set();
-  if (done.has(idx)) return; // already processed — can't uncheck
-  const sel = window._billScanSelected || new Set();
-  if (checked) sel.add(idx); else sel.delete(idx);
-  window._billScanSelected = sel;
-  // Dim row when deselected
-  const row = document.getElementById(`billitem_${idx}`);
-  if (row) row.style.opacity = checked ? '1' : '0.4';
-  _billScanRefreshHeader();
-}
-window.billScanItemChecked = billScanItemChecked;
-
-// Select All / Deselect All
-function billScanToggleAll(checked) {
+async function confirmBillItem(idx) {
   const data = window._billScanData;
   if (!data) return;
-  const done = window._billScanDone || new Set();
-  const prods = data.products || [];
-  const sel = new Set();
-  prods.forEach((_, i) => {
-    if (done.has(i)) return; // skip already-done
-    const chk = document.querySelector(`.bill_item_chk[data-idx="${i}"]`);
-    if (chk) { chk.checked = checked; }
-    if (checked) sel.add(i);
-    const row = document.getElementById(`billitem_${i}`);
-    if (row) row.style.opacity = checked ? '1' : '0.4';
-  });
-  // Keep done items selected-looking
-  done.forEach(i => sel.add(i));
-  window._billScanSelected = sel;
-  _billScanRefreshHeader();
-}
-window.billScanToggleAll = billScanToggleAll;
+  const prod = data.products[idx];
+  if (!prod) return;
 
-// Refresh the header count label + button text + select-all indeterminate state
-function _billScanRefreshHeader() {
-  const data = window._billScanData;
-  if (!data) return;
-  const prods = data.products || [];
-  const total = prods.length;
-  const done = window._billScanDone || new Set();
-  const sel = window._billScanSelected || new Set();
-  // Pending = selected AND not yet done
-  const pending = [...sel].filter(i => !done.has(i));
-  const pendingCount = pending.length;
-  const doneCount = done.size;
+  const btn = document.querySelector(`#billitem_${idx} button`);
+  if (btn) { btn.disabled = true; btn.textContent = '✓ Done'; }
 
-  const countEl = document.getElementById('bill_sel_count');
-  const btnEl = document.getElementById('bill_confirm_all_btn');
-  const allChk = document.getElementById('bill_select_all');
+  const pieces = prod.isCartonPacked ? Math.round((prod.cartonsOrdered||0)*(prod.packQty||1)) : (prod.cartonsOrdered||0);
 
-  if (countEl) {
-    if (doneCount > 0 && doneCount === total) {
-      countEl.textContent = `✅ All ${total} products added!`;
-    } else if (doneCount > 0) {
-      countEl.textContent = `${pendingCount} selected · ${doneCount} done`;
-    } else {
-      countEl.textContent = `${pendingCount} of ${total} selected`;
-    }
-  }
+  // Check if product already exists by SKU or name
+  const existingBySku  = prod.sku ? (window._lubesProducts||[]).find(p=>p.sku===prod.sku) : null;
+  const existingByName = (window._lubesProducts||[]).find(p=>p.name.toLowerCase()===(prod.name||'').toLowerCase());
+  const existing = existingBySku || existingByName;
 
-  if (btnEl) {
-    if (pendingCount === 0 && doneCount === total) {
-      btnEl.style.display = 'none';
-    } else if (pendingCount === 0) {
-      btnEl.disabled = true;
-      btnEl.style.opacity = '0.4';
-      btnEl.textContent = 'Nothing selected';
-    } else {
-      btnEl.disabled = false;
-      btnEl.style.opacity = '1';
-      btnEl.textContent = `✅ Add All Selected (${pendingCount})`;
-    }
-  }
-
-  if (allChk) {
-    const availableCount = total - doneCount;
-    const selectedPending = pendingCount;
-    allChk.checked = availableCount > 0 && selectedPending === availableCount;
-    allChk.indeterminate = selectedPending > 0 && selectedPending < availableCount;
-  }
-}
-
-// ── Bulk confirm: process all selected items that aren't done yet ──────────
-async function confirmAllBillItems() {
-  const data = window._billScanData;
-  if (!data) return;
-  const prods = data.products || [];
-  const done = window._billScanDone || new Set();
-  const sel = window._billScanSelected || new Set();
-  const pending = [...sel].filter(i => !done.has(i));
-  if (!pending.length) { toast('Nothing selected', 'info'); return; }
-
-  // Separate: existing (stock update) vs new (add to catalogue)
-  const toUpdate = [];
-  const toAdd    = [];
-  pending.forEach(idx => {
-    const prod = prods[idx];
-    if (!prod) return;
-    const existingBySku  = prod.sku ? (window._lubesProducts||[]).find(p=>p.sku===prod.sku) : null;
-    const existingByName = (window._lubesProducts||[]).find(p=>p.name.toLowerCase()===(prod.name||'').toLowerCase());
-    if (existingBySku || existingByName) {
-      toUpdate.push({ idx, prod, existing: existingBySku || existingByName });
-    } else {
-      toAdd.push({ idx, prod });
-    }
-  });
-
-  // Disable the bulk button while processing
-  const btnEl = document.getElementById('bill_confirm_all_btn');
-  if (btnEl) { btnEl.disabled = true; btnEl.textContent = 'Adding…'; }
-
-  let savedCount = 0;
-
-  // 1. Process stock updates immediately
-  toUpdate.forEach(({ idx, prod, existing }) => {
-    const pieces = prod.isCartonPacked ? Math.round((prod.cartonsOrdered||0)*(prod.packQty||1)) : (prod.cartonsOrdered||0);
+  if (existing) {
+    // Update stock + cost price on existing product
     existing.stock = (existing.stock||0) + pieces;
     if (prod.ratePerCarton > 0) existing.costPrice = prod.ratePerCarton;
     if (prod.mrp > 0) existing.mrp = prod.mrp;
     if (prod.sku && !existing.sku) existing.sku = prod.sku;
-    _billMarkDone(idx, `+${Math.round(pieces).toLocaleString('en-IN')} pcs`);
-    savedCount++;
-  });
-
-  // 2. Auto-add new products directly (no modal — uses scanned data)
-  toAdd.forEach(({ idx, prod }) => {
-    if (!window._lubesProducts) window._lubesProducts = [];
-    const pieces = prod.isCartonPacked ? Math.round((prod.cartonsOrdered||0)*(prod.packQty||1)) : (prod.cartonsOrdered||0);
-    const newProd = {
-      id:            Date.now() + idx,
+    lubes_save();
+    toast(`✅ ${sanitize(prod.name)} — stock +${pieces.toLocaleString('en-IN')}`, 'success');
+  } else {
+    // Add new product — close scan modal and open add modal pre-filled
+    closeModal();
+    openAddLubeModal({
       name:          prod.name || '',
       brand:         'Indian Oil / Servo',
       sku:           prod.sku || '',
@@ -4833,114 +4682,15 @@ async function confirmAllBillItems() {
       gstPct:        prod.gstPct || 18,
       costPrice:     prod.ratePerCarton || 0,
       mrp:           prod.mrp || 0,
-      sellingPrice:  prod.mrp > 0 && prod.packQty > 0 ? Math.round((prod.mrp / prod.packQty) * 100) / 100 : 0,
-      stock:         pieces,
-      minStock:      5,
-      unit:          'Nos',
-      category:      'Engine Oil',
-      expiryDate:    '',
-      active:        true,
-      isCartonPacked: !!(prod.isCartonPacked),
+      isCartonPacked: prod.isCartonPacked,
       qtyPerCarton:  prod.packQty || 0,
       indSize:       prod.packSize || '',
       packType:      prod.packType || 'Pouch',
-    };
-    window._lubesProducts.push(newProd);
-    _billMarkDone(idx, 'Added ✓');
-    savedCount++;
-  });
-
-  if (savedCount > 0) {
-    lubes_save();
-    const newCount = toAdd.length;
-    const updCount = toUpdate.length;
-    const parts = [];
-    if (updCount) parts.push(`${updCount} stock${updCount>1?'s':''} updated`);
-    if (newCount) parts.push(`${newCount} new product${newCount>1?'s':''} added`);
-    toast(`✅ ${parts.join(' · ')}`, 'success');
-    renderPage(); // refresh catalogue
-  }
-
-  _billScanRefreshHeader();
-
-  // If all done, show a note about new products needing selling price
-  const allDone = (window._billScanDone||new Set()).size === prods.length;
-  if (allDone && toAdd.length > 0) {
-    setTimeout(() => {
-      toast(`💡 ${toAdd.length} new product${toAdd.length>1?'s':''} added — set selling prices in Catalogue`, 'info');
-    }, 1200);
-  }
-}
-window.confirmAllBillItems = confirmAllBillItems;
-
-// Mark a row as done visually
-function _billMarkDone(idx, label) {
-  if (!window._billScanDone) window._billScanDone = new Set();
-  window._billScanDone.add(idx);
-  window._billScanSelected = window._billScanSelected || new Set();
-  window._billScanSelected.add(idx);
-
-  const row = document.getElementById(`billitem_${idx}`);
-  if (row) {
-    row.style.opacity = '1';
-    row.style.background = 'rgba(34,197,94,0.06)';
-    row.style.borderColor = 'rgba(34,197,94,0.3)';
-    row.style.cursor = 'default';
-  }
-  const chk = document.querySelector(`.bill_item_chk[data-idx="${idx}"]`);
-  if (chk) { chk.checked = true; chk.disabled = true; }
-  const btn = document.getElementById(`billitem_btn_${idx}`);
-  if (btn) { btn.disabled = true; btn.textContent = label || '✓'; btn.style.background='rgba(34,197,94,0.1)'; btn.style.color='var(--green)'; btn.style.border='1px solid rgba(34,197,94,0.3)'; }
-  const badge = document.getElementById(`billitem_badge_${idx}`);
-  if (badge) { badge.textContent = '✅ Done'; badge.style.color = 'var(--green)'; }
-}
-
-// Individual confirm (single item button) — unchanged behaviour + marks done
-async function confirmBillItem(idx) {
-  const data = window._billScanData;
-  if (!data) return;
-  const prod = data.products[idx];
-  if (!prod) return;
-
-  // Prevent double-tap
-  const btn = document.getElementById(`billitem_btn_${idx}`);
-  if (btn && btn.disabled) return;
-  if (btn) { btn.disabled = true; btn.textContent = '…'; }
-
-  const pieces = prod.isCartonPacked ? Math.round((prod.cartonsOrdered||0)*(prod.packQty||1)) : (prod.cartonsOrdered||0);
-  const existingBySku  = prod.sku ? (window._lubesProducts||[]).find(p=>p.sku===prod.sku) : null;
-  const existingByName = (window._lubesProducts||[]).find(p=>p.name.toLowerCase()===(prod.name||'').toLowerCase());
-  const existing = existingBySku || existingByName;
-
-  if (existing) {
-    existing.stock = (existing.stock||0) + pieces;
-    if (prod.ratePerCarton > 0) existing.costPrice = prod.ratePerCarton;
-    if (prod.mrp > 0) existing.mrp = prod.mrp;
-    if (prod.sku && !existing.sku) existing.sku = prod.sku;
-    lubes_save();
-    _billMarkDone(idx, `+${Math.round(pieces).toLocaleString('en-IN')} pcs`);
-    toast(`✅ ${sanitize(prod.name)} — stock +${Math.round(pieces).toLocaleString('en-IN')}`, 'success');
-    _billScanRefreshHeader();
-    renderPage();
-  } else {
-    // New product: close scan, open prefilled Add modal for user to review before saving
-    closeModal();
-    openAddLubeModal({
-      name:           prod.name || '',
-      brand:          'Indian Oil / Servo',
-      sku:            prod.sku || '',
-      hsn:            prod.hsn || '',
-      gstPct:         prod.gstPct || 18,
-      costPrice:      prod.ratePerCarton || 0,
-      mrp:            prod.mrp || 0,
-      isCartonPacked: prod.isCartonPacked,
-      qtyPerCarton:   prod.packQty || 0,
-      indSize:        prod.packSize || '',
-      packType:       prod.packType || 'Pouch',
-      cartons:        prod.cartonsOrdered || 0,
-      category:       'Engine Oil',
-      unit:           'Nos',
+      cartons:       prod.cartonsOrdered || 0,
+      category:      'Engine Oil',
+      unit:          'Nos',
     });
+    return;
   }
 }
 window.confirmBillItem = confirmBillItem;
@@ -8553,6 +8303,225 @@ async function savePurchase() {
   toast(`✅ ${fmt(liters)}L ${fuelInfo.short} purchased — ₹${cur(total)} added to expenses`, 'success');
   renderPage();
 }
+
+// ── EDIT FUEL PURCHASE ────────────────────────────────────────────────────
+function openEditPurchaseModal(purchaseId) {
+  if (subReadOnlyGuard()) return;
+  const p = APP.data.fuelPurchases.find(x => x.id === purchaseId);
+  if (!p) { toast('Purchase not found — please refresh', 'error'); return; }
+  const fuelOpts = FUEL_TYPES.map(f =>
+    `<option value="${f.id}" ${f.id === (p.fuelType||p.fuel_type) ? 'selected' : ''}>${f.name}</option>`
+  ).join('');
+  const ft = p.fuelType || p.fuel_type || '';
+  const defaultTax = (APP.data.fuelTaxRates || []).find(t => t.fuelType === ft);
+  const taxName = p.taxName || (defaultTax ? defaultTax.taxName : 'ZLST');
+  const taxPct  = p.taxPct  !== undefined ? p.taxPct  : (defaultTax ? defaultTax.rate : 0);
+  // Reverse-calculate basicKL from stored rate if not saved separately
+  const basicKL = p.basicRate || (taxPct > 0 ? (p.rate / (1 + taxPct/100)) * 1000 : p.rate * 1000);
+
+  openModal('✏️ Edit Fuel Purchase', `
+    <input type="hidden" id="editPurchId" value="${purchaseId}" />
+    <div style="background:rgba(249,115,22,0.08);border:1px solid rgba(249,115,22,0.25);border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:12px;color:#f97316">
+      ⚠️ Editing a purchase will <strong>reverse the old tank fill</strong> and apply the new values. Double-check before saving.
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">Date *</label>
+        <input class="form-input" id="editPurchDate" type="date" value="${(p.date||'').slice(0,10)}" />
+      </div>
+      <div class="form-group">
+        <label class="form-label">Fuel Type *</label>
+        <select class="form-input" id="editPurchFuel">${fuelOpts}</select>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">Quantity (Litres) *</label>
+        <input class="form-input" id="editPurchQty" type="number" min="1" max="50000" step="1" value="${p.liters||0}" oninput="calcEditPurchTotal()" />
+      </div>
+      <div class="form-group">
+        <label class="form-label">Basic Price (per KL) *</label>
+        <input class="form-input" id="editPurchBasicKL" type="number" min="1" step="0.001" value="${basicKL.toFixed(3)}" oninput="calcEditPurchTotal()" />
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">${taxName} %</label>
+        <input class="form-input" id="editPurchTaxPct" type="number" min="0" max="100" step="0.001" value="${taxPct}" oninput="calcEditPurchTotal()" />
+      </div>
+      <div class="form-group">
+        <label class="form-label">Invoice No.</label>
+        <input class="form-input" id="editPurchInvoice" value="${sanitize(p.invoice||'')}" placeholder="e.g. 20264324B122958" />
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Supplier</label>
+      <input class="form-input" id="editPurchSupplier" value="${sanitize(p.supplier||'')}" placeholder="e.g. IOCL Bangalore Terminal" />
+    </div>
+    <div id="editPurchPreview" style="background:rgba(212,148,15,0.08);border:1px solid rgba(212,148,15,0.25);border-radius:8px;padding:10px 14px;font-size:12px;color:var(--accent-light);margin-top:4px">
+      Effective rate: calculating…
+    </div>
+  `,
+  `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+   <button class="btn btn-accent" onclick="saveEditPurchase()">💾 Save Changes</button>`);
+  setTimeout(calcEditPurchTotal, 80);
+}
+
+function calcEditPurchTotal() {
+  const qty      = parseFloat(document.getElementById('editPurchQty')?.value) || 0;
+  const basicKL  = parseFloat(document.getElementById('editPurchBasicKL')?.value) || 0;
+  const taxPct   = parseFloat(document.getElementById('editPurchTaxPct')?.value) || 0;
+  const prev     = document.getElementById('editPurchPreview');
+  if (!prev) return;
+  if (!qty || !basicKL) { prev.textContent = 'Effective rate: fill qty and basic price to preview'; return; }
+  const basicPerL = basicKL / 1000;
+  const taxPerL   = basicPerL * (taxPct / 100);
+  const rate      = basicPerL + taxPerL;
+  const total     = qty * rate;
+  prev.innerHTML = `Effective rate: <strong style="color:var(--green)">₹${rate.toFixed(3)}/L</strong> &nbsp;·&nbsp; Total: <strong style="color:var(--green)">${cur(total)}</strong>`;
+}
+
+async function saveEditPurchase() {
+  const purchaseId = parseInt(document.getElementById('editPurchId')?.value);
+  const oldP = APP.data.fuelPurchases.find(x => x.id === purchaseId);
+  if (!oldP) { toast('Purchase not found', 'error'); return; }
+
+  const fuelType = document.getElementById('editPurchFuel')?.value;
+  const date     = document.getElementById('editPurchDate')?.value || today();
+  const liters   = parseFloat(document.getElementById('editPurchQty')?.value);
+  const basicKL  = parseFloat(document.getElementById('editPurchBasicKL')?.value);
+  const taxPct   = parseFloat(document.getElementById('editPurchTaxPct')?.value) || 0;
+  const invoice  = sanitize((document.getElementById('editPurchInvoice')?.value || '').trim());
+  const supplier = sanitize((document.getElementById('editPurchSupplier')?.value || '').trim());
+
+  if (isNaN(liters) || liters <= 0) { toast('Quantity is required', 'error'); return; }
+  if (isNaN(basicKL) || basicKL <= 0) { toast('Basic price per KL is required', 'error'); return; }
+
+  const basicPerL = basicKL / 1000;
+  const taxPerL   = basicPerL * (taxPct / 100);
+  const rate      = Math.round((basicPerL + taxPerL) * 1000) / 1000;
+  const total     = Math.round(liters * rate * 100) / 100;
+  const fuelInfo  = getFuel(fuelType);
+
+  // ── Reverse old tank fill, then apply new ──────────────────────────────
+  const oldFuelType = oldP.fuelType || oldP.fuel_type || '';
+  const oldLiters   = oldP.liters || 0;
+
+  // Remove old liters from tanks of old fuel type
+  const tanksOld = (APP.data.tanks||[]).filter(t => (t.fuelType||t.fuel_type) === oldFuelType);
+  for (const tank of tanksOld) {
+    const shareRatio = tanksOld.length === 1 ? 1 : (tank.current / Math.max(1, tanksOld.reduce((a,t)=>a+t.current,0)));
+    const removeL = tanksOld.length === 1 ? oldLiters : Math.round(oldLiters * shareRatio);
+    tank.current = Math.max(0, (parseFloat(tank.current)||0) - removeL);
+    try { await db.put('tanks', _tankForPut(tank)); } catch(e) {}
+  }
+
+  // Add new liters to tanks of new fuel type
+  const tanksNew = (APP.data.tanks||[]).filter(t => (t.fuelType||t.fuel_type) === fuelType);
+  for (const tank of tanksNew) {
+    const addL = tanksNew.length === 1 ? liters : Math.round(liters / tanksNew.length);
+    tank.current = Math.min(tank.capacity||0, (parseFloat(tank.current)||0) + addL);
+    tank.lastDip = date;
+    try { await db.put('tanks', _tankForPut(tank)); } catch(e) {}
+  }
+
+  // Update purchase record
+  const updatedP = { ...oldP, date, fuelType, liters, basicRate: basicKL, taxPct, rate, total, invoice, supplier };
+  const idx = APP.data.fuelPurchases.findIndex(x => x.id === purchaseId);
+  if (idx >= 0) APP.data.fuelPurchases[idx] = updatedP;
+  try { await db.put('fuelPurchases', updatedP); } catch(e) { console.warn('[EditPurchase]', e.message); }
+
+  // Update linked expense entry (if any)
+  const expIdx = APP.data.expenses.findIndex(e => e.purchaseId === purchaseId);
+  if (expIdx >= 0) {
+    APP.data.expenses[expIdx] = {
+      ...APP.data.expenses[expIdx],
+      date, amount: total,
+      desc: `${fuelInfo.short} — ${fmt(liters)}L @ ₹${rate}/L${invoice ? ' · ' + invoice : ''}`,
+    };
+    try { await db.put('expenses', APP.data.expenses[expIdx]); } catch(e) {}
+  }
+
+  // Refresh tank data
+  try { const ft = await db.getAll('tanks'); if (ft&&ft.length) APP.data.tanks = ft.map(_normTank); } catch(e) {}
+  // Update purchase price (COGS)
+  APP.data.purchasePrices[fuelType] = rate;
+  db.setSetting('purchasePrices', APP.data.purchasePrices).catch(() => {});
+
+  auditLog('purchase_edit', { purchaseId, fuelType, liters, rate, total });
+  closeModal();
+  toast(`✅ Purchase updated — ${fmt(liters)}L ${fuelInfo.short} @ ${cur(rate)}/L`, 'success');
+  renderPage();
+}
+
+// ── DELETE FUEL PURCHASE ──────────────────────────────────────────────────
+function confirmDeletePurchase(purchaseId) {
+  if (subReadOnlyGuard()) return;
+  const p = APP.data.fuelPurchases.find(x => x.id === purchaseId);
+  if (!p) { toast('Purchase not found', 'error'); return; }
+  const ft   = getFuel(p.fuelType || p.fuel_type || '');
+  const total = p.total || (p.liters * p.rate) || 0;
+  openModal('🗑 Delete Fuel Purchase',
+    `<div style="text-align:center;padding:12px 0">
+       <div style="font-size:40px;margin-bottom:12px">⚠️</div>
+       <div style="font-size:15px;font-weight:700;color:var(--text-0);margin-bottom:8px">Delete this purchase?</div>
+       <div style="background:var(--bg-0);border-radius:8px;padding:12px;margin:12px 0;text-align:left;font-size:13px;line-height:1.8">
+         <div>📅 <strong>Date:</strong> ${p.date}</div>
+         <div style="color:${ft.color}">⛽ <strong>Fuel:</strong> ${ft.name}</div>
+         <div>📦 <strong>Qty:</strong> ${fmt(p.liters)} L</div>
+         <div>💰 <strong>Total:</strong> ${cur(total)}</div>
+         ${p.invoice ? `<div>📄 <strong>Invoice:</strong> ${sanitize(p.invoice)}</div>` : ''}
+       </div>
+       <div style="font-size:12px;color:var(--red);margin-top:4px">
+         ⚠️ Tank levels will be <strong>reduced</strong> by ${fmt(p.liters)} L.<br>
+         The linked expense entry will also be deleted.
+       </div>
+     </div>`,
+    `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+     <button class="btn btn-red" onclick="deletePurchase(${purchaseId})">🗑 Yes, Delete</button>`
+  );
+}
+
+async function deletePurchase(purchaseId) {
+  const p = APP.data.fuelPurchases.find(x => x.id === purchaseId);
+  if (!p) { toast('Purchase not found', 'error'); return; }
+  const fuelType = p.fuelType || p.fuel_type || '';
+  const liters   = p.liters || 0;
+
+  // Reverse the tank fill: subtract purchase liters from tanks of this fuel type
+  const tanksOfFuel = (APP.data.tanks||[]).filter(t => (t.fuelType||t.fuel_type) === fuelType);
+  for (const tank of tanksOfFuel) {
+    const removeL = tanksOfFuel.length === 1 ? liters : Math.round(liters / tanksOfFuel.length);
+    tank.current = Math.max(0, (parseFloat(tank.current)||0) - removeL);
+    try { await db.put('tanks', _tankForPut(tank)); } catch(e) {}
+  }
+
+  // Remove from APP.data + DB
+  APP.data.fuelPurchases = APP.data.fuelPurchases.filter(x => x.id !== purchaseId);
+  try { await db.delete('fuelPurchases', purchaseId); } catch(e) { console.warn('[DeletePurchase]', e.message); }
+
+  // Remove linked expense entry
+  const linkedExp = APP.data.expenses.find(e => e.purchaseId === purchaseId);
+  if (linkedExp) {
+    APP.data.expenses = APP.data.expenses.filter(e => e.purchaseId !== purchaseId);
+    try { await db.delete('expenses', linkedExp.id); } catch(e) {}
+  }
+
+  // Refresh tanks
+  try { const ft = await db.getAll('tanks'); if (ft&&ft.length) APP.data.tanks = ft.map(_normTank); } catch(e) {}
+
+  auditLog('purchase_delete', { purchaseId, fuelType, liters });
+  closeModal();
+  const fuelInfo = getFuel(fuelType);
+  toast(`🗑 Purchase deleted — ${fmt(liters)}L ${fuelInfo.short} removed. Tank level adjusted.`, 'success');
+  renderPage();
+}
+
+window.openEditPurchaseModal  = openEditPurchaseModal;
+window.calcEditPurchTotal     = calcEditPurchTotal;
+window.saveEditPurchase       = saveEditPurchase;
+window.confirmDeletePurchase  = confirmDeletePurchase;
+window.deletePurchase         = deletePurchase;
 
 // ── PUMP EDIT — per-nozzle fuel type ─────────────────────────
 function openEditPumpModal(pumpId) {
