@@ -652,10 +652,49 @@ async function initDatabase() {
   // These ADD COLUMN IF NOT EXISTS statements are safe to run repeatedly.
   const safeAlters = [
     "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS omc TEXT DEFAULT 'iocl'",
+
+    // ── SALES TABLE MIGRATIONS ─────────────────────────────────────────────
+    // The original schema used old column names; INSERT queries use new names.
+    // Add the new columns and copy data from old ones if they exist.
+    "ALTER TABLE sales ADD COLUMN IF NOT EXISTS liters REAL DEFAULT 0",
+    "ALTER TABLE sales ADD COLUMN IF NOT EXISTS mode TEXT DEFAULT 'cash'",
+    "ALTER TABLE sales ADD COLUMN IF NOT EXISTS pump TEXT DEFAULT ''",
+    "ALTER TABLE sales ADD COLUMN IF NOT EXISTS nozzle TEXT DEFAULT 'A'",
+    "ALTER TABLE sales ADD COLUMN IF NOT EXISTS vehicle TEXT DEFAULT ''",
+    "ALTER TABLE sales ADD COLUMN IF NOT EXISTS customer TEXT DEFAULT ''",
+    "ALTER TABLE sales ADD COLUMN IF NOT EXISTS shift TEXT DEFAULT ''",
+
+    // ── EXPENSES TABLE MIGRATIONS ──────────────────────────────────────────
+    // Schema has 'payment_method' but INSERT uses 'mode'
+    // Schema has no 'paid_to' or 'approved_by' columns
+    "ALTER TABLE expenses ADD COLUMN IF NOT EXISTS mode TEXT DEFAULT 'cash'",
+    "ALTER TABLE expenses ADD COLUMN IF NOT EXISTS paid_to TEXT DEFAULT ''",
+    "ALTER TABLE expenses ADD COLUMN IF NOT EXISTS approved_by TEXT DEFAULT ''",
+    "ALTER TABLE expenses ADD COLUMN IF NOT EXISTS desc TEXT DEFAULT ''",
   ];
   for (const sql of safeAlters) {
     try { await pool.query(sql); } catch(e) {
       console.warn('[Schema] Safe alter skipped:', e.message.slice(0, 80));
+    }
+  }
+
+  // ── Backfill new columns from old column values (one-time data migration) ─
+  // Only runs when old columns exist and new ones are empty
+  const backfills = [
+    // Sales: copy quantity → liters, payment_method → mode, pump_id → pump, vehicle_number → vehicle, customer_name → customer, shift_id → shift
+    "UPDATE sales SET liters = quantity WHERE liters = 0 AND quantity IS NOT NULL AND quantity != 0",
+    "UPDATE sales SET mode = payment_method WHERE mode = 'cash' AND payment_method IS NOT NULL AND payment_method != '' AND payment_method != 'cash'",
+    "UPDATE sales SET pump = pump_id WHERE pump = '' AND pump_id IS NOT NULL AND pump_id != ''",
+    "UPDATE sales SET vehicle = vehicle_number WHERE vehicle = '' AND vehicle_number IS NOT NULL AND vehicle_number != ''",
+    "UPDATE sales SET customer = customer_name WHERE customer = '' AND customer_name IS NOT NULL AND customer_name != ''",
+    "UPDATE sales SET shift = shift_id WHERE shift = '' AND shift_id IS NOT NULL AND shift_id != ''",
+    // Expenses: copy payment_method → mode
+    "UPDATE expenses SET mode = payment_method WHERE mode = 'cash' AND payment_method IS NOT NULL AND payment_method != '' AND payment_method != 'cash'",
+    "UPDATE expenses SET paid_to = employee_name WHERE paid_to = '' AND employee_name IS NOT NULL AND employee_name != ''",
+  ];
+  for (const sql of backfills) {
+    try { await pool.query(sql); } catch(e) {
+      // Column may not exist yet — skip silently
     }
   }
 

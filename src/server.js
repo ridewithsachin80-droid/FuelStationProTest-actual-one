@@ -662,11 +662,108 @@ async function startServer() {
     try {
       const tid = req.params.tenantId;
       const now = new Date();
-      const pm = String(now.getMonth()+1).padStart(2,'0');
       const py = now.getFullYear();
       const payrollKey = `payroll_${py}_${now.getMonth()+1}`;
 
-      const [empRows, shiftRows, rosterRow, attRow, lubeProdsRow, lubeSalesRow, advancesRow, payrollRow, lubesTableRows] = await Promise.all([
+      const [empRows, shiftRows, pumpRows, tankRows, rosterRow, attRow, pricesRow, lubeProdsRow, lubeSalesRow, advancesRow, payrollRow, lubesTableRows] = await Promise.all([
+        pool.query('SELECT id, name, role, shift, phone, data_json FROM employees WHERE tenant_id = $1 AND active = 1 ORDER BY name', [tid]),
+        pool.query('SELECT * FROM shifts WHERE tenant_id = $1 ORDER BY start_time', [tid]),
+        // STAFF-DATA FIX: pumps and tanks were missing — employee portal needs them for pump buttons + price calc
+        pool.query('SELECT * FROM pumps WHERE tenant_id = $1 ORDER BY id', [tid]),
+        pool.query('SELECT * FROM tanks WHERE tenant_id = $1 ORDER BY id', [tid]),
+        pool.query("SELECT value FROM settings WHERE key = 'shift_roster' AND tenant_id = $1", [tid]),
+        pool.query("SELECT value FROM settings WHERE key = 'attendance_data' AND tenant_id = $1", [tid]),
+        pool.query("SELECT value FROM settings WHERE key = 'prices' AND tenant_id = $1", [tid]),
+        pool.query("SELECT value FROM settings WHERE key = 'lubes_products' AND tenant_id = $1", [tid]),
+        pool.query("SELECT value FROM settings WHERE key = 'lubes_sales' AND tenant_id = $1", [tid]),
+        pool.query("SELECT value FROM settings WHERE key = 'advances_data' AND tenant_id = $1", [tid]),
+        pool.query("SELECT value FROM settings WHERE key = $1 AND tenant_id = $2", [payrollKey, tid]),
+        pool.query('SELECT * FROM lubes_products WHERE tenant_id = $1 AND active != 0 ORDER BY name', [tid]),
+      ]);
+
+      const employees = empRows.rows.map(e => {
+        let color = '', permissions = {};
+        try { const d = JSON.parse(e.data_json || '{}'); color = d.color || ''; permissions = d.permissions || {}; } catch {}
+        return { id: e.id, name: e.name, role: e.role, shift: e.shift || '', phone: e.phone || '', color, permissions };
+      });
+
+      const parse = (row, fallback) => { try { return row.rows[0] ? JSON.parse(row.rows[0].value || 'null') || fallback : fallback; } catch { return fallback; } };
+
+      // Normalize pump rows
+      const pumps = pumpRows.rows.map(p => {
+        let extra = {}; try { extra = JSON.parse(p.data_json || '{}'); } catch {}
+        return {
+          id: p.id, name: p.name || `Pump ${p.id}`,
+          fuelType: p.fuel_type || extra.fuelType || 'petrol',
+          nozzles: extra.nozzles || ['A'],
+          nozzleFuels: extra.nozzleFuels || {},
+          nozzleLabels: extra.nozzleLabels || ['A'],
+          nozzleReadings: extra.nozzleReadings || {},
+          nozzleOpen: extra.nozzleOpen || {},
+          status: p.status || 'active',
+          ...extra,
+        };
+      });
+
+      // Normalize tank rows
+      const tanks = tankRows.rows.map(t => {
+        let extra = {}; try { extra = JSON.parse(t.data_json || '{}'); } catch {}
+        return {
+          id: t.id, name: t.name || `Tank ${t.id}`,
+          fuelType: t.fuel_type || extra.fuelType || 'petrol',
+          capacity: parseFloat(t.capacity) || 10000,
+          current: parseFloat(t.current) || 0,
+          lastDip: t.last_dip || '',
+          ...extra,
+        };
+      });
+
+      // Get prices — from settings key or fallback defaults
+      const pricesFromDB = parse(pricesRow, null);
+      const prices = pricesFromDB || { petrol: 102.86, diesel: 88.62, premium_petrol: 112.50 };
+
+      res.json({
+        employees,
+        shifts: shiftRows.rows.map(s => ({
+          id: s.id, name: s.name,
+          start: s.start_time || s.start || '',
+          end: s.end_time || s.end || '',
+          start_time: s.start_time || s.start || '',
+          end_time: s.end_time || s.end || '',
+          status: s.status || 'open',
+        })),
+        pumps,
+        tanks,
+        prices,
+        roster:     parse(rosterRow, {}),
+        attendance: parse(attRow, {}),
+        lubesProducts: (() => {
+          const fromSettings = parse(lubeProdsRow, null);
+          if (fromSettings && fromSettings.length > 0) return fromSettings;
+          return (lubesTableRows?.rows || []).map(p => {
+            let extra = {}; try { extra = JSON.parse(p.data_json || '{}'); } catch {}
+            return {
+              id: p.id, name: p.name || '', brand: p.brand || '',
+              category: p.category || '', unit: p.unit || 'Nos',
+              costPrice: parseFloat(p.cost_price) || 0,
+              sellingPrice: parseFloat(p.selling_price) || 0,
+              stock: parseFloat(p.stock) || 0,
+              minStock: parseFloat(p.min_stock) || 5,
+              hsn: p.hsn || '', gstPct: parseFloat(p.gst_pct) || 18,
+              expiryDate: p.expiry_date || '', active: p.active !== 0,
+              _fromTemplate: true,
+            };
+          });
+        })(),
+        lubesSales: parse(lubeSalesRow, []),
+        advances:   parse(advancesRow, []),
+        payroll:    parse(payrollRow, {}),
+      });
+    } catch (e) {
+      console.error('[staff-data]', e.message);
+      res.json({ employees: [], shifts: [], pumps: [], tanks: [], prices: {}, roster: {}, attendance: {}, lubesProducts: [], lubesSales: [], advances: [], payroll: {} });
+    }
+  });
         pool.query('SELECT id, name, role, shift, phone, data_json FROM employees WHERE tenant_id = $1 AND active = 1 ORDER BY name', [tid]),
         pool.query('SELECT * FROM shifts WHERE tenant_id = $1 ORDER BY start_time', [tid]),
         pool.query("SELECT value FROM settings WHERE key = 'shift_roster' AND tenant_id = $1", [tid]),
@@ -1864,13 +1961,18 @@ Pack decoding: "300x40ML-POU"=packQty:300,packSize:"40ml",packType:"Pouch",isCar
       const today = istDate();
       const fromDate = from || today;
       const toDate = to || today;
+      // SCHEMA FIX: old schema uses 'quantity', new schema uses 'liters'
+      // Use COALESCE to support both during migration
       const rows = await pool.query(
-        `SELECT COALESCE(SUM(amount),0) AS revenue, COALESCE(SUM(liters),0) AS liters, COUNT(*) AS txns
+        `SELECT COALESCE(SUM(amount),0) AS revenue,
+                COALESCE(SUM(COALESCE(liters, quantity, 0)),0) AS liters,
+                COUNT(*) AS txns
          FROM sales WHERE tenant_id=$1 AND date>=$2 AND date<=$3`,
         [tenantId, fromDate, toDate]
       );
       const tankRows = await pool.query(
-        'SELECT fuel_type, current_level, capacity FROM tanks WHERE tenant_id=$1', [tenantId]
+        // SCHEMA FIX: old schema uses 'current_level', new uses 'current'
+        'SELECT fuel_type, COALESCE(current_level, current, 0) as current_level, capacity FROM tanks WHERE tenant_id=$1', [tenantId]
       );
       const empRows = await pool.query(
         'SELECT COUNT(*) AS cnt FROM employees WHERE tenant_id=$1 AND active=1', [tenantId]
@@ -1879,7 +1981,10 @@ Pack decoding: "300x40ML-POU"=packQty:300,packSize:"40ml",packType:"Pouch",isCar
       res.json({
         revenue: parseFloat(r.revenue)||0,
         liters: parseFloat(r.liters)||0,
+        totalRevenue: parseFloat(r.revenue)||0,
+        totalSales: parseInt(r.txns)||0,
         txns: parseInt(r.txns)||0,
+        count: parseInt(r.txns)||0,
         employees: parseInt(empRows.rows[0]?.cnt)||0,
         tanks: tankRows.rows.map(t => ({
           fuel_type: t.fuel_type,
