@@ -217,7 +217,33 @@ async function startServer() {
     }
   });
 
-  // ── ONE-TIME CLEANUP: Remove duplicate fuel purchase expense entries ──────
+  // ── ONE-TIME CLEANUP: Unlock super admin (clear login_attempts lockout) ──
+  // Visit /api/cleanup/unlock-admin?secret=fuelbunk2026 to clear lockout instantly.
+  app.get('/api/cleanup/unlock-admin', async (req, res) => {
+    if (req.query.secret !== 'fuelbunk2026') {
+      return res.status(403).json({ error: 'Invalid secret' });
+    }
+    try {
+      // Clear ALL failed login attempts for 'admin' username
+      const r1 = await pool.query(
+        `DELETE FROM login_attempts WHERE username = 'admin' AND success = 0`
+      );
+      // Also clear recent IP-based attempts to unblock IP lockout
+      const r2 = await pool.query(
+        `DELETE FROM login_attempts WHERE success = 0 AND attempted_at > NOW() - INTERVAL '30 minutes'`
+      );
+      res.json({
+        success: true,
+        message: 'Admin lockout cleared — you can now log in',
+        adminAttemptsCleared: r1.rowCount,
+        recentAttemptsCleared: r2.rowCount,
+      });
+    } catch (e) {
+      console.error('[Cleanup] unlock-admin error:', e.message);
+      res.status(500).json({ error: e.message });
+    }
+  });
+  // ── END UNLOCK ────────────────────────────────────────────────────────────
   // Visit /api/cleanup/dedup-expenses?secret=fuelbunk2026 once to fix duplicates.
   // This endpoint is safe to call multiple times — it is idempotent.
   app.get('/api/cleanup/dedup-expenses', async (req, res) => {
