@@ -63,21 +63,27 @@ async function startServer() {
     contentSecurityPolicy: {
       directives: {
         defaultSrc:    ["'self'"],
-        // FIX 20: added blob: for self-hosted Chart.js Blob URL fallback; added cdnjs for Chart.js CDN fallback
-        scriptSrc:     ["'self'", "'unsafe-inline'", 'blob:', 'https://cdn.jsdelivr.net', 'https://cdnjs.cloudflare.com', 'https://checkout.razorpay.com'],
+        // FIX: Added 'wasm-unsafe-eval' — required for Tesseract.js WebAssembly (number plate OCR).
+        // Without this, the browser refuses to compile the .wasm file and plate scanning silently fails.
+        // Also added 'unsafe-eval' for same reason (older browser fallback).
+        scriptSrc:     ["'self'", "'unsafe-inline'", "'unsafe-eval'", "'wasm-unsafe-eval'", 'blob:', 'https://cdn.jsdelivr.net', 'https://cdnjs.cloudflare.com', 'https://checkout.razorpay.com', 'https://unpkg.com'],
         scriptSrcAttr: ["'unsafe-inline'"],
         styleSrc:      ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
         fontSrc:       ["'self'", 'data:', 'https://fonts.gstatic.com'],
         imgSrc:        ["'self'", 'data:', 'blob:'],
-        connectSrc:    ["'self'", 'https://cdn.jsdelivr.net', 'https://cdnjs.cloudflare.com', 'https://api.callmebot.com', 'https://api.razorpay.com'],
-        workerSrc:     ["'self'", 'blob:'],
+        // FIX: Added 'data:' to connectSrc — Tesseract.js loads the .wasm binary as a data: URL.
+        // Also added unpkg.com as Tesseract CDN fallback and blob: for worker fetch.
+        connectSrc:    ["'self'", 'data:', 'blob:', 'https://cdn.jsdelivr.net', 'https://cdnjs.cloudflare.com', 'https://unpkg.com', 'https://api.callmebot.com', 'https://api.razorpay.com', 'https://api.anthropic.com'],
+        // FIX: Added blob: and data: for Tesseract Web Worker which is loaded as a blob URL
+        workerSrc:     ["'self'", 'blob:', 'data:'],
         manifestSrc:   ["'self'"],
         objectSrc:     ["'none'"],
-        // FIX 20: allow blob: frames so the print-preview iframe (Blob URL) renders correctly
         frameSrc:      ["'self'", 'blob:'],
+        // FIX: child-src needed for Tesseract worker in some browsers
+        childSrc:      ["'self'", 'blob:', 'data:'],
       }
     },
-    crossOriginEmbedderPolicy: false,  // Allow mixed content loading
+    crossOriginEmbedderPolicy: false,
   }));
   // BUG-07 FIX: CORS wildcard (origin: true) with credentials: true is a security risk.
   // Use explicit CORS_ORIGIN env var in production; fall back to same-origin only.

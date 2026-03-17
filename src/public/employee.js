@@ -1875,7 +1875,17 @@ async function emp_vehProcessImage(input) {
             id.data[i] = id.data[i+1] = id.data[i+2] = v;
           }
           ctx.putImageData(id, 0, 0);
-          const worker = await Tesseract.createWorker('eng', 1, { logger: () => {} });
+          // CSP FIX: Explicitly set workerPath, corePath, langPath to cdn.jsdelivr.net URLs.
+          // Without this, Tesseract tries to load wasm via data: blob: URLs which are
+          // blocked by Content Security Policy (wasm-unsafe-eval required for WebAssembly).
+          const TESS_CDN = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/';
+          const TESS_LANG = 'https://cdn.jsdelivr.net/npm/tesseract.js-data@4.0.0/eng/';
+          const worker = await Tesseract.createWorker('eng', 1, {
+            logger: () => {},
+            workerPath: TESS_CDN + 'worker.min.js',
+            corePath: TESS_CDN + 'tesseract-core-simd-lstm.wasm.js',
+            langPath: TESS_LANG,
+          });
           await worker.setParameters({
             tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789',
             tessedit_pageseg_mode: '7'
