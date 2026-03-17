@@ -3903,31 +3903,26 @@ window.calcLpCarton   = calcLpCarton;
 function lubes_load()  { return window._lubesProducts || []; }
 function lubesSales_load() { return window._lubesSales || []; }
 function lubes_save() {
-  // RACE CONDITION FIX: Read fresh stock from DB, merge admin's edits on top,
-  // then save. This prevents admin edits from overwriting employee sales.
-  db.getSetting('lubes_products').then(function(freshProds) {
-    const adminProds = window._lubesProducts || [];
-    if (!Array.isArray(freshProds) || freshProds.length === 0) {
-      // No existing DB data — save admin's copy directly
-      return db.setSetting('lubes_products', adminProds);
-    }
-    // Merge: for each product in admin's list, preserve DB stock
-    // (employee may have sold stock since admin loaded the page)
-    const merged = adminProds.map(function(ap) {
-      const dbProd = freshProds.find(function(fp) { return fp.id === ap.id; });
-      if (dbProd && dbProd.stock !== ap.stock) {
-        // If admin explicitly changed stock (restock modal), use admin's value
-        // If admin only changed other fields (name, price), keep DB stock
-        const adminChangedStock = ap._stockChanged === true;
-        return Object.assign({}, ap, { stock: adminChangedStock ? ap.stock : dbProd.stock, _stockChanged: undefined });
-      }
-      return ap;
-    });
-    window._lubesProducts = merged;
-    return db.setSetting('lubes_products', merged);
-  }).catch(function(e) {
-    // Fallback: save directly if DB read fails
-    db.setSetting('lubes_products', window._lubesProducts||[]).catch(function(){});
+  // STOCK FIX: Persist each product to the lubes_products DB table directly.
+  // The old approach (setSetting blob) was overwritten on page reload by the
+  // DB table — so stock changes were lost. Now we PUT to the real table.
+  const prods = window._lubesProducts || [];
+  const tid = APP.tenant?.id || localStorage.getItem('fb_active_tenant_id') || '';
+  if (!tid || !prods.length) return;
+  prods.forEach(function(p) {
+    fetch('/api/public/lube-product/' + encodeURIComponent(tid) + '/' + encodeURIComponent(p.id), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: p.name, brand: p.brand||'', category: p.category||'',
+        unit: p.unit||'Nos', sellingPrice: p.sellingPrice||0,
+        costPrice: p.costPrice||0, stock: p.stock||0,
+        minStock: p.minStock||5, hsn: p.hsn||'',
+        gstPct: p.gstPct||18, expiryDate: p.expiryDate||'',
+        active: p.active, qtyPerCarton: p.qtyPerCarton||0,
+      }),
+    }).catch(function(e){ console.warn('[lubes_save] PUT failed for', p.id, e.message); });
+    p._stockChanged = undefined;
   });
 }
 function lubesSales_save() { db.setSetting('lubes_sales', window._lubesSales||[]).catch(()=>{}); }
@@ -4278,13 +4273,23 @@ function saveLubeProduct(editId) {
   }
   if (!window._lubesProducts) window._lubesProducts = [];
   const pd = { name, brand, sku, category, unit, costPrice, mrp, sellingPrice, stock, minStock, hsn, gstPct, expiryDate, active:true, isCartonPacked, qtyPerCarton, indSize, packType };
+  const _tid = APP.tenant?.id || localStorage.getItem('fb_active_tenant_id') || '';
+
   if (editId) {
     const idx = window._lubesProducts.findIndex(p=>p.id===editId);
     if (idx >= 0) window._lubesProducts[idx] = { ...window._lubesProducts[idx], ...pd };
+    fetch('/api/public/lube-product/' + encodeURIComponent(_tid) + '/' + encodeURIComponent(editId), {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...pd }),
+    }).catch(function(e){ console.warn('[lube-product PUT]', e.message); });
   } else {
-    window._lubesProducts.push({ id: _genId(), ...pd });
+    const newId = _genId();
+    window._lubesProducts.push({ id: newId, ...pd });
+    fetch('/api/public/lube-product/' + encodeURIComponent(_tid), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: newId, ...pd }),
+    }).catch(function(e){ console.warn('[lube-product POST]', e.message); });
   }
-  lubes_save();
   closeModal();
   toast(editId ? '✅ Product updated' : '✅ Product added', 'success');
   renderPage();
@@ -4302,12 +4307,15 @@ function confirmDeleteLube(id) {
       <div style="font-size:13px;color:var(--text-2)">Delete this product? All sales history will be preserved but the product will be removed from catalogue.</div>
     </div>`,
     `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-red" onclick="doDeleteLube(${id})">🗑 Delete</button>`
+     <button class="btn btn-red" onclick="doDeleteLube('${id}')">🗑 Delete</button>`
   );
 }
 function doDeleteLube(id) {
+  const _tid = APP.tenant?.id || localStorage.getItem('fb_active_tenant_id') || '';
   window._lubesProducts = window._lubesProducts.filter(x=>x.id!==id);
-  lubes_save();
+  fetch('/api/public/lube-product/' + encodeURIComponent(_tid) + '/' + encodeURIComponent(id), {
+    method: 'DELETE',
+  }).catch(function(e){ console.warn('[lube-product DELETE]', e.message); });
   closeModal();
   toast('Product deleted', 'success');
   renderPage();
@@ -4365,10 +4373,24 @@ function saveRestock(id) {
   const cost = parseFloat(document.getElementById('rs_cost')?.value);
   const note = (document.getElementById('rs_note')?.value||'').trim();
   p.stock = (p.stock||0) + qty;
-  p._stockChanged = true;  // flag: admin explicitly changed stock (restock)
   if (!isNaN(cost) && cost > 0) p.costPrice = cost;
-  lubes_save();
+
+  // Persist updated stock to DB directly
+  const _tid = APP.tenant?.id || localStorage.getItem('fb_active_tenant_id') || '';
+  fetch('/api/public/lube-product/' + encodeURIComponent(_tid) + '/' + encodeURIComponent(p.id), {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name: p.name, brand: p.brand||'', category: p.category||'',
+      unit: p.unit||'Nos', sellingPrice: p.sellingPrice||0,
+      costPrice: p.costPrice||0, stock: p.stock,
+      minStock: p.minStock||5, hsn: p.hsn||'', gstPct: p.gstPct||18,
+      expiryDate: p.expiryDate||'', active: p.active,
+      qtyPerCarton: p.qtyPerCarton||0,
+    }),
+  }).catch(function(e){ console.warn('[restock PUT]', e.message); });
+
   closeModal();
+  auditLog('lube_restock', { product: p.name, qty, cost: cost||0, note });
   const carMsg = isCarton ? ` (${Math.round(qty/p.qtyPerCarton)} carton${qty/p.qtyPerCarton!==1?'s':''})` : '';
   toast(`✅ Restocked ${qty.toLocaleString('en-IN')} ${p.unit||''}${carMsg} — Stock: ${p.stock.toLocaleString('en-IN')}`, 'success');
   renderPage();
@@ -4431,25 +4453,53 @@ function saveLubeSale(productId) {
   if (qty > p.stock) { toast(`Only ${p.stock} ${p.unit||''} in stock`,'error'); return; }
   const amount = +(qty * rate).toFixed(2);
   const now2 = new Date();
+  const saleDate = now2.toISOString().slice(0,10);
+  const saleTime = now2.toTimeString().slice(0,5);
+  const tid = APP.tenant?.id || localStorage.getItem('fb_active_tenant_id') || '';
+  const empName = APP.data?.employees?.find(e=>e.id===APP.empId)?.name || '';
+
+  // Optimistic UI update
+  p.stock = +(p.stock - qty).toFixed(3);
   if (!window._lubesSales) window._lubesSales = [];
   window._lubesSales.unshift({
-    id: _genId(), date: (typeof today === 'function' ? today() : now2.toISOString().slice(0,10)),
-    time: now2.toTimeString().slice(0,5),
+    id: _genId(), date: saleDate, time: saleTime,
     productId, productName: p.name, qty, unit: p.unit||'',
-    rate, amount, customer, mode,
-    employee: APP.data?.employees?.find(e=>e.id===APP.empId)?.name || '',
+    rate, amount, customer, mode, employee: empName,
   });
-  p.stock = +(p.stock - qty).toFixed(3);
-  p._stockChanged = true;  // admin explicitly sold stock
-  lubes_save(); lubesSales_save();
   closeModal();
   auditLog('lube_sale', { product: p.name, qty, amount, mode, customer });
   toast(`✅ Sold ${qty} ${p.unit||''} ${p.name} — ${cur(amount)}`, 'success');
-  // Low stock WA alert
-  if (p.stock <= (p.minStock||5) && typeof wa_send === 'function' && wa_phone()) {
-    wa_send(wa_phone(), `⚠️ LOW STOCK: ${p.name} — Only ${p.stock} ${p.unit||''} left. Please reorder.\n\n_— FuelBunk Pro_`, 'low_stock').catch(()=>{});
-  }
   renderPage();
+
+  // Persist to DB — stock deducted atomically in lubes_products table
+  fetch('/api/public/lube-sale/' + encodeURIComponent(tid), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      productId, qty, rate, amount, customer, mode,
+      employee: empName, date: saleDate, time: saleTime,
+      idempotencyKey: _genId(),
+    }),
+  }).then(function(r){ return r.json(); }).then(function(d) {
+    if (d.ok) {
+      // Sync stock from DB truth
+      p.stock = d.newStock;
+      // Low stock WhatsApp alert
+      if (p.stock <= (p.minStock||5) && typeof wa_send === 'function' && wa_phone()) {
+        wa_send(wa_phone(), `⚠️ LOW STOCK: ${p.name} — Only ${p.stock} ${p.unit||''} left. Please reorder.\n\n_— FuelBunk Pro_`, 'low_stock').catch(()=>{});
+      }
+      if (APP.page === 'lubes') renderPage();
+    } else {
+      // Rollback optimistic update
+      p.stock = +(p.stock + qty).toFixed(3);
+      window._lubesSales = (window._lubesSales||[]).filter(s => !(s.productId===productId && s.date===saleDate && s.time===saleTime));
+      toast('Sale failed: ' + (d.error||'unknown error'), 'error');
+      if (APP.page === 'lubes') renderPage();
+    }
+  }).catch(function(e) {
+    toast('Network error — sale may not have saved. Refresh to verify.', 'error');
+    console.error('[lube-sale]', e);
+  });
 }
 window.saveLubeSale = saveLubeSale;
 
@@ -7057,13 +7107,16 @@ function renderPage() {
     let html = '';
     switch (APP.page) {
       case 'dashboard':
-        // Refresh lube sales on dashboard to get current revenue
-        db.getSetting('lubes_sales').then(function(sales) {
-          if (Array.isArray(sales)) { window._lubesSales = sales; }
-        }).catch(function(){});
-        db.getSetting('lubes_products').then(function(prods) {
-          if (Array.isArray(prods) && prods.length > 0) window._lubesProducts = prods;
-        }).catch(function(){});
+        // Refresh lube data from DB on dashboard
+        (function() {
+          const _tid = APP.tenant?.id || localStorage.getItem('fb_active_tenant_id') || '';
+          if (_tid) {
+            fetch('/api/public/lube-sales/' + encodeURIComponent(_tid) + '?limit=200')
+              .then(function(r){ return r.json(); })
+              .then(function(sales){ if (Array.isArray(sales)) window._lubesSales = sales; })
+              .catch(function(){});
+          }
+        })();
         html = renderDashboard(D); break;
       case 'tanks': html = renderTanks(D); break;
       case 'pumps': html = renderPumps(D); break;
@@ -7073,14 +7126,32 @@ function renderPage() {
       case 'payroll': html = renderPayroll(D); break;
       case 'finance': html = renderFinance(D); break;
       case 'lubes':
-        // STOCK FIX: refresh lubes products from DB on every visit to pick up employee sales
-        db.getSetting('lubes_products').then(function(prods) {
-          if (Array.isArray(prods) && prods.length > 0) {
-            window._lubesProducts = prods;
-            var el3 = document.getElementById('content');
-            if (el3 && APP.page === 'lubes') try { el3.innerHTML = renderLubes(APP.data); } catch(e) {}
-          }
-        }).catch(function(){});
+        // STOCK FIX: Always reload from DB table on every visit — this reflects
+        // both admin sales and any future employee lube sales correctly.
+        (function() {
+          const _tid = APP.tenant?.id || localStorage.getItem('fb_active_tenant_id') || '';
+          if (!_tid) return;
+          // Reload products from DB (fresh stock levels)
+          fetch('/api/public/staff-data/' + encodeURIComponent(_tid))
+            .then(function(r){ return r.json(); })
+            .then(function(d) {
+              if (Array.isArray(d.lubesProducts) && d.lubesProducts.length > 0) {
+                window._lubesProducts = d.lubesProducts;
+              }
+              var el3 = document.getElementById('content');
+              if (el3 && APP.page === 'lubes') try { el3.innerHTML = renderLubes(APP.data); } catch(e2) {}
+            }).catch(function(){});
+          // Reload sales from DB table
+          fetch('/api/public/lube-sales/' + encodeURIComponent(_tid) + '?limit=200')
+            .then(function(r){ return r.json(); })
+            .then(function(sales) {
+              if (Array.isArray(sales)) {
+                window._lubesSales = sales;
+                var el4 = document.getElementById('content');
+                if (el4 && APP.page === 'lubes') try { el4.innerHTML = renderLubes(APP.data); } catch(e2) {}
+              }
+            }).catch(function(){});
+        })();
         html = renderLubes(D); break;
       case 'exports': html = renderExports(D); break;
       case 'reports': html = renderReports(D); break;
