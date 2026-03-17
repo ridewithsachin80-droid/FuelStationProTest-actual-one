@@ -2958,20 +2958,62 @@ function emp_print() {
   const uname = sanitize(empState.user?.name||'');
   const today = emp_today();
   const empName = empState.user?.name || '';
-  const rows = emp_myPumps().map(p => {
-    const nr = p.nozzles.map(n => { const k=emp_key(p.id,n),o=empState.openReadings[k]||0,c=empState.closeReadings[k]||0; return '<tr><td style="padding-left:24px;color:#666">Nozzle '+n+'</td><td style="text-align:right;font-family:monospace">'+o.toFixed(1)+'</td><td style="text-align:right;font-family:monospace">'+c.toFixed(1)+'</td><td style="text-align:right;font-family:monospace;font-weight:700">'+(c-o).toFixed(1)+'</td></tr>'; }).join('');
-    return '<tr style="background:#f8f9fa"><td style="font-weight:700">'+sanitize(p.name)+' — '+(EMP_FUEL[p.fuelType]||p.fuelType||'Fuel').split(' ')[0]+'</td><td></td><td></td><td style="text-align:right;font-weight:700">'+emp_pumpSold(p.id).toFixed(1)+' L</td></tr>'+nr;
+
+  // ── 1. PUMP / NOZZLE TABLE ──────────────────────────────────────────────
+  const pumpRows = emp_myPumps().map(p => {
+    const nr = p.nozzles.map(n => {
+      const k=emp_key(p.id,n), o=empState.openReadings[k]||0, c=empState.closeReadings[k]||0;
+      return '<tr><td style="padding-left:24px;color:#666">Nozzle '+n+'</td>'
+           + '<td style="text-align:right;font-family:monospace">'+o.toFixed(1)+'</td>'
+           + '<td style="text-align:right;font-family:monospace">'+c.toFixed(1)+'</td>'
+           + '<td style="text-align:right;font-family:monospace;font-weight:700">'+(c-o).toFixed(1)+'</td></tr>';
+    }).join('');
+    return '<tr style="background:#f8f9fa"><td style="font-weight:700">'+sanitize(p.name)+' &mdash; '+(EMP_FUEL[p.fuelType]||p.fuelType||'Fuel').split(' ')[0]+'</td>'
+         + '<td></td><td></td><td style="text-align:right;font-weight:700">'+emp_pumpSold(p.id).toFixed(1)+' L</td></tr>'+nr;
   }).join('');
 
-  // Payment rows (fuel)
-  const cashAmt   = empState.sales.filter(s=>s.mode==='cash').reduce((a,s)=>a+s.amount,0);
-  const upiAmt    = empState.sales.filter(s=>s.mode==='upi').reduce((a,s)=>a+s.amount,0);
-  const cardAmt   = empState.sales.filter(s=>s.mode==='card').reduce((a,s)=>a+s.amount,0);
-  const creditAmt = empState.sales.filter(s=>s.mode==='credit').reduce((a,s)=>a+s.amount,0);
-  const payRows   = (cashAmt   > 0 ? '<tr><td style="font-weight:600">&#128181; Cash</td><td style="text-align:right;font-weight:600">&#8377;'+cashAmt.toFixed(2)+'</td></tr>'   : '')
-                  + (upiAmt    > 0 ? '<tr><td style="font-weight:600">&#128241; UPI</td><td style="text-align:right;font-weight:600">&#8377;'+upiAmt.toFixed(2)+'</td></tr>'    : '')
-                  + (cardAmt   > 0 ? '<tr><td style="font-weight:600">&#128179; Card</td><td style="text-align:right;font-weight:600">&#8377;'+cardAmt.toFixed(2)+'</td></tr>'  : '')
-                  + (creditAmt > 0 ? '<tr><td style="font-weight:600">&#127981; Credit</td><td style="text-align:right;font-weight:600">&#8377;'+creditAmt.toFixed(2)+'</td></tr>' : '');
+  // ── 2. LUBE SALES TABLE ─────────────────────────────────────────────────
+  const myLubeSales = (window._lubesSales||[]).filter(s => s.date === today && s.employee === empName);
+  const lubeTotalAmt = myLubeSales.reduce((a,s)=>a+s.amount,0);
+  const lubeCash   = myLubeSales.filter(s=>s.mode==='cash').reduce((a,s)=>a+s.amount,0);
+  const lubeUpi    = myLubeSales.filter(s=>s.mode==='upi').reduce((a,s)=>a+s.amount,0);
+  const lubeCard   = myLubeSales.filter(s=>s.mode==='card').reduce((a,s)=>a+s.amount,0);
+  const lubeCredit = myLubeSales.filter(s=>s.mode==='credit').reduce((a,s)=>a+s.amount,0);
+  const lubeItemRows = myLubeSales.map(s =>
+    '<tr><td>'+sanitize(s.productName)+'</td>'
+    +'<td style="text-align:right">'+s.qty+' '+sanitize(s.unit||'')+'</td>'
+    +'<td style="text-align:right">&#8377;'+s.rate.toFixed(2)+'</td>'
+    +'<td style="text-align:right;font-weight:600">&#8377;'+s.amount.toFixed(2)+'</td>'
+    +'<td style="text-transform:capitalize">'+s.mode+'</td></tr>'
+  ).join('');
+  const lubeSalesSection = myLubeSales.length > 0
+    ? '<h3 style="margin:16px 0 8px;font-size:13px;color:#333;border-bottom:2px solid #d4940f;padding-bottom:4px">&#128722; Lubes &amp; Products — Sales</h3>'
+      + '<table><thead><tr><th>Product</th><th style="text-align:right">Qty</th><th style="text-align:right">Rate</th><th style="text-align:right">Amount</th><th>Mode</th></tr></thead><tbody>'
+      + lubeItemRows
+      + '<tr class="total-row"><td colspan="3">Lubes Total</td><td style="text-align:right">&#8377;'+lubeTotalAmt.toFixed(2)+'</td><td></td></tr>'
+      + '</tbody></table>'
+    : '';
+
+  // ── 3. COMBINED METRICS ─────────────────────────────────────────────────
+  // Revenue = fuel + lubes combined
+  const grandRevenue   = tr + lubeTotalAmt;
+  const grandSalesCount = empState.sales.length + myLubeSales.length;
+  // Payment modes — COMBINED fuel + lubes
+  const totalCash   = empState.sales.filter(s=>s.mode==='cash').reduce((a,s)=>a+s.amount,0)   + lubeCash;
+  const totalUpi    = empState.sales.filter(s=>s.mode==='upi').reduce((a,s)=>a+s.amount,0)    + lubeUpi;
+  const totalCard   = empState.sales.filter(s=>s.mode==='card').reduce((a,s)=>a+s.amount,0)   + lubeCard;
+  const totalCredit = empState.sales.filter(s=>s.mode==='credit').reduce((a,s)=>a+s.amount,0) + lubeCredit;
+
+  const metricRows = '<tr><td style="font-weight:700">Total Revenue (Fuel + Lubes)</td><td style="text-align:right;font-weight:700;color:#d4940f">&#8377;'+grandRevenue.toFixed(2)+'</td></tr>'
+    + '<tr><td style="padding-left:12px;color:#555">&#128149; Fuel Revenue</td><td style="text-align:right">&#8377;'+tr.toFixed(2)+'</td></tr>'
+    + (lubeTotalAmt>0 ? '<tr><td style="padding-left:12px;color:#555">&#128722; Lubes Revenue</td><td style="text-align:right">&#8377;'+lubeTotalAmt.toFixed(2)+'</td></tr>' : '')
+    + '<tr><td style="font-weight:700">Total Sales (Fuel + Lubes)</td><td style="text-align:right;font-weight:700">'+grandSalesCount+'</td></tr>'
+    + (totalCash   > 0 ? '<tr><td style="font-weight:600">&#128181; Cash</td><td style="text-align:right;font-weight:600">&#8377;'+totalCash.toFixed(2)+'</td></tr>'   : '')
+    + (totalUpi    > 0 ? '<tr><td style="font-weight:600">&#128241; UPI</td><td style="text-align:right;font-weight:600">&#8377;'+totalUpi.toFixed(2)+'</td></tr>'    : '')
+    + (totalCard   > 0 ? '<tr><td style="font-weight:600">&#128179; Card</td><td style="text-align:right;font-weight:600">&#8377;'+totalCard.toFixed(2)+'</td></tr>'  : '')
+    + (totalCredit > 0 ? '<tr><td style="font-weight:600">&#127981; Credit</td><td style="text-align:right;font-weight:600">&#8377;'+totalCredit.toFixed(2)+'</td></tr>' : '');
+
+  // ── 4. CASH DENOMINATIONS ───────────────────────────────────────────────
   const h = empState.cashHandover;
   const denomRows = (h && h.breakdown && Object.keys(h.breakdown).length > 0)
     ? '<tr><td colspan="2" style="padding-top:8px;font-weight:700;font-size:11px;text-transform:uppercase;color:#888">Cash Denominations</td></tr>'
@@ -2979,51 +3021,52 @@ function emp_print() {
           .map(([d,c]) => '<tr><td style="padding-left:12px;color:#555">&#8377;'+d+' &times; '+c+'</td><td style="text-align:right">&#8377;'+(d*c).toFixed(2)+'</td></tr>').join('')
     : '';
 
-  // Lube sales for this employee today
-  const myLubeSales = (window._lubesSales||[]).filter(s => s.date === today && s.employee === empName);
-  const lubeTotalAmt = myLubeSales.reduce((a,s)=>a+s.amount,0);
-  const lubeCash   = myLubeSales.filter(s=>s.mode==='cash').reduce((a,s)=>a+s.amount,0);
-  const lubeUpi    = myLubeSales.filter(s=>s.mode==='upi').reduce((a,s)=>a+s.amount,0);
-  const lubeCard   = myLubeSales.filter(s=>s.mode==='card').reduce((a,s)=>a+s.amount,0);
-  const lubeCredit = myLubeSales.filter(s=>s.mode==='credit').reduce((a,s)=>a+s.amount,0);
-  const lubeRows = myLubeSales.map(s =>
-    '<tr><td>'+sanitize(s.productName)+'</td><td style="text-align:right">'+s.qty+' '+sanitize(s.unit||'')+'</td><td style="text-align:right">&#8377;'+s.rate.toFixed(2)+'</td><td style="text-align:right;font-weight:600">&#8377;'+s.amount.toFixed(2)+'</td><td style="text-transform:capitalize">'+s.mode+'</td></tr>'
+  // ── 5. LUBES CLOSING STOCK ──────────────────────────────────────────────
+  const activeProds = (window._lubesProducts||[]).filter(p => p.active !== false);
+  const lubeStockRows = activeProds.map(p =>
+    '<tr><td>'+sanitize(p.name)+'</td>'
+    +'<td style="text-align:center">'+sanitize(p.unit||'Nos')+'</td>'
+    +'<td style="text-align:right;font-weight:700;color:'+(p.stock<=(p.minStock||5)?'#ef4444':'#22c55e')+'">'+p.stock+'</td>'
+    +'<td style="text-align:right;color:#888">'+sanitize(p.brand||'')+'</td></tr>'
   ).join('');
-  const lubePayRows = (lubeCash   > 0 ? '<tr><td style="font-weight:600">&#128181; Cash</td><td style="text-align:right">&#8377;'+lubeCash.toFixed(2)+'</td></tr>'   : '')
-                   + (lubeUpi    > 0 ? '<tr><td style="font-weight:600">&#128241; UPI</td><td style="text-align:right">&#8377;'+lubeUpi.toFixed(2)+'</td></tr>'    : '')
-                   + (lubeCard   > 0 ? '<tr><td style="font-weight:600">&#128179; Card</td><td style="text-align:right">&#8377;'+lubeCard.toFixed(2)+'</td></tr>'  : '')
-                   + (lubeCredit > 0 ? '<tr><td style="font-weight:600">&#127981; Credit</td><td style="text-align:right">&#8377;'+lubeCredit.toFixed(2)+'</td></tr>' : '');
-  const lubeSection = myLubeSales.length > 0
-    ? '<h3 style="margin:16px 0 8px;font-size:13px;color:#333;border-bottom:2px solid #d4940f;padding-bottom:4px">&#128722; Lubes &amp; Products</h3>'
-      + '<table><thead><tr><th>Product</th><th style="text-align:right">Qty</th><th style="text-align:right">Rate</th><th style="text-align:right">Amount</th><th>Mode</th></tr></thead><tbody>'
-      + lubeRows
-      + '<tr class="total-row"><td colspan="3">TOTAL</td><td style="text-align:right">&#8377;'+lubeTotalAmt.toFixed(2)+'</td><td></td></tr>'
+  const lubeStockSection = activeProds.length > 0
+    ? '<h3 style="margin:16px 0 8px;font-size:13px;color:#333;border-bottom:2px solid #d4940f;padding-bottom:4px">&#128722; Lubes &amp; Products — Closing Stock</h3>'
+      + '<table><thead><tr><th>Product</th><th style="text-align:center">Unit</th><th style="text-align:right">Closing Stock</th><th style="text-align:right">Brand</th></tr></thead><tbody>'
+      + lubeStockRows
       + '</tbody></table>'
-      + '<table><thead><tr><th>Lube Payment Mode</th><th style="text-align:right">Amount</th></tr></thead><tbody>'
-      + lubePayRows + '</tbody></table>'
     : '';
+
+  // ── BUILD HTML ──────────────────────────────────────────────────────────
   const htmlContent = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Report</title>'
     + '<style>body{font-family:\'Segoe UI\',system-ui,sans-serif;padding:30px;font-size:12px;color:#333}'
     + 'h1{font-size:18px;text-align:center;margin-bottom:2px}h2{font-size:13px;text-align:center;color:#666;font-weight:400;margin-bottom:16px}'
+    + 'h3{font-size:13px;color:#333;margin:16px 0 8px}'
     + '.meta{text-align:center;font-size:11px;color:#888;margin-bottom:20px;padding-bottom:12px;border-bottom:2px solid #d4940f}'
-    + 'table{width:100%;border-collapse:collapse;margin-bottom:16px}th{background:#f0f0f0;text-align:left;padding:8px;font-size:10px;text-transform:uppercase;border-bottom:2px solid #ddd}'
+    + 'table{width:100%;border-collapse:collapse;margin-bottom:12px}th{background:#f0f0f0;text-align:left;padding:8px;font-size:10px;text-transform:uppercase;border-bottom:2px solid #ddd}'
     + 'td{padding:6px 8px;border-bottom:1px solid #eee;font-size:12px}.total-row{background:#fff8e6;font-weight:700}'
     + '.footer{text-align:center;font-size:10px;color:#aaa;margin-top:20px;border-top:1px solid #eee;padding-top:10px}</style></head><body>'
     + '<h1>' + (APP.data?.upiName || APP.tenant?.name || 'Fuel Station') + '</h1>'
-    + '<h2>Report &mdash; ' + emp_today() + '</h2>'
-    + '<div class="meta">' + emp_today() + ' &middot; ' + uname + '</div>'
+    + '<h2>Shift Report &mdash; ' + today + '</h2>'
+    + '<div class="meta">' + today + ' &middot; ' + uname + '</div>'
+    // 1. Pump readings table
+    + '<h3>&#9981; Fuel Meter Readings</h3>'
     + '<table><thead><tr><th>Pump / Nozzle</th><th style="text-align:right">Opening</th><th style="text-align:right">Closing</th><th style="text-align:right">Sold (L)</th></tr></thead><tbody>'
-    + rows
-    + '<tr class="total-row"><td>TOTAL</td><td></td><td></td><td style="text-align:right">' + ts.toFixed(1) + ' L</td></tr></tbody></table>'
+    + pumpRows
+    + '<tr class="total-row"><td>Total Fuel Sold</td><td></td><td></td><td style="text-align:right">'+ts.toFixed(1)+' L</td></tr>'
+    + '</tbody></table>'
+    // 2. Lubes sales table
+    + lubeSalesSection
+    // 3. Combined metrics
+    + '<h3>&#128200; Summary</h3>'
     + '<table><thead><tr><th>Metric</th><th style="text-align:right">Value</th></tr></thead><tbody>'
-    + '<tr><td>Total Revenue</td><td style="text-align:right;font-weight:700">&#8377;' + tr.toFixed(2) + '</td></tr>'
-    + '<tr><td>Sales</td><td style="text-align:right">' + empState.sales.length + '</td></tr>'
-    + payRows
+    + metricRows
     + denomRows
     + '</tbody></table>'
-    + lubeSection
+    // 4. Lubes closing stock
+    + lubeStockSection
     + '<div class="footer">FuelBunk Pro &mdash; Auto Generated<br>Signature: ________________</div>'
     + '</body></html>';
+
   const empBlob = new Blob([htmlContent], { type: 'text/html;charset=utf-8' });
   const empUrl = URL.createObjectURL(empBlob);
   const rpw = window.open(empUrl, '_blank');
