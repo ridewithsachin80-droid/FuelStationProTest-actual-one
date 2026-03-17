@@ -2124,7 +2124,19 @@ function emp_recordSale() {
   const _activeBtn = document.querySelector('[data-pumpbtn].btn-accent');
   const p = String(_activeBtn?.dataset?.pumpbtn || '');  // pump.id from active combined button
   if (isNaN(l)||l<=0) { toast('Enter valid liters','error'); return; }
-  // No upper liter limit
+  // Tank level validation — warn if sale exceeds available fuel
+  const _saleNozzleFuels = (APP.data?.pumps||[]).find(pm=>String(pm.id)===p)?.nozzleFuels || {};
+  const _saleFuel = _saleNozzleFuels[document.querySelector('[data-pumpbtn].btn-accent')?.dataset?.nozzlebtn||'A'] || empSaleFuel;
+  const _saleTank = (APP.data?.tanks||[]).find(t => (t.fuelType||'').toLowerCase() === (_saleFuel||'').toLowerCase());
+  if (_saleTank) {
+    // Calculate already-sold in this shift for this fuel (from empState.sales)
+    const _soldThisShift = empState.sales.filter(s=>s.fuelType===_saleFuel).reduce((a,s)=>a+(s.liters||0),0);
+    const _available = (_saleTank.current||0) - _soldThisShift;
+    if (l > _available + 50) { // +50L tolerance for measurement variation
+      toast(`⚠️ Only ${fmt(_available)}L available in ${getFuel(_saleFuel).short} tank. Recording anyway — verify tank level.`, 'warning');
+      // Don't block — just warn. Admin can correct via dip reading.
+    }
+  }
   // Vehicle required for non-cash payments; optional for cash walk-ins
   if (empPayMode !== 'cash') {
     if (!v || v.length < 2) { toast('Enter valid vehicle number','error'); return; }
@@ -3528,29 +3540,50 @@ async function doEmpLogin() {
       if (serverPumps && serverPumps.length > 0) {
         APP.data.pumps = serverPumps;
         // Pre-fill opening readings from server pump nozzleReadings (= previous shift's close)
-        // OPENING-READING FIX: also check nozzleOpen as secondary fallback
-        if (!restored && Object.keys(empState.openReadings).length === 0) {
-          var freshOpenings = {};
-          serverPumps.forEach(function(p) {
-            var nr = p.nozzleReadings || {};  // closing readings from previous shift
-            var no_ = p.nozzleOpen || {};     // opening readings saved by previous employee
-            var labels = Array.isArray(p.nozzleLabels) ? p.nozzleLabels : ['A'];
-            labels.forEach(function(n) {
-              var k = emp_key(p.id, n);
-              // Priority: closing reading (most accurate) → opening reading (fallback)
-              if (nr[n] !== undefined && parseFloat(nr[n]) > 0) {
-                freshOpenings[k] = parseFloat(nr[n]);
-              } else if (no_[n] !== undefined && parseFloat(no_[n]) > 0) {
-                freshOpenings[k] = parseFloat(no_[n]);
-              }
-            });
+        // OPENING-READING FIX: ALWAYS refresh from server, even for restored sessions
+        // A restored session may have STALE openReadings from a previous shift that was
+        // already submitted. Server nozzleReadings is always the authoritative source.
+        var freshOpenings = {};
+        serverPumps.forEach(function(p) {
+          var nr = p.nozzleReadings || {};  // closing readings from previous shift
+          var no_ = p.nozzleOpen || {};     // opening readings saved by previous employee
+          var labels = Array.isArray(p.nozzleLabels) ? p.nozzleLabels : ['A'];
+          labels.forEach(function(n) {
+            var k = emp_key(p.id, n);
+            // Priority: closing reading (most accurate) → opening reading (fallback)
+            if (nr[n] !== undefined && parseFloat(nr[n]) > 0) {
+              freshOpenings[k] = parseFloat(nr[n]);
+            } else if (no_[n] !== undefined && parseFloat(no_[n]) > 0) {
+              freshOpenings[k] = parseFloat(no_[n]);
+            }
           });
-          if (Object.keys(freshOpenings).length > 0) {
+        });
+        if (Object.keys(freshOpenings).length > 0) {
+          if (!restored) {
+            // Fresh login: always use server readings
             empState.openReadings = freshOpenings;
-            console.log('[doEmpLogin] Pre-filled openings from server:', JSON.stringify(freshOpenings));
           } else {
-            console.log('[doEmpLogin] No nozzleReadings found in server pumps:', JSON.stringify(serverPumps.map(p => ({ id: p.id, nr: p.nozzleReadings, no: p.nozzleOpen }))));
+            // Restored session: only update openReadings from server if the employee
+            // hasn't manually entered any opening readings in this session yet
+            // (i.e. their stored readings are older than the server's)
+            var sessionHasManualOpenings = Object.keys(empState.openReadings).length > 0;
+            var serverHasNewerReadings = Object.keys(freshOpenings).some(function(k) {
+              return freshOpenings[k] !== empState.openReadings[k];
+            });
+            if (!sessionHasManualOpenings || serverHasNewerReadings) {
+              // Server has updated readings - use them (don't overwrite manually entered ones)
+              Object.keys(freshOpenings).forEach(function(k) {
+                // Only update if employee hasn't manually entered a different value
+                // A "manual" entry would differ from what server has
+                if (empState.openReadings[k] === undefined || empState.openReadings[k] === freshOpenings[k]) {
+                  empState.openReadings[k] = freshOpenings[k];
+                }
+              });
+            }
           }
+          console.log('[doEmpLogin] Pre-filled openings from server:', JSON.stringify(freshOpenings));
+        } else {
+          console.log('[doEmpLogin] No nozzleReadings found in server pumps:', JSON.stringify(serverPumps.map(p => ({ id: p.id, nr: p.nozzleReadings, no: p.nozzleOpen }))));
         }
       }
       // Load allocations so emp_myPumps filters correctly — server only, no localStorage

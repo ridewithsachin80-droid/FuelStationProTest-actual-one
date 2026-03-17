@@ -395,10 +395,12 @@ async function flushOfflineQueue() {
 
   for (const op of queue) {
     try {
+      const flushHeaders = { 'Content-Type': 'application/json' };
+      if (_authToken) flushHeaders['Authorization'] = 'Bearer ' + _authToken;
       await _apiFetch_orig(op.path, {
         method: op.method,
         body: op.body || undefined,
-        headers: { 'Content-Type': 'application/json' }
+        headers: flushHeaders,
       });
       successCount++;
     } catch (e) {

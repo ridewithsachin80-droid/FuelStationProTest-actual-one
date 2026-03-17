@@ -1101,9 +1101,9 @@ async function startServer() {
       const liters = parseFloat(sale.liters);
       const amount = parseFloat(sale.amount);
       
-      if (isNaN(liters) || liters <= 0 || liters > 10000) {
+      if (isNaN(liters) || liters <= 0 || liters > 50000) {
         client.release();
-        return res.status(400).json({ error: 'Invalid liters: must be between 0 and 10,000' });
+        return res.status(400).json({ error: 'Invalid liters: must be between 0 and 50,000' });
       }
       
       if (isNaN(amount) || amount <= 0 || amount > 10000000) {
@@ -1125,12 +1125,20 @@ async function startServer() {
         return res.status(400).json({ error: 'Invalid fuel type' });
       }
       
-      // FIX: Validate date is not in the future
+      // FIX: Validate date is not in the future — compare in IST (UTC+5:30)
+      // CRITICAL: new Date('2026-03-18') is parsed as UTC midnight.
+      // At 00:21 IST = 18:51 UTC prev day, this makes a valid IST date appear "in the future".
+      // Comparing in IST date strings avoids this — Indian night shifts work correctly.
       if (sale.date) {
-        const saleDate = new Date(sale.date);
-        const today = new Date();
-        today.setHours(23, 59, 59, 999); // End of today
-        if (saleDate > today) {
+        const saleDateStr = String(sale.date).slice(0, 10); // YYYY-MM-DD
+        const istToday = istDate(); // server's IST today string
+        const istTomorrow = (() => {
+          const d = new Date();
+          // add 1 day in UTC, then get IST date
+          d.setDate(d.getDate() + 1);
+          return d.toLocaleString('en-CA', { timeZone: 'Asia/Kolkata' }).slice(0, 10);
+        })();
+        if (saleDateStr > istTomorrow) {
           client.release();
           return res.status(400).json({ error: 'Sale date cannot be in the future' });
         }
