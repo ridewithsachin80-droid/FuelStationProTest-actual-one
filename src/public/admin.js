@@ -908,7 +908,7 @@ function renderSales(D, filter = 'all') {
               <tr>
                 <th>Time</th><th>Vehicle</th><th>Fuel / Product</th>
                 <th class="r">Liters / Qty</th><th class="r">Amount</th>
-                <th>Employee</th><th>Payment</th>
+                <th>Pump</th><th>Employee</th><th>Payment</th><th>Customer</th>
                 ${canEdit ? '<th>Actions</th>' : ''}
               </tr>
             </thead>
@@ -7535,7 +7535,7 @@ function confirmDeleteSale(saleId, vehicle, liters, amount) {
         <div class="mono fw-700" style="color:var(--accent-light);font-size:18px">${fmt(liters)} L &nbsp;·&nbsp; ${cur(amount)}</div>
         ${vehicle ? `<div style="font-size:11px;color:var(--text-3);margin-top:4px">Vehicle: ${sanitize(vehicle)}</div>` : ''}
       </div>
-      <div style="font-size:12px;color:var(--text-3);margin-bottom:12px">This removes the sale from reports and revenue totals.<br>Tank levels are NOT automatically adjusted — use Record Dip if needed.</div>
+      <div style="font-size:12px;color:var(--text-3);margin-bottom:12px">This removes the sale from reports and revenue totals.<br>Tank stock will be <strong style="color:var(--green)">automatically restored</strong> by the deleted liters.</div>
       <div class="form-group"><label class="form-label">Delete Reason <span style="color:var(--red)">*</span></label>
         <input class="form-input" id="deleteSaleReason" placeholder="e.g. Duplicate entry / Employee error" />
       </div>
