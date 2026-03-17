@@ -820,7 +820,7 @@ function renderSales(D, filter = 'all') {
 
   // ── Table rows ─────────────────────────────────────────────
   const isDayLocked = !!(APP.data?.dayLocks||{})[selDate];
-  const canEdit = !isDayLocked && ['owner','admin','manager','accountant'].includes((APP.userRole||'').toLowerCase());
+  const canEdit = !isDayLocked && ['owner'].includes((APP.userRole||'').toLowerCase());
 
   const rows = sorted.map(s => {
     const fuel = getFuel(s.fuelType);
@@ -7484,6 +7484,10 @@ function openEditSaleModal(saleId) {
 window.openEditSaleModal = openEditSaleModal;
 
 async function saveEditedSale(saleId) {
+  // Owner-only guard — employees and other admin roles cannot edit sales
+  if (!['owner'].includes((APP.userRole||'').toLowerCase())) {
+    toast('❌ Only the Owner can edit sales records', 'error'); return;
+  }
   const liters  = parseFloat(document.getElementById('editSaleLiters')?.value);
   const amount  = parseFloat(document.getElementById('editSaleAmount')?.value);
   const vehicle = (document.getElementById('editSaleVehicle')?.value||'').toUpperCase().trim();
@@ -7501,16 +7505,23 @@ async function saveEditedSale(saleId) {
 
   const updated = { ...s, liters, amount, vehicle, mode, fuelType: fuel, pump, customer,
     editedAt: new Date().toISOString(), editedBy: APP.userName||'Admin', editReason: reason };
+
   try {
+    // ── Sync to server (PostgreSQL) first — source of truth ──
+    await apiFetch('/data/sales', {
+      method: 'PUT',
+      body: JSON.stringify(updated)
+    });
+    // ── Update local IndexedDB to match ──
     await db.put('sales', updated);
-    // Update local APP.data
+    // ── Update in-memory APP.data ──
     const idx = APP.data.sales.findIndex(x=>String(x.id)===String(saleId));
     if (idx>=0) APP.data.sales[idx] = updated;
     auditLog('sale_edit', { id: saleId, reason, oldLiters: s.liters, newLiters: liters, oldAmount: s.amount, newAmount: amount });
     closeModal();
     toast(`✅ Sale updated — ${fmt(s.liters)}L → ${fmt(liters)}L`, 'success');
     renderPage();
-  } catch(e) { toast('Save failed: ' + e.message, 'error'); }
+  } catch(e) { toast('❌ Save failed: ' + e.message, 'error'); }
 }
 window.saveEditedSale = saveEditedSale;
 
@@ -7536,16 +7547,39 @@ function confirmDeleteSale(saleId, vehicle, liters, amount) {
 window.confirmDeleteSale = confirmDeleteSale;
 
 async function doDeleteSale(saleId) {
+  // Owner-only guard — only Owner can delete sales
+  if (!['owner'].includes((APP.userRole||'').toLowerCase())) {
+    toast('❌ Only the Owner can delete sales records', 'error'); return;
+  }
   const reason = (document.getElementById('deleteSaleReason')?.value||'').trim();
   if (!reason) { toast('Please enter a reason for deletion','error'); return; }
+
+  const s = (APP.data?.sales||[]).find(x=>String(x.id)===String(saleId));
+
   try {
+    // ── Sync delete to server (PostgreSQL) first — source of truth ──
+    await apiFetch('/data/sales/' + encodeURIComponent(saleId), {
+      method: 'DELETE'
+    });
+    // ── Delete from local IndexedDB ──
     await db.delete('sales', saleId);
     APP.data.sales = (APP.data.sales||[]).filter(x=>String(x.id)!==String(saleId));
-    auditLog('sale_delete', { id: saleId, reason });
+
+    // ── Restore tank stock: add the deleted liters back ──
+    if (s && s.fuelType && s.liters > 0) {
+      const tank = APP.data.tanks.find(t => t.fuelType === s.fuelType);
+      if (tank) {
+        tank.current = (tank.current || 0) + s.liters;
+        try { await db.put('tanks', _tankForPut(tank)); } catch(e) { console.warn('[Tank restore]', e.message); }
+        toast(`🛢️ ${fmt(s.liters)}L ${getFuel(s.fuelType).short} restored to tank stock`, 'info');
+      }
+    }
+
+    auditLog('sale_delete', { id: saleId, reason, liters: s?.liters, fuelType: s?.fuelType });
     closeModal();
     toast('✅ Sale deleted and removed from reports', 'success');
     renderPage();
-  } catch(e) { toast('Delete failed: ' + e.message, 'error'); }
+  } catch(e) { toast('❌ Delete failed: ' + e.message, 'error'); }
 }
 window.doDeleteSale = doDeleteSale;
 

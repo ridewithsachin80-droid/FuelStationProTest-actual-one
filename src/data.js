@@ -671,6 +671,12 @@ function dataRoutes(db) {
   router.put('/:store', checkDayLock, async (req, res) => {
     const meta = STORE_MAP[req.params.store];
     if (!meta) return res.status(404).json({ error: 'Unknown store' });
+
+    // Sales edits are Owner-only — prevent Manager/Accountant/Cashier from editing sale records
+    if (req.params.store === 'sales' && req.userRole !== 'Owner' && req.userRole !== 'super') {
+      return res.status(403).json({ error: 'Only the Owner can edit sales records' });
+    }
+
     try {
       const result = await upsertRow(meta, req.tenantId, req.body, false);
       await auditLog(req, 'UPDATE', req.params.store, String(result.id||''), '');
@@ -698,6 +704,12 @@ function dataRoutes(db) {
   router.delete('/:store/:id', async (req, res) => {
     const meta = STORE_MAP[req.params.store];
     if (!meta) return res.status(404).json({ error: 'Unknown store' });
+
+    // Sales deletes are Owner-only — prevent other roles from removing sale records
+    if (req.params.store === 'sales' && req.userRole !== 'Owner' && req.userRole !== 'super') {
+      return res.status(403).json({ error: 'Only the Owner can delete sales records' });
+    }
+
     // Day lock check: fetch the record's actual date first, then check that date's lock
     if (DAY_LOCKED_STORES.has(req.params.store)) {
       try {
