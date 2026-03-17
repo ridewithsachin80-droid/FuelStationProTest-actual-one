@@ -220,7 +220,6 @@ async function startServer() {
   // ── ONE-TIME CLEANUP: Remove duplicate fuel purchase expense entries ──────
   // Visit /api/cleanup/dedup-expenses?secret=fuelbunk2026 once to fix duplicates.
   // This endpoint is safe to call multiple times — it is idempotent.
-  // Remove or comment out after use.
   app.get('/api/cleanup/dedup-expenses', async (req, res) => {
     if (req.query.secret !== 'fuelbunk2026') {
       return res.status(403).json({ error: 'Invalid secret' });
@@ -228,30 +227,50 @@ async function startServer() {
     try {
       // Count before
       const before = await pool.query(
-        `SELECT COUNT(*) as total FROM expenses
-         WHERE data_json::jsonb->>'source' = 'fuel_purchase'`
+        `SELECT COUNT(*) as total FROM expenses WHERE category = 'Fuel Purchase'`
       );
-      // Delete duplicates — keep the one with the lowest id for each purchaseId
-      const result = await pool.query(`
+
+      // Strategy 1: dedup by data_json purchaseId (new-style entries)
+      const r1 = await pool.query(`
         DELETE FROM expenses e1
         USING expenses e2
         WHERE e1.tenant_id = e2.tenant_id
+          AND e1.data_json::jsonb->>'purchaseId' IS NOT NULL
+          AND e1.data_json::jsonb->>'purchaseId' != ''
           AND e1.data_json::jsonb->>'purchaseId' = e2.data_json::jsonb->>'purchaseId'
-          AND e1.data_json::jsonb->>'source' = 'fuel_purchase'
-          AND e2.data_json::jsonb->>'source' = 'fuel_purchase'
+          AND e1.category = 'Fuel Purchase'
+          AND e2.category = 'Fuel Purchase'
           AND e1.id > e2.id
       `);
+
+      // Strategy 2: dedup by description+amount+date (catches all duplicates
+      // regardless of how data_json was stored — same purchase = same desc+amount+date)
+      const r2 = await pool.query(`
+        DELETE FROM expenses e1
+        USING expenses e2
+        WHERE e1.tenant_id = e2.tenant_id
+          AND e1.category = 'Fuel Purchase'
+          AND e2.category = 'Fuel Purchase'
+          AND e1.description = e2.description
+          AND e1.amount = e2.amount
+          AND e1.date = e2.date
+          AND e1.id > e2.id
+      `);
+
       // Count after
       const after = await pool.query(
-        `SELECT COUNT(*) as total FROM expenses
-         WHERE data_json::jsonb->>'source' = 'fuel_purchase'`
+        `SELECT COUNT(*) as total FROM expenses WHERE category = 'Fuel Purchase'`
       );
+
+      const deleted = (r1.rowCount || 0) + (r2.rowCount || 0);
       res.json({
         success: true,
-        message: 'Duplicate fuel purchase expense entries removed',
+        message: deleted > 0
+          ? `Removed ${deleted} duplicate fuel purchase expense entries`
+          : 'No duplicates found — database is already clean',
         before: parseInt(before.rows[0].total),
         after: parseInt(after.rows[0].total),
-        deleted: result.rowCount,
+        deleted,
       });
     } catch (e) {
       console.error('[Cleanup] dedup-expenses error:', e.message);
