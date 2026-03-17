@@ -390,13 +390,14 @@ async function startServer() {
   // ── PUBLIC: employee names for login screen (no auth required, no PINs) ─
   app.get('/api/public/employees/:tenantId', async (req, res) => {
     try {
-      // FIX #11: Verify tenant exists before returning any data — prevents enumeration
       if (!(await checkTenantExists(req.params.tenantId))) return res.json([]);
-      // IR-01 FIX: pinHash REMOVED from public response — 4-digit PINs are trivially reversible
-      // Use POST /api/public/verify-pin/:tenantId for online verification
-      // Offline fallback uses hash stored in IndexedDB during authenticated admin session
+      // PERMANENT FIX: Removed "AND pin_hash IS NOT NULL AND pin_hash != ''" filter.
+      // That filter caused the login screen to show "No employees with PIN set" when
+      // employees existed but had old SHA-256 hashes (not bcrypt) or no hash yet.
+      // The login screen should always show all active employees — PIN verification
+      // happens server-side at /api/public/verify-pin, not by filtering here.
       const r = await pool.query(
-        'SELECT id, name, role, shift, data_json FROM employees WHERE tenant_id = $1 AND active = 1 AND pin_hash IS NOT NULL AND pin_hash != \'\' ORDER BY name',
+        'SELECT id, name, role, shift, data_json FROM employees WHERE tenant_id = $1 AND active = 1 ORDER BY name',
         [req.params.tenantId]
       );
       res.json(r.rows.map(e => {
@@ -404,12 +405,11 @@ async function startServer() {
         try { const d = JSON.parse(e.data_json || '{}'); permissions = d.permissions || {}; } catch {}
         return {
           id: e.id, name: e.name, role: e.role, shift: e.shift || '',
-          // pinHash intentionally omitted — use /api/public/verify-pin for auth
           permissions
         };
       }));
     } catch (e) {
-      res.json([]); // fail silently — login screen falls back to cached hash
+      res.json([]);
     }
   });
 
@@ -489,22 +489,39 @@ async function startServer() {
         return res.json({ valid: false });
       }
 
-      // Verify: use bcrypt.compare if raw pin provided, else fall back to direct hash compare
-      const { verifyPassword: verifyPinPw } = require('./schema');
+      // Verify: smart detection of hash type — bcrypt ($2b$) or legacy SHA-256 (64-char hex)
+      const { verifyPassword: verifyPinPw, hashPassword: hashPinPw } = require('./schema');
       let match = false;
+      const storedHash = r.rows[0].pin_hash || '';
+      const isBcrypt = storedHash.startsWith('$2');
+      const isSha256 = /^[0-9a-f]{64}$/.test(storedHash);
+
       if (pin) {
-        // Preferred path: raw PIN → bcrypt.compare against stored bcrypt hash
-        match = await verifyPinPw(String(pin), r.rows[0].pin_hash);
-        // Also upgrade legacy SHA-256 hash to bcrypt on first successful login
-        if (match && !r.rows[0].pin_hash.startsWith('$2')) {
-          const { hashPassword: hashPinPw } = require('./schema');
-          const newHash = await hashPinPw(String(pin));
-          await pool.query('UPDATE employees SET pin_hash = $1 WHERE id = $2 AND tenant_id = $3',
-            [newHash, r.rows[0].id, req.params.tenantId]).catch(() => {});
+        if (isBcrypt) {
+          // Standard path: bcrypt.compare
+          match = await verifyPinPw(String(pin), storedHash);
+        } else if (isSha256) {
+          // Legacy SHA-256 stored — compute SHA-256 of raw pin and compare
+          // Then auto-upgrade to bcrypt so future logins use bcrypt
+          const crypto = require('crypto');
+          const sha256ofPin = crypto.createHash('sha256').update(String(pin)).digest('hex');
+          match = sha256ofPin === storedHash;
+          if (match) {
+            // Auto-upgrade: store bcrypt hash so future logins are secure
+            const newHash = await hashPinPw(String(pin));
+            await pool.query('UPDATE employees SET pin_hash = $1 WHERE id = $2 AND tenant_id = $3',
+              [newHash, r.rows[0].id, req.params.tenantId]).catch(() => {});
+            console.log('[verify-pin] Auto-upgraded SHA-256 → bcrypt for employee', r.rows[0].id);
+          }
+        } else {
+          // Unknown hash format — deny and log
+          console.warn('[verify-pin] Unknown hash format for employee', r.rows[0].id, 'len:', storedHash.length);
+          match = false;
         }
-      } else {
-        // Legacy fallback: SHA-256 hash compare (offline-cached hashes)
-        match = r.rows[0].pin_hash === pinHash;
+      } else if (pinHash) {
+        // Legacy client sending SHA-256 only (no raw pin) — direct compare
+        match = storedHash === pinHash;
+        // Auto-upgrade not possible here (no raw pin available)
       }
       
       // Log the attempt
