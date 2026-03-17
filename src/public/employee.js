@@ -129,6 +129,13 @@ function getEmpPinHash(empId) {
 }
 
 // Build EMP_LIST dynamically from APP.data.employees + stored pins
+
+// BUG-18 FIX: Date.now() alone can collide if two records are created in the same ms.
+// Use Date.now() * 1000 + random 3-digit suffix for unique client-side IDs.
+function _genId() {
+  return Date.now() * 1000 + Math.floor(Math.random() * 1000);
+}
+
 function getEmpList() {
   _cacheTenantId(); // ensure tenant ID is cached for localStorage scoping
   const emps = APP.data?.employees;
@@ -1139,7 +1146,7 @@ function emp_recordExpense() {
   const desc = (document.getElementById('empExpDesc')?.value||'').trim();
   if (isNaN(amt) || amt <= 0) { toast('Enter valid amount', 'error'); return; }
   if (amt > 1000000) { toast('Amount too large', 'error'); return; }
-  const expense = { id: Date.now(), category: cat, amount: amt, mode, desc, time: emp_time(), date: emp_today(), employee: empState.user?.name || '' };
+  const expense = { id: _genId(), category: cat, amount: amt, mode, desc, time: emp_time(), date: emp_today(), employee: empState.user?.name || '' };
   if (!empState.expenses) empState.expenses = [];
   empState.expenses.unshift(expense);
   // Save to admin data too (in-memory)
@@ -1151,10 +1158,20 @@ function emp_recordExpense() {
       fetch('/api/public/expense/' + encodeURIComponent(tenantExp.id), {
         method: 'POST', headers: {'Content-Type':'application/json'},
         body: JSON.stringify({ ...expense, source: 'employee' })
-      }).catch(err => console.warn('[emp expense] save failed:', err.message));
+      }).catch(err => {
+        // BUG-21 FIX: Was silently swallowing network errors.
+        // Now retries via authenticated db.add so data is not lost.
+        console.warn('[emp expense] public save failed, retrying via db:', err.message);
+        db.add('expenses', { ...expense, source: 'employee' }).catch(dbErr => {
+          console.error('[emp expense] db fallback also failed:', dbErr.message);
+          toast('⚠️ Expense saved locally but may not sync — check your connection', 'warning');
+        });
+      });
     } else {
-      // Fallback: auth path (same device)
-      db.add('expenses', { ...expense, source: 'employee' }).catch(() => {});
+      db.add('expenses', { ...expense, source: 'employee' }).catch(e => {
+        console.warn('[emp expense] db save failed:', e.message);
+        toast('⚠️ Could not save expense — check your connection', 'warning');
+      });
     }
   } catch(e) {
     db.add('expenses', { ...expense, source: 'employee' }).catch(() => {});
@@ -1275,7 +1292,7 @@ function emp_renderComplete() {
     })()}
     <div class="card" style="margin-bottom:16px"><div class="card-head"><h4>Pump-wise Report</h4></div><div class="card-body">
       ${emp_myPumps().map(p=>{const s=emp_pumpSold(p.id);return `<div style="margin-bottom:14px">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><span class="fw-800" style="color:var(--text-0);font-size:15px">${p.name} <span style="font-size:10px;font-weight:700;color:${p.fuelType==='petrol'?'var(--red)':p.fuelType==='diesel'?'var(--orange)':'var(--purple)'}">${EMP_FUEL[p.fuelType].split(' ')[0]}</span></span><span class="mono fw-800" style="color:var(--green);font-size:14px">${fmt(s)} L</span></div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><span class="fw-800" style="color:var(--text-0);font-size:15px">${p.name} <span style="font-size:10px;font-weight:700;color:${p.fuelType==='petrol'?'var(--red)':p.fuelType==='diesel'?'var(--orange)':'var(--purple)'}">${(EMP_FUEL[p.fuelType]||p.fuelType||'Fuel').split(' ')[0]}</span></span><span class="mono fw-800" style="color:var(--green);font-size:14px">${fmt(s)} L</span></div>
         ${p.nozzles.map(n=>{const k=emp_key(p.id,n),o=empState.openReadings[k]||0,c=empState.closeReadings[k]||0;return `<div style="display:grid;grid-template-columns:50px 1fr 1fr 1fr;gap:6px;font-size:12px;padding:6px 0;border-bottom:1px solid var(--border-light)"><span style="color:var(--text-3);font-weight:700">N-${n}</span><span style="color:var(--text-2)">Open: <span class="mono" style="color:var(--text-0)">${fmt(o)}</span></span><span style="color:var(--text-2)">Close: <span class="mono" style="color:var(--text-0)">${fmt(c)}</span></span><span class="mono fw-700" style="color:var(--green);text-align:right">${fmt(c-o)} L</span></div>`;}).join('')}
       </div>`;}).join('')}
     </div></div>
@@ -2052,7 +2069,7 @@ function emp_recordSale() {
   }
 
   const sale = {
-    id: Date.now(), date: emp_today(), time: emp_time(),
+    id: _genId(), date: emp_today(), time: emp_time(),
     // FIX 33: idempotency key lets server deduplicate retries (network drop after server
     // accepted the sale but before client got the 200 response back — previously caused
     // duplicate sales when flushOfflineQueue retried). crypto.randomUUID is available in
@@ -2413,7 +2430,7 @@ function emp_recordDip() {
   if (isNaN(r)||r<=0) { toast('Enter valid dip reading','error'); return; }
   if (r > 30000) { toast('Dip reading exceeds tank capacity limit','error'); return; }
 
-  const dip = { id: Date.now(), tankId, reading: r, time: emp_time(), date: emp_today(), method: 'direct', employee: empState.user?.name || 'Employee' };
+  const dip = { id: _genId(), tankId, reading: r, time: emp_time(), date: emp_today(), method: 'direct', employee: empState.user?.name || 'Employee' };
 
   // Save to employee session
   empState.dipReadings.unshift(dip);
@@ -2737,7 +2754,7 @@ async function _emp_submit_inner() {
     if (adminEmp) {
       if (!adminEmp.balanceEntries) adminEmp.balanceEntries = [];
       adminEmp.balanceEntries.push({
-        id: Date.now(), date: emp_today(), shift: empState.shift || '',
+        id: _genId(), date: emp_today(), shift: empState.shift || '',
         entries: mismatchEntries,
         totalDiffLiters: mismatchEntries.reduce((a,e) => a + Math.abs(e.diffLiters), 0),
         totalDiffAmount: mismatchEntries.reduce((a,e) => a + e.diffAmount, 0),
@@ -2806,7 +2823,7 @@ async function _emp_submit_inner() {
 function emp_share() {
   const uname = sanitize(empState.user?.name||'');
   let t = `⛽ FuelBunk Pro — Report\n📅 ${emp_today()}\n👤 ${uname}\n\n📊 Summary:\n• Liters: ${fmt(emp_totalSold())} L\n• Revenue: ${cur(emp_totalRev())}\n• Sales: ${empState.sales.length}\n\n⛽ Pump-wise:\n`;
-  emp_myPumps().forEach(p => { const s=emp_pumpSold(p.id); if(s>0) t+=`• ${sanitize(p.name)} (${EMP_FUEL[p.fuelType].split(' ')[0]}): ${fmt(s)} L\n`; });
+  emp_myPumps().forEach(p => { const s=emp_pumpSold(p.id); if(s>0) t+=`• ${sanitize(p.name)} (${(EMP_FUEL[p.fuelType]||p.fuelType||'Fuel').split(' ')[0]}): ${fmt(s)} L\n`; });
   t += '\n— ' + (APP.data?.upiName || APP.tenant?.name || 'Fuel Station');
   if (navigator.share) navigator.share({title:'Report',text:t}).catch(()=>{});
   else navigator.clipboard?.writeText(t).then(()=>toast('Copied!','success')).catch(()=>{});
@@ -2817,7 +2834,7 @@ function emp_print() {
   const uname = sanitize(empState.user?.name||'');
   const rows = emp_myPumps().map(p => {
     const nr = p.nozzles.map(n => { const k=emp_key(p.id,n),o=empState.openReadings[k]||0,c=empState.closeReadings[k]||0; return `<tr><td style="padding-left:24px;color:#666">Nozzle ${n}</td><td style="text-align:right;font-family:monospace">${o.toFixed(1)}</td><td style="text-align:right;font-family:monospace">${c.toFixed(1)}</td><td style="text-align:right;font-family:monospace;font-weight:700">${(c-o).toFixed(1)}</td></tr>`; }).join('');
-    return `<tr style="background:#f8f9fa"><td style="font-weight:700">${sanitize(p.name)} — ${EMP_FUEL[p.fuelType].split(' ')[0]}</td><td></td><td></td><td style="text-align:right;font-weight:700">${emp_pumpSold(p.id).toFixed(1)} L</td></tr>${nr}`;
+    return `<tr style="background:#f8f9fa"><td style="font-weight:700">${sanitize(p.name)} — ${(EMP_FUEL[p.fuelType]||p.fuelType||'Fuel').split(' ')[0]}</td><td></td><td></td><td style="text-align:right;font-weight:700">${emp_pumpSold(p.id).toFixed(1)} L</td></tr>${nr}`;
   }).join('');
   const htmlContent = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Report</title><style>body{font-family:'Segoe UI',system-ui,sans-serif;padding:30px;font-size:12px;color:#333}h1{font-size:18px;text-align:center;margin-bottom:2px}h2{font-size:13px;text-align:center;color:#666;font-weight:400;margin-bottom:16px}.meta{text-align:center;font-size:11px;color:#888;margin-bottom:20px;padding-bottom:12px;border-bottom:2px solid #d4940f}table{width:100%;border-collapse:collapse;margin-bottom:16px}th{background:#f0f0f0;text-align:left;padding:8px;font-size:10px;text-transform:uppercase;border-bottom:2px solid #ddd}td{padding:6px 8px;border-bottom:1px solid #eee;font-size:12px}.total-row{background:#fff8e6;font-weight:700}.footer{text-align:center;font-size:10px;color:#aaa;margin-top:20px;border-top:1px solid #eee;padding-top:10px}</style></head><body><h1>${APP.data?.upiName || APP.tenant?.name || 'Fuel Station'}</h1><h2>Report — ${emp_today()}</h2><div class="meta">${emp_today()} · ${uname}</div><table><thead><tr><th>Pump / Nozzle</th><th style="text-align:right">Opening</th><th style="text-align:right">Closing</th><th style="text-align:right">Sold (L)</th></tr></thead><tbody>${rows}<tr class="total-row"><td>TOTAL</td><td></td><td></td><td style="text-align:right">${ts.toFixed(1)} L</td></tr></tbody></table><table><thead><tr><th>Metric</th><th style="text-align:right">Value</th></tr></thead><tbody><tr><td>Total Revenue</td><td style="text-align:right;font-weight:700">&#8377;${tr.toFixed(2)}</td></tr><tr><td>Sales</td><td style="text-align:right">${empState.sales.length}</td></tr><tr><td>Cash</td><td style="text-align:right">&#8377;${emp_totalCash().toFixed(2)}</td></tr></tbody></table><div class="footer">FuelBunk Pro — Auto Generated<br>Signature: ________________</div></body></html>`;
   const empBlob = new Blob([htmlContent], { type: 'text/html;charset=utf-8' });
@@ -3357,7 +3374,7 @@ function appLogout() {
   auditLog('logout', { user: APP.role === 'admin' ? APP.adminUser?.name : empState.user?.name, role: APP.role });
   if (APP.role === 'employee') {
     if (empState.active && empState.user) {
-      emp_saveSession(); // preserve readings + sales for re-login
+      emp_saveSession();
       console.log('[appLogout] saved session: sales='+empState.sales.length+' opens='+Object.keys(empState.openReadings).length+' closes='+Object.keys(empState.closeReadings).length);
     }
     empState.active = false;
@@ -3365,6 +3382,12 @@ function appLogout() {
   }
   clearSession();
   window.location.hash = '';
+  // BUG-23 FIX: After logout, pre-fetch employee list so the login dropdown
+  // is never empty on the next login screen. Do it after a short delay so
+  // showLoginScreen() renders first, then the dropdown is populated.
+  setTimeout(() => {
+    if (typeof fetchPublicEmployees === 'function') fetchPublicEmployees().catch(() => {});
+  }, 300);
   showLoginScreen();
 }
 
@@ -3395,7 +3418,7 @@ async function saveCreditCustomer() {
   if (limit > 10000000) { toast('Credit limit exceeds ₹1,00,00,000', 'error'); return; }
   const loyaltyEnrolled = !!(document.getElementById('ccLoyalty')?.checked);
   const customer = {
-    id: Date.now(), name: sanitize(name), type, limit, outstanding: 0,
+    id: _genId(), name: sanitize(name), type, limit, outstanding: 0,
     lastPayment: '', phone: sanitize(phone), loyaltyEnrolled
   };
   APP.data.creditCustomers.push(customer);
