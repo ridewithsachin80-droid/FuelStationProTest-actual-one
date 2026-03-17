@@ -5436,8 +5436,8 @@ function renderGSTTab(D) {
 
     <div class="g g-2 gap-12">
       <div class="card card-pad">
-        <h4 class="fw-700 mb-10" style="font-size:13px;color:var(--text-0)">📄 GSTR-1 (B2C Summary)</h4>
-        <p style="font-size:12px;color:var(--text-3);margin-bottom:14px">HSN-wise summary for all B2C supplies. Ready to copy into GSTN portal or upload as JSON.</p>
+        <h4 class="fw-700 mb-10" style="font-size:13px;color:var(--text-0)">📄 GSTR-1 (B2C Summary) — Lubes Only</h4>
+        <p style="font-size:12px;color:var(--text-3);margin-bottom:14px">HSN-wise summary for lubes & products only (GST-applicable). Ready to upload to GSTN portal.</p>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="btn btn-accent btn-sm" style="flex:1" onclick="exportGSTR1JSON(${gstMonth},${gstYear})">📥 GSTR-1 JSON</button>
           <button class="btn btn-ghost btn-sm" style="flex:1" onclick="exportGSTR1CSV(${gstMonth},${gstYear})">📊 CSV</button>
@@ -5445,15 +5445,209 @@ function renderGSTTab(D) {
         </div>
       </div>
       <div class="card card-pad">
-        <h4 class="fw-700 mb-10" style="font-size:13px;color:var(--text-0)">📑 Tally XML Export</h4>
-        <p style="font-size:12px;color:var(--text-3);margin-bottom:14px">Vouchers formatted for Tally ERP 9 / Tally Prime import. Contains all sales transactions for the month.</p>
+        <h4 class="fw-700 mb-10" style="font-size:13px;color:var(--text-0)">📑 Tally XML Export — Lubes (GST)</h4>
+        <p style="font-size:12px;color:var(--text-3);margin-bottom:14px">Tally ERP 9 / Prime vouchers for lubes sales with GST ledger entries.</p>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <button class="btn btn-accent btn-sm" style="flex:1" onclick="exportTallyXML(${gstMonth},${gstYear})">📥 Tally XML</button>
+          <button class="btn btn-accent btn-sm" style="flex:1" onclick="exportTallyXML(${gstMonth},${gstYear})">📥 Tally XML (Lubes)</button>
           <button class="btn btn-ghost btn-sm" style="flex:1" onclick="openGSTINModal()">⚙️ GSTIN Settings</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="g g-2 gap-12" style="margin-top:12px">
+      <div class="card card-pad" style="border-color:rgba(234,179,8,0.3)">
+        <h4 class="fw-700 mb-10" style="font-size:13px;color:var(--yellow)">🏛️ LST / State VAT Filing — Fuel Sales</h4>
+        <p style="font-size:12px;color:var(--text-3);margin-bottom:14px">Petrol, Diesel &amp; Premium sales for State VAT / Local Sales Tax return. Submit to your state commercial tax department.</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-sm" style="flex:1;background:var(--yellow);color:#000;font-weight:700" onclick="exportLSTCSV(${gstMonth},${gstYear})">📊 LST Report CSV</button>
+          <button class="btn btn-ghost btn-sm" style="flex:1" onclick="printLSTReport(${gstMonth},${gstYear})">🖨️ Print LST Report</button>
+        </div>
+      </div>
+      <div class="card card-pad" style="border-color:rgba(234,179,8,0.3)">
+        <h4 class="fw-700 mb-10" style="font-size:13px;color:var(--yellow)">📑 Tally XML — Fuel Sales (LST/VAT)</h4>
+        <p style="font-size:12px;color:var(--text-3);margin-bottom:14px">Tally ERP 9 / Prime vouchers for petrol &amp; diesel sales with state VAT / LST ledger entries.</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-sm" style="flex:1;background:var(--yellow);color:#000;font-weight:700" onclick="exportLSTTallyXML(${gstMonth},${gstYear})">📥 Tally XML (Fuel/LST)</button>
         </div>
       </div>
     </div>`;
 }
+
+// ── LST / State VAT CSV Export ────────────────────────────────────────────────
+function exportLSTCSV(month, year) {
+  const startDate = `${year}-${String(month).padStart(2,'0')}-01`;
+  const endDate   = new Date(year, month, 0).toISOString().slice(0, 10);
+  const GST_EXCLUDED_FUELS = new Set(['petrol','diesel','premium_petrol','atf','cng','lng']);
+  const fuelSales = (APP.data?.sales||[]).filter(s => {
+    const d = (s.date||'').slice(0,10);
+    return d >= startDate && d <= endDate && GST_EXCLUDED_FUELS.has((s.fuelType||'').toLowerCase());
+  });
+  if (!fuelSales.length) { toast('No fuel sales in this period', 'info'); return; }
+
+  const taxRates = APP.data?.fuelTaxRates || [];
+  let csv = 'Date,Time,Fuel Type,Vehicle,Liters,Rate/L,Gross Amount,LST/VAT%,Tax Amount,Taxable Amount,Payment Mode,Employee,Pump\n';
+  fuelSales.forEach(s => {
+    const tr = taxRates.find(t => t.fuelType === s.fuelType) || {};
+    const lstPct = tr.rate ? parseFloat(tr.rate) : 0;
+    const gross = s.amount || 0;
+    const taxable = lstPct > 0 ? gross / (1 + lstPct/100) : gross;
+    const tax = gross - taxable;
+    csv += [
+      s.date, s.time||'', getFuel(s.fuelType).short,
+      s.vehicle||'', (s.liters||0).toFixed(2),
+      s.liters > 0 ? (gross/s.liters).toFixed(2) : '0',
+      gross.toFixed(2), lstPct.toFixed(2), tax.toFixed(2), taxable.toFixed(2),
+      s.mode||'cash', s.employee||'', s.pump||''
+    ].map(v => `"${String(v).replace(/"/g,'""')}"`).join(',') + '\n';
+  });
+  const totalLiters = fuelSales.reduce((a,s)=>a+(s.liters||0),0);
+  const totalAmt = fuelSales.reduce((a,s)=>a+(s.amount||0),0);
+  csv += `\n"TOTAL","","","",${totalLiters.toFixed(2)},"",${totalAmt.toFixed(2)},"","","","","",""`;
+
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url;
+  a.download = `LST-FuelSales-${year}-${String(month).padStart(2,'0')}.csv`;
+  a.click(); URL.revokeObjectURL(url);
+  toast('LST CSV downloaded', 'success');
+}
+window.exportLSTCSV = exportLSTCSV;
+
+// ── LST Print Report ──────────────────────────────────────────────────────────
+function printLSTReport(month, year) {
+  const startDate = `${year}-${String(month).padStart(2,'0')}-01`;
+  const endDate   = new Date(year, month, 0).toISOString().slice(0, 10);
+  const monthName = new Date(year, month-1).toLocaleString('en-IN',{month:'long'});
+  const GST_EXCLUDED_FUELS = new Set(['petrol','diesel','premium_petrol','atf','cng','lng']);
+  const fuelSales = (APP.data?.sales||[]).filter(s => {
+    const d = (s.date||'').slice(0,10);
+    return d >= startDate && d <= endDate && GST_EXCLUDED_FUELS.has((s.fuelType||'').toLowerCase());
+  });
+
+  const taxRates = APP.data?.fuelTaxRates || [];
+  const byFuel = {};
+  fuelSales.forEach(s => {
+    const ft = s.fuelType || 'petrol';
+    if (!byFuel[ft]) byFuel[ft] = { name: getFuel(ft).name, liters:0, gross:0, taxable:0, tax:0 };
+    const tr = taxRates.find(t=>t.fuelType===ft)||{};
+    const lstPct = tr.rate ? parseFloat(tr.rate) : 0;
+    const gross = s.amount||0;
+    const taxable = lstPct>0 ? gross/(1+lstPct/100) : gross;
+    byFuel[ft].liters  += s.liters||0;
+    byFuel[ft].gross   += gross;
+    byFuel[ft].taxable += taxable;
+    byFuel[ft].tax     += gross - taxable;
+  });
+
+  const stationName = APP.data?.upiName || APP.tenant?.name || 'Fuel Station';
+  const rows = Object.values(byFuel).map(f =>
+    `<tr><td>${f.name}</td><td style="text-align:right">${f.liters.toFixed(2)} L</td><td style="text-align:right">₹${f.gross.toFixed(2)}</td><td style="text-align:right">₹${f.taxable.toFixed(2)}</td><td style="text-align:right">₹${f.tax.toFixed(2)}</td></tr>`
+  ).join('');
+  const totalGross = Object.values(byFuel).reduce((a,f)=>a+f.gross,0);
+  const totalTax   = Object.values(byFuel).reduce((a,f)=>a+f.tax,0);
+  const totalTaxable = Object.values(byFuel).reduce((a,f)=>a+f.taxable,0);
+
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>LST Report</title>
+  <style>body{font-family:'Segoe UI',sans-serif;padding:30px;font-size:12px}
+  h1{font-size:18px;text-align:center}h2{font-size:13px;text-align:center;color:#666;font-weight:400}
+  .meta{text-align:center;margin:8px 0 20px;font-size:11px;color:#888;border-bottom:2px solid #d4940f;padding-bottom:12px}
+  .notice{background:#fff8e1;border:1px solid #f59e0b;border-radius:8px;padding:12px;margin-bottom:16px;font-size:12px}
+  table{width:100%;border-collapse:collapse;margin-top:16px}
+  th{background:#f0f0f0;text-align:left;padding:8px;font-size:10px;text-transform:uppercase;border-bottom:2px solid #ddd}
+  td{padding:6px 8px;border-bottom:1px solid #eee}.total-row{background:#fff8e6;font-weight:700}
+  .footer{text-align:center;font-size:10px;color:#aaa;margin-top:30px;border-top:1px solid #eee;padding-top:10px}</style>
+  </head><body>
+  <h1>${stationName}</h1>
+  <h2>Local Sales Tax (LST) / State VAT Return — ${monthName} ${year}</h2>
+  <div class="meta">Period: ${startDate} to ${endDate}</div>
+  <div class="notice">⚠️ <strong>Note:</strong> Petrol, Diesel and other petroleum products are <strong>excluded from GST</strong> under Article 279A of the Indian Constitution. These are taxable under State VAT / Local Sales Tax (LST). This report should be submitted to your State Commercial Tax Department.</div>
+  <table><thead><tr><th>Fuel Type</th><th style="text-align:right">Liters Sold</th><th style="text-align:right">Gross Revenue</th><th style="text-align:right">Taxable Value</th><th style="text-align:right">LST/VAT Amount</th></tr></thead>
+  <tbody>${rows}</tbody>
+  <tfoot><tr class="total-row"><td>TOTAL</td><td></td><td style="text-align:right">₹${totalGross.toFixed(2)}</td><td style="text-align:right">₹${totalTaxable.toFixed(2)}</td><td style="text-align:right;color:#d4940f">₹${totalTax.toFixed(2)}</td></tr></tfoot>
+  </table>
+  <div class="footer">FuelBunk Pro — LST/State VAT Report · Auto Generated<br>Signature: ________________ &nbsp;&nbsp;&nbsp; Date: ________________</div>
+  </body></html>`;
+
+  const blob = new Blob([html], { type:'text/html;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const w = window.open(url, '_blank');
+  if (w && !w.closed) { setTimeout(() => { try { w.print(); } catch(e){} URL.revokeObjectURL(url); }, 1000); }
+  toast('LST report opened for printing', 'success');
+}
+window.printLSTReport = printLSTReport;
+
+// ── LST Tally XML Export ──────────────────────────────────────────────────────
+function exportLSTTallyXML(month, year) {
+  const startDate = `${year}-${String(month).padStart(2,'0')}-01`;
+  const endDate   = new Date(year, month, 0).toISOString().slice(0, 10);
+  const monthName = new Date(year, month-1).toLocaleString('en-IN',{month:'long'});
+  const GST_EXCLUDED_FUELS = new Set(['petrol','diesel','premium_petrol','atf','cng','lng']);
+  const fuelSales = (APP.data?.sales||[]).filter(s => {
+    const d = (s.date||'').slice(0,10);
+    return d >= startDate && d <= endDate && GST_EXCLUDED_FUELS.has((s.fuelType||'').toLowerCase());
+  });
+  if (!fuelSales.length) { toast('No fuel sales in this period', 'info'); return; }
+
+  const taxRates = APP.data?.fuelTaxRates || [];
+  const stationName = APP.data?.upiName || APP.tenant?.name || 'Fuel Station';
+
+  const vouchers = fuelSales.map(s => {
+    const tr = taxRates.find(t=>t.fuelType===s.fuelType)||{};
+    const lstPct = tr.rate ? parseFloat(tr.rate) : 0;
+    const gross = s.amount||0;
+    const taxable = lstPct>0 ? gross/(1+lstPct/100) : gross;
+    const tax = +(gross - taxable).toFixed(2);
+    const fuelName = getFuel(s.fuelType).name;
+    const dateParts = (s.date||'').split('-');
+    const tallyDate = dateParts.length===3 ? `${dateParts[2]}${dateParts[1]}${dateParts[0]}` : s.date;
+    return `  <VOUCHER VCHTYPE="Sales" ACTION="Create">
+    <DATE>${tallyDate}</DATE>
+    <VOUCHERTYPENAME>Sales</VOUCHERTYPENAME>
+    <NARRATION>${fuelName} · ${(s.liters||0).toFixed(2)}L · ${s.vehicle||'Walk-in'} · ${s.mode||'cash'}</NARRATION>
+    <ALLLEDGERENTRIES.LIST>
+      <LEDGERNAME>${s.mode==='credit' ? (s.customer||'Credit Sales') : (s.mode==='upi'?'UPI Receipts':s.mode==='card'?'Card Receipts':'Cash-in-Hand')}</LEDGERNAME>
+      <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+      <AMOUNT>-${gross.toFixed(2)}</AMOUNT>
+    </ALLLEDGERENTRIES.LIST>
+    <ALLLEDGERENTRIES.LIST>
+      <LEDGERNAME>${fuelName} Sales</LEDGERNAME>
+      <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+      <AMOUNT>${taxable.toFixed(2)}</AMOUNT>
+    </ALLLEDGERENTRIES.LIST>
+    ${tax > 0 ? `<ALLLEDGERENTRIES.LIST>
+      <LEDGERNAME>Local Sales Tax (LST)</LEDGERNAME>
+      <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+      <AMOUNT>${tax.toFixed(2)}</AMOUNT>
+    </ALLLEDGERENTRIES.LIST>` : ''}
+  </VOUCHER>`;
+  }).join('\n');
+
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<ENVELOPE>
+  <HEADER><TALLYREQUEST>Import Data</TALLYREQUEST></HEADER>
+  <BODY>
+    <IMPORTDATA>
+      <REQUESTDESC>
+        <REPORTNAME>Vouchers</REPORTNAME>
+        <STATICVARIABLES><SVCURRENTCOMPANY>${stationName}</SVCURRENTCOMPANY></STATICVARIABLES>
+      </REQUESTDESC>
+      <REQUESTDATA>
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+${vouchers}
+        </TALLYMESSAGE>
+      </REQUESTDATA>
+    </IMPORTDATA>
+  </BODY>
+</ENVELOPE>`;
+
+  const blob = new Blob([xml], { type:'application/xml;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url;
+  a.download = `LST-Fuel-Tally-${year}-${String(month).padStart(2,'0')}.xml`;
+  a.click(); URL.revokeObjectURL(url);
+  toast('LST Tally XML downloaded', 'success');
+}
+window.exportLSTTallyXML = exportLSTTallyXML;
 
 // ── GSTR-3B — Output Tax vs Input Tax Credit ─────────────────────────────────
 function renderGSTR3BTab(D) {
