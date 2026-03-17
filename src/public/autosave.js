@@ -42,6 +42,8 @@
     'change', 'password', 'pin', 'reset', 'delete', 'remove', 'lock', 'unlock',
     'confirm', 'logout', 'session', 'gst settings',
     'scan supplier invoice', 'scan invoice',  // file-only modal — nothing to autosave
+    'sell —',   // lube sell modal: "Sell — Servo Supreme 500 N" — qty/rate should not be restored
+    'record sale',  // fuel sale form
   ];
 
   let _debounceTimer = null;

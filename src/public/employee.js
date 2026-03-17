@@ -4224,6 +4224,11 @@ async function loadData() {
   const savedBankRecon= _s['bank_recon_data']  || null;
   const waPhone       = _s['waPhone']          || '';
   const waApiKey      = _s['waApiKey']         || '';
+  // STOCK FIX: load lubes products + sales from bulk settings so employee stock updates are visible
+  const bulkLubeProds = Array.isArray(_s['lubes_products']) ? _s['lubes_products'] : null;
+  const bulkLubeSales = Array.isArray(_s['lubes_sales'])    ? _s['lubes_sales']    : null;
+  if (bulkLubeProds) window._lubesProducts = bulkLubeProds;
+  if (bulkLubeSales) window._lubesSales    = bulkLubeSales;
 
   APP.data.razorpayKey = razorpayKey || '';
   if (!seeded) await seedDatabase().catch(() => {});
