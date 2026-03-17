@@ -160,6 +160,17 @@
       <span class="desc">PIN 9999 should fail</span>
     </button>
 
+    <div class="section-label">🛢️ Tanks</div>
+    <button class="test-btn" onclick="runTest('tankDebug')" id="btn-tankDebug">
+      <span class="status"></span>
+      <span class="label">Tank Debug</span>
+      <span class="desc">Show actual DB tank levels</span>
+    </button>
+    <button class="test-btn" onclick="runTest('tankSync')" id="btn-tankSync">
+      <span class="status"></span>
+      <span class="label">Force Tank Sync</span>
+      <span class="desc">Deduct today's sales from tanks</span>
+    </button>
     <div class="section-label">⚙️ System</div>
     <button class="test-btn" onclick="runTest('health')" id="btn-health">
       <span class="status"></span>
@@ -586,6 +597,40 @@ const TESTS = {
     return true;
   },
 
+  tankDebug: async () => {
+    logHead('Tank Debug — Actual DB State');
+    if (!tenantId) { warn('Need tenantId — run Super Admin Login first'); return false; }
+    const r = await api('/api/cleanup/tank-debug?secret=fuelbunk2026&tenantId=' + encodeURIComponent(tenantId));
+    if (!r.ok) { fail(`Tank debug failed (${r.status}): ${r.body.error}`); return false; }
+    pass(`Today: ${r.body.today}`);
+    r.body.tanks.forEach(t => {
+      const pct = t.capacity > 0 ? Math.round(t.current_level/t.capacity*100) : 0;
+      const ok = t.current_level < t.capacity;
+      if (ok) pass(`Tank ${t.id} (${t.fuel_type}): ${t.current_level}L / ${t.capacity}L (${pct}%) — last_dip_source: ${t.last_dip_source||'none'}`);
+      else warn(`Tank ${t.id} (${t.fuel_type}): ${t.current_level}L / ${t.capacity}L (${pct}%) — FULL, may not have been deducted`);
+    });
+    r.body.todaySales.forEach(s => {
+      info(`Today sales — ${s.ft}: ${s.cnt} txns, ${parseFloat(s.total_liters).toFixed(2)}L`);
+    });
+    return true;
+  },
+
+  tankSync: async () => {
+    logHead('Manual Tank Sync — Force Deduct From Today Sales');
+    if (!tenantId) { warn('Need tenantId'); return false; }
+    const r = await api('/api/cleanup/sync-tanks?secret=fuelbunk2026&tenantId=' + encodeURIComponent(tenantId));
+    if (!r.ok) { fail(`Tank sync failed (${r.status}): ${r.body.error}`); return false; }
+    if (!r.body.results || r.body.results.length === 0) {
+      warn('No sales found for today — nothing to sync');
+      return true;
+    }
+    r.body.results.forEach(res => {
+      if (res.skipped) { warn(`${res.ft}: skipped (no matching tank or 0L sold)`); }
+      else pass(`${res.ft}: ${res.before}L → ${res.after}L (deducted ${res.deducted}L)`);
+    });
+    return true;
+  },
+
   cleanupEndpoint: async () => {
     logHead('Cleanup Endpoint (Idempotent)');
     const r = await api('/api/cleanup/dedup-expenses?secret=fuelbunk2026');
@@ -618,7 +663,7 @@ const TEST_ORDER = [
   'employeeList', 'pinVerify', 'wrongPinFail', 'employeeLogin',
   'staffData', 'recordSale', 'recordDieselSale', 'recordExpense', 'salesSummary',
   'tanksLoad', 'expensesLoad', 'fuelPurchases',
-  'crossTenant', 'pinBruteForce', 'cleanupEndpoint'
+  'crossTenant', 'pinBruteForce', 'tankDebug', 'tankSync', 'cleanupEndpoint'
 ];
 
 async function runAllTests() {

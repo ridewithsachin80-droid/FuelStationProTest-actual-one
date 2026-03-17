@@ -1688,8 +1688,13 @@ function emp_saveReading(mode, key, value) {
   if (isNaN(v) || v < 0) { if (mode==='open') delete empState.openReadings[key]; else delete empState.closeReadings[key]; }
   else {
     if (v > 9999999) { toast('Reading value too large', 'error'); return; }
-    if (mode === 'open') empState.openReadings[key] = v;
-    else {
+    if (mode === 'open') {
+      empState.openReadings[key] = v;
+      // OPENING-READING FIX: persist opening reading to server immediately.
+      // This saves it as nozzleOpen in the pump's data_json so if the session
+      // is lost, the reading is still in DB and next login can reference it.
+      _empPersistReading(key, 'open', v);
+    } else {
       const ov = empState.openReadings[key];
       if (ov !== undefined && v < ov) { toast('Closing must be ≥ opening','error'); return; }
       if (ov !== undefined && (v - ov) > 10000) { toast('Difference exceeds 10,000L. Verify reading.','error'); return; }
@@ -1699,6 +1704,23 @@ function emp_saveReading(mode, key, value) {
   emp_saveSession();
   const c = document.getElementById('empReadCards');
   if (c) c.innerHTML = emp_renderCards(mode);
+}
+
+// Persist a single nozzle reading to server (fire-and-forget, non-blocking)
+function _empPersistReading(key, mode, value) {
+  try {
+    const [pumpId, nozzle] = key.split('_');
+    if (!pumpId || !nozzle) return;
+    const tenant = (typeof mt_getActiveTenant === 'function') ? mt_getActiveTenant() : null;
+    if (!tenant || !tenant.id) return;
+    const body = mode === 'open'
+      ? { pumpId: String(pumpId), nozzleOpen: { [nozzle]: value } }
+      : { pumpId: String(pumpId), nozzleReadings: { [nozzle]: value } };
+    fetch('/api/public/reading/' + encodeURIComponent(tenant.id), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    }).catch(() => {}); // fire-and-forget — session save is the real backup
+  } catch(e) {}
 }
 
 function emp_switchMode(mode) {
@@ -3357,19 +3379,28 @@ async function doEmpLogin() {
       if (serverPumps && serverPumps.length > 0) {
         APP.data.pumps = serverPumps;
         // Pre-fill opening readings from server pump nozzleReadings (= previous shift's close)
+        // OPENING-READING FIX: also check nozzleOpen as secondary fallback
         if (!restored && Object.keys(empState.openReadings).length === 0) {
           var freshOpenings = {};
           serverPumps.forEach(function(p) {
-            var nr = p.nozzleReadings || {};
-            var labels = p.nozzleLabels || ['A','B'];
+            var nr = p.nozzleReadings || {};  // closing readings from previous shift
+            var no_ = p.nozzleOpen || {};     // opening readings saved by previous employee
+            var labels = Array.isArray(p.nozzleLabels) ? p.nozzleLabels : ['A'];
             labels.forEach(function(n) {
               var k = emp_key(p.id, n);
-              if (nr[n] !== undefined && nr[n] > 0) freshOpenings[k] = nr[n];
+              // Priority: closing reading (most accurate) → opening reading (fallback)
+              if (nr[n] !== undefined && parseFloat(nr[n]) > 0) {
+                freshOpenings[k] = parseFloat(nr[n]);
+              } else if (no_[n] !== undefined && parseFloat(no_[n]) > 0) {
+                freshOpenings[k] = parseFloat(no_[n]);
+              }
             });
           });
           if (Object.keys(freshOpenings).length > 0) {
             empState.openReadings = freshOpenings;
             console.log('[doEmpLogin] Pre-filled openings from server:', JSON.stringify(freshOpenings));
+          } else {
+            console.log('[doEmpLogin] No nozzleReadings found in server pumps:', JSON.stringify(serverPumps.map(p => ({ id: p.id, nr: p.nozzleReadings, no: p.nozzleOpen }))));
           }
         }
       }

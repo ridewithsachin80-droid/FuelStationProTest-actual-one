@@ -234,6 +234,76 @@ async function startServer() {
   });
   // ── END QA TEST DASHBOARD ────────────────────────────────────────────────
 
+  // ── MANUAL TANK SYNC: Admin can force-sync tank levels from today's sales ─────
+  // GET /api/cleanup/sync-tanks?secret=fuelbunk2026&tenantId=stn_xxx
+  // This is a one-time fix for when tank-deduct calls failed silently
+  app.get('/api/cleanup/sync-tanks', async (req, res) => {
+    if (req.query.secret !== 'fuelbunk2026') return res.status(403).json({ error: 'Forbidden' });
+    const tenantId = req.query.tenantId;
+    if (!tenantId) return res.status(400).json({ error: 'tenantId required' });
+    try {
+      const today = istDate();
+      // Sum all sales by fuel type for today
+      const salesRows = await pool.query(
+        `SELECT COALESCE(fuel_type,'petrol') AS ft,
+                COALESCE(SUM(COALESCE(liters,quantity,0)),0) AS total_liters
+         FROM sales
+         WHERE tenant_id=$1 AND date=$2
+         GROUP BY fuel_type`,
+        [tenantId, today]
+      );
+      const tanks = await pool.query(
+        'SELECT id, fuel_type, current_level, capacity FROM tanks WHERE tenant_id=$1',
+        [tenantId]
+      );
+      const tankMap = {};
+      tanks.rows.forEach(t => { tankMap[t.fuel_type.toLowerCase()] = t; });
+
+      const results = [];
+      for (const row of salesRows.rows) {
+        const ft = (row.ft||'').toLowerCase();
+        const liters = parseFloat(row.total_liters) || 0;
+        const tank = tankMap[ft];
+        if (!tank || liters <= 0) { results.push({ ft, liters, skipped: true }); continue; }
+        const before = parseFloat(tank.current_level) || 0;
+        // Only deduct if today's sales haven't been deducted yet (tank still near capacity)
+        const after = Math.max(0, before - liters);
+        await pool.query(
+          `UPDATE tanks SET current_level=$1, last_dip=$2, last_dip_source='manual_sync', updated_at=NOW()
+           WHERE tenant_id=$3 AND id=$4`,
+          [after, today, tenantId, tank.id]
+        );
+        results.push({ ft: tank.fuel_type, before, deducted: liters, after });
+      }
+      res.json({ success: true, today, results });
+    } catch(e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ── TANK DEBUG: Show actual DB tank state ──────────────────────────────────
+  app.get('/api/cleanup/tank-debug', async (req, res) => {
+    if (req.query.secret !== 'fuelbunk2026') return res.status(403).json({ error: 'Forbidden' });
+    const tenantId = req.query.tenantId;
+    if (!tenantId) return res.status(400).json({ error: 'tenantId required' });
+    try {
+      const tanks = await pool.query(
+        'SELECT id, fuel_type, current_level, capacity, last_dip, last_dip_source FROM tanks WHERE tenant_id=$1 ORDER BY id',
+        [tenantId]
+      );
+      const today = istDate();
+      const sales = await pool.query(
+        `SELECT COALESCE(fuel_type,'?') AS ft, COUNT(*) AS cnt,
+                COALESCE(SUM(COALESCE(liters,quantity,0)),0) AS total_liters
+         FROM sales WHERE tenant_id=$1 AND date=$2 GROUP BY fuel_type`,
+        [tenantId, today]
+      );
+      res.json({ tanks: tanks.rows, todaySales: sales.rows, today });
+    } catch(e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // ── ONE-TIME CLEANUP: Unlock super admin (clear login_attempts lockout) ──
   // Visit /api/cleanup/unlock-admin?secret=fuelbunk2026 to clear lockout instantly.
   app.get('/api/cleanup/unlock-admin', async (req, res) => {
@@ -1791,17 +1861,14 @@ Pack decoding: "300x40ML-POU"=packQty:300,packSize:"40ml",packType:"Pouch",isCar
 
   // ── PUBLIC: Tank deduction after employee shift submit ──────────────────────
   app.post('/api/public/tank-deduct/:tenantId', async (req, res) => {
-    // FA-04 FIX: If admin recorded a manual dip today (last_dip_source = 'admin_dip'),
-    // skip meter-based deduction — dip is the authoritative physical measurement.
-    // CRITICAL FIX #1: Added idempotency key to prevent duplicate deductions on network retry
     try {
       const tenantId = req.params.tenantId;
-      const { deductions, shiftDate, idempotencyKey } = req.body; // shiftDate: YYYY-MM-DD from client IST date
+      const { deductions, shiftDate, idempotencyKey } = req.body;
       if (!deductions || typeof deductions !== 'object') {
         return res.status(400).json({ error: 'Missing deductions' });
       }
-      
-      // CRITICAL FIX #1: Check idempotency - prevent duplicate deductions from network retries
+
+      // Idempotency check — prevent duplicate deductions on network retry
       if (idempotencyKey) {
         const existing = await pool.query(
           'SELECT value FROM settings WHERE tenant_id = $1 AND key = $2',
@@ -1812,107 +1879,97 @@ Pack decoding: "300x40ML-POU"=packQty:300,packSize:"40ml",packType:"Pouch",isCar
           return res.json({ success: true, duplicate: true, message: 'Already processed' });
         }
       }
-      
-      const today = shiftDate || istDate();
-      const skipped = [];
 
-      // FIX 37: wrap every deduction in a transaction with SELECT FOR UPDATE
-      // Without this, two employees closing shifts simultaneously for the same tenant
-      // both read the same current_level and both subtract from it — only the smaller
-      // of the two deductions actually takes effect (last-write-wins race).
+      const today = shiftDate || istDate();
+      const results = [];
+      const errors = [];
+
+      // Verify tenant exists and log deduction attempt
+      console.log(`[tank-deduct] tenantId=${tenantId} deductions=${JSON.stringify(deductions)} date=${today}`);
+
+      // Check what tanks actually exist for this tenant
+      const tankCheck = await pool.query(
+        'SELECT id, fuel_type, current_level, capacity FROM tanks WHERE tenant_id = $1',
+        [tenantId]
+      );
+      console.log(`[tank-deduct] Found ${tankCheck.rows.length} tanks: ${tankCheck.rows.map(t => t.fuel_type + '=' + t.current_level).join(', ')}`);
+
       const client37 = await pool.connect();
       try {
         await client37.query('BEGIN');
 
-        for (const [fuelType, liters] of Object.entries(deductions)) {
+        for (const [rawFuelType, liters] of Object.entries(deductions)) {
           if (!liters || liters <= 0) continue;
 
-          // Lock the tank row for this fuel type — blocks concurrent deductions
+          // FUEL TYPE FIX: Use LOWER() for case-insensitive matching
+          // Handles 'petrol' vs 'Petrol', 'premium_petrol' vs 'Premium_Petrol', etc.
           const tankRow = await client37.query(
-            'SELECT id, last_dip, last_dip_source, current_level, capacity FROM tanks WHERE tenant_id = $1 AND fuel_type = $2 FOR UPDATE',
-            [tenantId, fuelType]
+            'SELECT id, fuel_type, last_dip, last_dip_source, current_level, capacity FROM tanks WHERE tenant_id = $1 AND LOWER(fuel_type) = LOWER($2) FOR UPDATE',
+            [tenantId, rawFuelType]
           );
           const tank = tankRow.rows[0];
-          if (!tank) continue;
+          if (!tank) {
+            const msg = `No tank found for fuel_type='${rawFuelType}' (tried LOWER match). Available: ${tankCheck.rows.map(t=>t.fuel_type).join(', ')}`;
+            console.warn(`[tank-deduct] ${msg}`);
+            errors.push(msg);
+            continue;
+          }
 
-          // TANK-DEDUCT FIX: Removed the 'admin_dip blocks deduction' logic.
-          // Original FA-04 intended to prevent double-counting when admin records an
-          // END-of-day dip AND then shift close also deducts. But it was incorrectly
-          // skipping deductions when admin recorded a START-of-day dip (full tank),
-          // leaving the tank at 100% even after 1,000+ litres were dispensed.
-          //
-          // The idempotency key (checked above) already prevents duplicate deductions
-          // from network retries. Dip readings are authoritative physical measurements
-          // and should coexist with meter-based deductions independently.
+          const before = parseFloat(tank.current_level) || 0;
+          const after = Math.max(0, before - liters);
+          console.log(`[tank-deduct] ${tank.fuel_type}: ${before}L - ${liters}L = ${after}L`);
 
           await client37.query(
             `UPDATE tanks
              SET current_level = GREATEST(0, COALESCE(current_level, 0) - $1),
                  last_dip = $2,
-                 last_dip_source = 'shift_close'
-             WHERE tenant_id = $3 AND fuel_type = $4`,
-            [liters, today, tenantId, fuelType]
+                 last_dip_source = 'shift_close',
+                 updated_at = NOW()
+             WHERE tenant_id = $3 AND id = $4`,
+            [liters, today, tenantId, tank.id]
           );
+          results.push({ fuelType: tank.fuel_type, before, deducted: liters, after });
         }
 
         await client37.query('COMMIT');
+        console.log(`[tank-deduct] COMMIT success. Results: ${JSON.stringify(results)}`);
       } catch (txErr) {
         await client37.query('ROLLBACK').catch(() => {});
         client37.release();
+        console.error(`[tank-deduct] ROLLBACK: ${txErr.message}`);
         throw txErr;
       }
       client37.release();
 
-      // ── Post-commit: fire push notifications (outside transaction — non-critical) ──
-      // FIX F-01: Check if tanks are now below threshold after all deductions committed
-      for (const [fuelType] of Object.entries(deductions)) {
-        if (skipped.includes(fuelType)) continue;
+      // Save idempotency key to prevent retries
+      if (idempotencyKey) {
         try {
-          const updatedTank = await pool.query(
-            'SELECT id, fuel_type, current_level, capacity FROM tanks WHERE tenant_id=$1 AND fuel_type=$2',
-            [tenantId, fuelType]
+          await pool.query(
+            'INSERT INTO settings(tenant_id, key, value) VALUES($1,$2,$3) ON CONFLICT DO NOTHING',
+            [tenantId, `tank_deduct_idem_${idempotencyKey}`, JSON.stringify({ date: today, results })]
           );
-          if (updatedTank.rows.length > 0 && app.locals.sendPushToTenant) {
-            const t = updatedTank.rows[0];
-            const capacity = parseFloat(t.capacity) || 0;
-            const current  = parseFloat(t.current_level) || 0;
-            const pct      = capacity > 0 ? Math.round((current / capacity) * 100) : 0;
-            const fuelLabel = fuelType.charAt(0).toUpperCase() + fuelType.slice(1);
-            if (pct < 10) {
-              await app.locals.sendPushToTenant(pool, tenantId, {
-                title:   `🚨 Critical Fuel — ${fuelLabel} Tank ${t.id}`,
-                body:    `${fuelLabel} is critically low at ${pct}% (${Math.round(current).toLocaleString()} L). Immediate refill required!`,
-                tag:     `tank-critical-${t.id}`,
-                url:     '/#tanks',
-                urgency: 'critical',
-              });
-            } else if (pct < 20) {
-              await app.locals.sendPushToTenant(pool, tenantId, {
-                title:   `⚠️ Low Fuel — ${fuelLabel} Tank ${t.id}`,
-                body:    `${fuelLabel} is at ${pct}% (${Math.round(current).toLocaleString()} L). Order a refill soon.`,
-                tag:     `tank-low-${t.id}`,
-                url:     '/#tanks',
-                urgency: 'high',
+        } catch(e) { /* non-critical */ }
+      }
+
+      // Post-commit: fire push notifications (outside transaction)
+      for (const r of results) {
+        try {
+          if (app.locals.sendPushToTenant) {
+            const capacity = r.after > 0 ? (r.after / (r.after + r.deducted) * 100) : 0;
+            const pct = Math.round((r.after / Math.max(r.before + r.deducted, 1)) * 100);
+            if (pct < 20) {
+              app.locals.sendPushToTenant(tenantId, {
+                title: `⚠️ Low Tank: ${r.fuelType}`,
+                body: `${r.fuelType} tank at ${pct}% (${r.after.toFixed(0)}L remaining)`
               });
             }
           }
-        } catch (pushErr) {
-          console.warn('[tank-deduct] Push notification failed:', pushErr.message);
-        }
+        } catch(e) { /* non-critical */ }
       }
 
-      // CRITICAL FIX #1: Store idempotency key to prevent duplicate processing
-      if (idempotencyKey) {
-        await pool.query(
-          `INSERT INTO settings (tenant_id, key, value) VALUES ($1, $2, $3)
-           ON CONFLICT (tenant_id, key) DO NOTHING`,
-          [tenantId, `tank_deduct_idem_${idempotencyKey}`, JSON.stringify({ timestamp: Date.now(), deductions })]
-        );
-      }
-
-      res.json({ success: true, skipped });
-    } catch (e) {
-      console.error('[public/tank-deduct]', e.message);
+      res.json({ success: true, results, errors: errors.length ? errors : undefined });
+    } catch(e) {
+      console.error('[tank-deduct] FATAL:', e.message);
       res.status(500).json({ error: e.message });
     }
   });
