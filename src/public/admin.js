@@ -162,7 +162,11 @@ function renderDashboard(D) {
   // FIX 31: use IST today() to prevent off-by-one during 18:30-00:00 UTC
   const todayIso = (typeof window.today === 'function') ? window.today() : new Date().toLocaleString('en-CA', { timeZone: 'Asia/Kolkata' }).slice(0, 10);
   const todaySales = D.sales.filter(s => (s.date || '').slice(0, 10) === todayIso);
-  const totalRevenue = todaySales.reduce((a, s) => a + s.amount, 0);
+  const fuelRevenue = todaySales.reduce((a, s) => a + s.amount, 0);
+  // DASHBOARD FIX: include today's lube sales in revenue
+  const todayLubeSales = (window._lubesSales||[]).filter(s => (s.date||'').slice(0,10) === todayIso);
+  const lubesRevenue = todayLubeSales.reduce((a, s) => a + s.amount, 0);
+  const totalRevenue = fuelRevenue + lubesRevenue;
   const totalLiters = todaySales.reduce((a, s) => a + s.liters, 0);
   const cashSales = todaySales.filter(s => s.mode === 'cash').reduce((a, s) => a + s.amount, 0);
 
@@ -317,10 +321,11 @@ function renderDashboard(D) {
     ${nmlAlert}
     ${subBadge}
     <div class="g g-auto-sm mb-24 gap-16">
-      ${statCard('Today\'s Revenue', cur(totalRevenue), 'all pumps today', '💰')}
+      ${statCard('Today\'s Revenue', cur(totalRevenue), lubesRevenue > 0 ? 'fuel + lubes' : 'all pumps today', '💰')}
       ${statCard('Petrol Sold', fmt(petrolLiters) + ' L', 'today', '🔴')}
       ${statCard('Diesel Sold', fmt(dieselLiters) + ' L', 'today', '🟠')}
       ${statCard('Premium Sold', fmt(premiumLiters) + ' L', 'today', '🟣')}
+      ${lubesRevenue > 0 ? statCard('Lubes Sales', cur(lubesRevenue), todayLubeSales.length + ' item(s) today', '🛢️') : ''}
     </div>
 
     <div class="g g-2 gap-16 mb-24">
@@ -3897,7 +3902,34 @@ window.calcLpCarton   = calcLpCarton;
 
 function lubes_load()  { return window._lubesProducts || []; }
 function lubesSales_load() { return window._lubesSales || []; }
-function lubes_save()  { db.setSetting('lubes_products', window._lubesProducts||[]).catch(()=>{}); }
+function lubes_save() {
+  // RACE CONDITION FIX: Read fresh stock from DB, merge admin's edits on top,
+  // then save. This prevents admin edits from overwriting employee sales.
+  db.getSetting('lubes_products').then(function(freshProds) {
+    const adminProds = window._lubesProducts || [];
+    if (!Array.isArray(freshProds) || freshProds.length === 0) {
+      // No existing DB data — save admin's copy directly
+      return db.setSetting('lubes_products', adminProds);
+    }
+    // Merge: for each product in admin's list, preserve DB stock
+    // (employee may have sold stock since admin loaded the page)
+    const merged = adminProds.map(function(ap) {
+      const dbProd = freshProds.find(function(fp) { return fp.id === ap.id; });
+      if (dbProd && dbProd.stock !== ap.stock) {
+        // If admin explicitly changed stock (restock modal), use admin's value
+        // If admin only changed other fields (name, price), keep DB stock
+        const adminChangedStock = ap._stockChanged === true;
+        return Object.assign({}, ap, { stock: adminChangedStock ? ap.stock : dbProd.stock, _stockChanged: undefined });
+      }
+      return ap;
+    });
+    window._lubesProducts = merged;
+    return db.setSetting('lubes_products', merged);
+  }).catch(function(e) {
+    // Fallback: save directly if DB read fails
+    db.setSetting('lubes_products', window._lubesProducts||[]).catch(function(){});
+  });
+}
 function lubesSales_save() { db.setSetting('lubes_sales', window._lubesSales||[]).catch(()=>{}); }
 
 const LUBES_CATEGORIES = ['Engine Oil','Gear Oil','Hydraulic Oil','Grease','Coolant','Battery','Wiper','Air Filter','Oil Filter','Brake Fluid','Tyre','Accessories','Other'];
@@ -4333,6 +4365,7 @@ function saveRestock(id) {
   const cost = parseFloat(document.getElementById('rs_cost')?.value);
   const note = (document.getElementById('rs_note')?.value||'').trim();
   p.stock = (p.stock||0) + qty;
+  p._stockChanged = true;  // flag: admin explicitly changed stock (restock)
   if (!isNaN(cost) && cost > 0) p.costPrice = cost;
   lubes_save();
   closeModal();
@@ -4400,13 +4433,14 @@ function saveLubeSale(productId) {
   const now2 = new Date();
   if (!window._lubesSales) window._lubesSales = [];
   window._lubesSales.unshift({
-    id: _genId(), date: now2.toISOString().slice(0,10),
+    id: _genId(), date: (typeof today === 'function' ? today() : now2.toISOString().slice(0,10)),
     time: now2.toTimeString().slice(0,5),
     productId, productName: p.name, qty, unit: p.unit||'',
     rate, amount, customer, mode,
     employee: APP.data?.employees?.find(e=>e.id===APP.empId)?.name || '',
   });
   p.stock = +(p.stock - qty).toFixed(3);
+  p._stockChanged = true;  // admin explicitly sold stock
   lubes_save(); lubesSales_save();
   closeModal();
   auditLog('lube_sale', { product: p.name, qty, amount, mode, customer });
@@ -7022,7 +7056,15 @@ function renderPage() {
   try {
     let html = '';
     switch (APP.page) {
-      case 'dashboard': html = renderDashboard(D); break;
+      case 'dashboard':
+        // Refresh lube sales on dashboard to get current revenue
+        db.getSetting('lubes_sales').then(function(sales) {
+          if (Array.isArray(sales)) { window._lubesSales = sales; }
+        }).catch(function(){});
+        db.getSetting('lubes_products').then(function(prods) {
+          if (Array.isArray(prods) && prods.length > 0) window._lubesProducts = prods;
+        }).catch(function(){});
+        html = renderDashboard(D); break;
       case 'tanks': html = renderTanks(D); break;
       case 'pumps': html = renderPumps(D); break;
       case 'sales': html = renderSales(D, APP.salesFilter); break;
@@ -7030,7 +7072,16 @@ function renderPage() {
       case 'staff': html = renderStaff(D); break;
       case 'payroll': html = renderPayroll(D); break;
       case 'finance': html = renderFinance(D); break;
-      case 'lubes': html = renderLubes(D); break;
+      case 'lubes':
+        // STOCK FIX: refresh lubes products from DB on every visit to pick up employee sales
+        db.getSetting('lubes_products').then(function(prods) {
+          if (Array.isArray(prods) && prods.length > 0) {
+            window._lubesProducts = prods;
+            var el3 = document.getElementById('content');
+            if (el3 && APP.page === 'lubes') try { el3.innerHTML = renderLubes(APP.data); } catch(e) {}
+          }
+        }).catch(function(){});
+        html = renderLubes(D); break;
       case 'exports': html = renderExports(D); break;
       case 'reports': html = renderReports(D); break;
       case 'analytics': html = renderAnalytics(D); break;

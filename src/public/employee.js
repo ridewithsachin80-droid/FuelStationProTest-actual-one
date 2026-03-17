@@ -4623,40 +4623,59 @@ function emp_renderLubes() {
 window.emp_renderLubes = emp_renderLubes;
 
 function emp_openLubeSell(productId) {
-  const p = (window._lubesProducts||[]).find(x => x.id === productId);
-  if (!p) return;
-  if ((p.stock||0) <= 0) { toast('Out of stock — please inform admin to restock', 'error'); return; }
-  const modeOpts = ['cash','upi','card','credit'].map(m=>`<option value="${m}">${m.toUpperCase()}</option>`).join('');
-  openModal(`🛒 Sell — ${sanitize(p.name)}`,
-    `<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
-      <div style="padding:12px;background:var(--bg-0);border-radius:8px;text-align:center">
-        <div class="mono fw-800" style="color:var(--green);font-size:20px">${p.stock||0} ${sanitize(p.unit||'')}</div>
-        <div style="font-size:10px;color:var(--text-3)">In Stock</div>
+  // STOCK FIX: fetch fresh products from DB before opening sell modal
+  // Prevents overselling when multiple employees sell the same product
+  const _doOpen = function(products) {
+    const p = (products||window._lubesProducts||[]).find(x => x.id === productId);
+    if (!p) { toast('Product not found — please refresh the lubes tab', 'error'); return; }
+    if ((p.stock||0) <= 0) { toast('Out of stock — please inform admin to restock', 'error'); return; }
+    const modeOpts = ['cash','upi','card','credit'].map(m=>`<option value="${m}">${m.toUpperCase()}</option>`).join('');
+    openModal(`🛒 Sell — ${sanitize(p.name)}`,
+      `<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
+        <div style="padding:12px;background:var(--bg-0);border-radius:8px;text-align:center">
+          <div class="mono fw-800" style="color:var(--green);font-size:20px">${p.stock||0} ${sanitize(p.unit||'')}</div>
+          <div style="font-size:10px;color:var(--text-3)">In Stock</div>
+        </div>
+        <div style="padding:12px;background:var(--bg-0);border-radius:8px;text-align:center">
+          <div class="mono fw-800" style="color:var(--accent-light);font-size:20px">₹${(p.sellingPrice||0).toFixed(2)}</div>
+          <div style="font-size:10px;color:var(--text-3)">Per ${sanitize(p.unit||'unit')}</div>
+        </div>
       </div>
-      <div style="padding:12px;background:var(--bg-0);border-radius:8px;text-align:center">
-        <div class="mono fw-800" style="color:var(--accent-light);font-size:20px">₹${(p.sellingPrice||0).toFixed(2)}</div>
-        <div style="font-size:10px;color:var(--text-3)">Per ${sanitize(p.unit||'unit')}</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div class="form-group"><label class="form-label">Qty (${sanitize(p.unit||'unit')}) *</label>
+          <input class="form-input mono" type="number" id="els_qty" placeholder="1" min="0.1" step="0.1" max="${p.stock}"
+            oninput="emp_calcLubeTotal(${p.sellingPrice||0})"
+            style="font-size:20px;font-weight:800;text-align:center;letter-spacing:2px" />
+        </div>
+        <div class="form-group"><label class="form-label">Rate ₹/${sanitize(p.unit||'unit')}</label>
+          <input class="form-input mono" type="number" id="els_rate" value="${p.sellingPrice||0}" step="0.01"
+            oninput="emp_calcLubeTotal()"
+            style="font-size:20px;font-weight:800;text-align:center;letter-spacing:2px" />
+        </div>
       </div>
-    </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-      <div class="form-group"><label class="form-label">Qty (${sanitize(p.unit||'unit')}) *</label>
-        <input class="form-input mono" type="number" id="els_qty" placeholder="1" min="0.1" step="0.1" max="${p.stock}"
-          oninput="emp_calcLubeTotal(${p.sellingPrice||0})"
-          style="font-size:20px;font-weight:800;text-align:center;letter-spacing:2px" />
-      </div>
-      <div class="form-group"><label class="form-label">Rate ₹/${sanitize(p.unit||'unit')}</label>
-        <input class="form-input mono" type="number" id="els_rate" value="${p.sellingPrice||0}" step="0.01"
-          oninput="emp_calcLubeTotal()"
-          style="font-size:20px;font-weight:800;text-align:center;letter-spacing:2px" />
-      </div>
-    </div>
-    <div id="els_total" style="padding:14px;background:rgba(212,148,15,0.08);border-radius:8px;text-align:center;margin:10px 0;font-size:11px;color:var(--text-3)">Enter quantity to see total</div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-      <div class="form-group"><label class="form-label">Payment Mode</label><select class="form-input" id="els_mode">${modeOpts}</select></div>
-      <div class="form-group"><label class="form-label">Customer (opt.)</label><input class="form-input" id="els_cust" placeholder="Name / Vehicle" /></div>
-    </div>`,
-    `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-accent" onclick="emp_saveLubeSale(${productId})">💰 Record Sale</button>`
-  );
+      <div id="els_total" style="padding:14px;background:rgba(212,148,15,0.08);border-radius:8px;text-align:center;margin:10px 0;font-size:11px;color:var(--text-3)">Enter quantity to see total</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div class="form-group"><label class="form-label">Payment Mode</label><select class="form-input" id="els_mode">${modeOpts}</select></div>
+        <div class="form-group"><label class="form-label">Customer (opt.)</label><input class="form-input" id="els_cust" placeholder="Name / Vehicle" /></div>
+      </div>`,
+      `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-accent" onclick="emp_saveLubeSale(${productId})">💰 Record Sale</button>`
+    );
+  };
+  // Try to get fresh stock before opening
+  const tenant = (typeof mt_getActiveTenant === 'function') ? mt_getActiveTenant() : null;
+  if (tenant && tenant.id) {
+    fetch('/api/public/staff-data/' + encodeURIComponent(tenant.id))
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (data && Array.isArray(data.lubesProducts) && data.lubesProducts.length > 0) {
+          window._lubesProducts = data.lubesProducts;
+        }
+        _doOpen(window._lubesProducts);
+      })
+      .catch(() => _doOpen(window._lubesProducts));
+  } else {
+    _doOpen(window._lubesProducts);
+  }
 }
 window.emp_openLubeSell = emp_openLubeSell;
 
