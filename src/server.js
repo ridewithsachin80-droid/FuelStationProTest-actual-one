@@ -748,7 +748,72 @@ async function startServer() {
       const py = now.getFullYear();
       const payrollKey = `payroll_${py}_${now.getMonth()+1}`;
 
-      const [empRows, shiftRows, pumpRows, tankRows, rosterRow, attRow, pricesRow, lubeProdsRow, lubeSalesRow, advancesRow, payrollRow, lubesTableRows] = await Promise.all([
+      // ── ONE-TIME MIGRATION: if lubes_products table is empty but settings blob
+      // has products, migrate them into the table so stock is preserved going forward.
+      try {
+        const [tableCount, blobRow] = await Promise.all([
+          pool.query('SELECT COUNT(*) FROM lubes_products WHERE tenant_id=$1 AND active!=0', [tid]),
+          pool.query("SELECT value FROM settings WHERE tenant_id=$1 AND key='lubes_products'", [tid]),
+        ]);
+        const count = parseInt(tableCount.rows[0]?.count || '0');
+        if (count === 0 && blobRow.rows[0]?.value) {
+          let blobProds = [];
+          try { blobProds = JSON.parse(blobRow.rows[0].value) || []; } catch {}
+          if (Array.isArray(blobProds) && blobProds.length > 0) {
+            console.log(`[migration] Migrating ${blobProds.length} lube products from settings blob for ${tid}`);
+            for (const p of blobProds) {
+              if (!p.id || !p.name) continue;
+              const extra = JSON.stringify({ qtyPerCarton: p.qtyPerCarton||0, sku: p.sku||'', mrp: p.mrp||0, indSize: p.indSize||'', packType: p.packType||'' });
+              await pool.query(
+                `INSERT INTO lubes_products
+                   (id, tenant_id, name, brand, category, unit, selling_price, cost_price,
+                    stock, min_stock, hsn, gst_pct, expiry_date, active, data_json)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+                 ON CONFLICT (id, tenant_id) DO NOTHING`,
+                [
+                  p.id, tid, p.name, p.brand||'', p.category||'Other', p.unit||'Nos',
+                  parseFloat(p.sellingPrice)||0, parseFloat(p.costPrice)||0,
+                  parseFloat(p.stock)||0, parseFloat(p.minStock)||5,
+                  p.hsn||'', parseFloat(p.gstPct)||18, p.expiryDate||'',
+                  p.active===false ? 0 : 1, extra,
+                ]
+              );
+            }
+            console.log(`[migration] Done migrating lube products for ${tid}`);
+          }
+        }
+        // Also migrate lubes_sales blob into lubes_sales table
+        const [salesCount, salesBlobRow] = await Promise.all([
+          pool.query('SELECT COUNT(*) FROM lubes_sales WHERE tenant_id=$1', [tid]),
+          pool.query("SELECT value FROM settings WHERE tenant_id=$1 AND key='lubes_sales'", [tid]),
+        ]);
+        const salesTableCount = parseInt(salesCount.rows[0]?.count || '0');
+        if (salesTableCount === 0 && salesBlobRow.rows[0]?.value) {
+          let blobSales = [];
+          try { blobSales = JSON.parse(salesBlobRow.rows[0].value) || []; } catch {}
+          if (Array.isArray(blobSales) && blobSales.length > 0) {
+            console.log(`[migration] Migrating ${blobSales.length} lube sales from settings blob for ${tid}`);
+            for (const s of blobSales) {
+              await pool.query(
+                `INSERT INTO lubes_sales
+                   (tenant_id, date, time, product_id, product_name, qty, unit, rate, amount, customer, mode, employee)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+                 ON CONFLICT DO NOTHING`,
+                [
+                  tid, s.date||'', s.time||'', s.productId||'', s.productName||'',
+                  parseFloat(s.qty)||0, s.unit||'', parseFloat(s.rate)||0,
+                  parseFloat(s.amount)||0, s.customer||'', s.mode||'cash', s.employee||'',
+                ]
+              ).catch(()=>{});
+            }
+            console.log(`[migration] Done migrating lube sales for ${tid}`);
+          }
+        }
+      } catch (migErr) {
+        console.warn('[migration] Lube migration error (non-fatal):', migErr.message);
+      }
+
+      const [empRows, shiftRows, pumpRows, tankRows, rosterRow, attRow, pricesRow, lubeProdsRow, lubeSalesRow, advancesRow, payrollRow, lubesTableRows, lubesSalesTableRows] = await Promise.all([
         pool.query('SELECT id, name, role, shift, phone, data_json FROM employees WHERE tenant_id = $1 AND active = 1 ORDER BY name', [tid]),
         pool.query('SELECT * FROM shifts WHERE tenant_id = $1 ORDER BY start_time', [tid]),
         // STAFF-DATA FIX: pumps and tanks were missing — employee portal needs them for pump buttons + price calc
@@ -762,6 +827,9 @@ async function startServer() {
         pool.query("SELECT value FROM settings WHERE key = 'advances_data' AND tenant_id = $1", [tid]),
         pool.query("SELECT value FROM settings WHERE key = $1 AND tenant_id = $2", [payrollKey, tid]),
         pool.query('SELECT * FROM lubes_products WHERE tenant_id = $1 AND active != 0 ORDER BY name', [tid]),
+        pool.query(`SELECT id, date, time, product_id AS "productId", product_name AS "productName",
+                          qty, unit, rate, amount, customer, mode, employee
+                     FROM lubes_sales WHERE tenant_id=$1 ORDER BY date DESC, time DESC LIMIT 200`, [tid]),
       ]);
 
       const employees = empRows.rows.map(e => {
@@ -821,24 +889,33 @@ async function startServer() {
         roster:     parse(rosterRow, {}),
         attendance: parse(attRow, {}),
         lubesProducts: (() => {
-          const fromSettings = parse(lubeProdsRow, null);
-          if (fromSettings && fromSettings.length > 0) return fromSettings;
-          return (lubesTableRows?.rows || []).map(p => {
-            let extra = {}; try { extra = JSON.parse(p.data_json || '{}'); } catch {}
-            return {
-              id: p.id, name: p.name || '', brand: p.brand || '',
-              category: p.category || '', unit: p.unit || 'Nos',
-              costPrice: parseFloat(p.cost_price) || 0,
-              sellingPrice: parseFloat(p.selling_price) || 0,
-              stock: parseFloat(p.stock) || 0,
-              minStock: parseFloat(p.min_stock) || 5,
-              hsn: p.hsn || '', gstPct: parseFloat(p.gst_pct) || 18,
-              expiryDate: p.expiry_date || '', active: p.active !== 0,
-              _fromTemplate: true,
-            };
-          });
+          // FIX: Always prefer lubes_products TABLE over settings blob.
+          // The settings blob is stale — stock deductions via /api/public/lube-sale
+          // update the table directly. The blob was the old storage path and caused
+          // stock not to persist after page reload.
+          const tableRows = lubesTableRows?.rows || [];
+          if (tableRows.length > 0) {
+            return tableRows.map(p => {
+              let extra = {}; try { extra = JSON.parse(p.data_json || '{}'); } catch {}
+              return {
+                id: p.id, name: p.name || '', brand: p.brand || '',
+                category: p.category || '', unit: p.unit || 'Nos',
+                costPrice: parseFloat(p.cost_price) || 0,
+                sellingPrice: parseFloat(p.selling_price) || 0,
+                stock: parseFloat(p.stock) || 0,
+                minStock: parseFloat(p.min_stock) || 5,
+                hsn: p.hsn || '', gstPct: parseFloat(p.gst_pct) || 18,
+                expiryDate: p.expiry_date || '', active: p.active !== 0,
+                qtyPerCarton: parseFloat(extra.qtyPerCarton) || 0,
+              };
+            });
+          }
+          // Fallback to settings blob only when table is empty (fresh tenant)
+          return parse(lubeProdsRow, []);
         })(),
-        lubesSales: parse(lubeSalesRow, []),
+        lubesSales: lubesSalesTableRows?.rows?.length > 0
+          ? lubesSalesTableRows.rows
+          : parse(lubeSalesRow, []),
         advances:   parse(advancesRow, []),
         payroll:    parse(payrollRow, {}),
       });
@@ -2148,6 +2225,190 @@ Pack decoding: "300x40ML-POU"=packQty:300,packSize:"40ml",packType:"Pouch",isCar
         return res.json({ success: true, duplicate: true });
       }
       res.status(500).json({ error: err.message });
+    }
+  });
+
+
+  // ── PUBLIC: Record lube/product sale — deducts stock from lubes_products table ──
+  app.post('/api/public/lube-sale/:tenantId', async (req, res) => {
+    const client = await pool.connect();
+    try {
+      const tenantId = req.params.tenantId;
+      const { productId, qty, rate, amount, customer, mode, employee, date, time, idempotencyKey } = req.body;
+
+      if (!productId || !qty || qty <= 0) {
+        client.release();
+        return res.status(400).json({ error: 'Missing or invalid fields' });
+      }
+      const qtyNum    = parseFloat(qty);
+      const rateNum   = parseFloat(rate)   || 0;
+      const amountNum = parseFloat(amount) || +(qtyNum * rateNum).toFixed(2);
+
+      // Idempotency — prevent double-submit on retry
+      if (idempotencyKey) {
+        const idem = await client.query(
+          "SELECT value FROM settings WHERE tenant_id=$1 AND key=$2",
+          [tenantId, 'lube_sale_idem_' + idempotencyKey]
+        );
+        if (idem.rowCount > 0) {
+          client.release();
+          return res.json({ ok: true, duplicate: true });
+        }
+      }
+
+      await client.query('BEGIN');
+
+      // Deduct stock atomically — fails if insufficient stock
+      const upd = await client.query(
+        `UPDATE lubes_products
+            SET stock = ROUND((stock - $1)::numeric, 3),
+                updated_at = NOW()
+          WHERE id = $2 AND tenant_id = $3 AND stock >= $1
+          RETURNING stock, name, unit`,
+        [qtyNum, productId, tenantId]
+      );
+      if (upd.rowCount === 0) {
+        await client.query('ROLLBACK');
+        client.release();
+        return res.status(400).json({ error: 'Insufficient stock or product not found' });
+      }
+
+      // Record sale in lubes_sales table
+      await client.query(
+        `INSERT INTO lubes_sales
+           (tenant_id, date, time, product_id, product_name, qty, unit, rate, amount, customer, mode, employee)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+        [
+          tenantId,
+          date || new Date().toISOString().slice(0, 10),
+          time || new Date().toTimeString().slice(0, 5),
+          productId,
+          upd.rows[0].name || '',
+          qtyNum, upd.rows[0].unit || '',
+          rateNum, amountNum,
+          customer || '', mode || 'cash', employee || '',
+        ]
+      );
+
+      await client.query('COMMIT');
+
+      // Store idempotency key
+      if (idempotencyKey) {
+        pool.query(
+          "INSERT INTO settings(tenant_id,key,value) VALUES($1,$2,$3) ON CONFLICT(tenant_id,key) DO UPDATE SET value=$3",
+          [tenantId, 'lube_sale_idem_' + idempotencyKey, JSON.stringify({ date, productId })]
+        ).catch(() => {});
+      }
+
+      console.log('[lube-sale] ' + tenantId + ': sold ' + qtyNum + ' x ' + upd.rows[0].name + ', new stock=' + upd.rows[0].stock);
+      res.json({ ok: true, newStock: parseFloat(upd.rows[0].stock) });
+    } catch (e) {
+      await client.query('ROLLBACK').catch(() => {});
+      console.error('[lube-sale]', e.message);
+      res.status(500).json({ error: e.message });
+    } finally {
+      client.release();
+    }
+  });
+
+  // ── PUBLIC: Get lube sales for tenant (reads from lubes_sales table) ─────
+  app.get('/api/public/lube-sales/:tenantId', async (req, res) => {
+    try {
+      const { tenantId } = req.params;
+      const limit = parseInt(req.query.limit) || 200;
+      const result = await pool.query(
+        `SELECT id, date, time, product_id AS "productId", product_name AS "productName",
+                qty, unit, rate, amount, customer, mode, employee
+           FROM lubes_sales
+          WHERE tenant_id = $1
+          ORDER BY date DESC, time DESC
+          LIMIT $2`,
+        [tenantId, limit]
+      );
+      res.json(result.rows);
+    } catch (e) {
+      console.error('[lube-sales GET]', e.message);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ── PUBLIC: Update lube product (price / name / stock restock) ───────────
+  // ── PUBLIC: Add new lube product ─────────────────────────────────────────
+  app.post('/api/public/lube-product/:tenantId', async (req, res) => {
+    try {
+      const { tenantId } = req.params;
+      const { id, name, brand, category, unit, sellingPrice, costPrice, stock, minStock,
+              hsn, gstPct, expiryDate, qtyPerCarton, sku, mrp, indSize, packType } = req.body;
+      if (!id || !name) return res.status(400).json({ error: 'id and name required' });
+      const extra = JSON.stringify({ qtyPerCarton: qtyPerCarton||0, sku: sku||'', mrp: mrp||0, indSize: indSize||'', packType: packType||'' });
+      await pool.query(
+        `INSERT INTO lubes_products
+           (id, tenant_id, name, brand, category, unit, selling_price, cost_price,
+            stock, min_stock, hsn, gst_pct, expiry_date, active, data_json)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,1,$14)
+         ON CONFLICT (id, tenant_id) DO UPDATE SET
+           name=EXCLUDED.name, brand=EXCLUDED.brand, category=EXCLUDED.category,
+           unit=EXCLUDED.unit, selling_price=EXCLUDED.selling_price,
+           cost_price=EXCLUDED.cost_price, stock=EXCLUDED.stock,
+           min_stock=EXCLUDED.min_stock, hsn=EXCLUDED.hsn, gst_pct=EXCLUDED.gst_pct,
+           expiry_date=EXCLUDED.expiry_date, data_json=EXCLUDED.data_json,
+           updated_at=NOW()`,
+        [
+          id, tenantId, name, brand||'', category||'Other', unit||'Nos',
+          parseFloat(sellingPrice)||0, parseFloat(costPrice)||0,
+          parseFloat(stock)||0, parseFloat(minStock)||5,
+          hsn||'', parseFloat(gstPct)||18, expiryDate||'', extra,
+        ]
+      );
+      res.json({ ok: true, id });
+    } catch (e) {
+      console.error('[lube-product POST]', e.message);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ── PUBLIC: Update existing lube product ─────────────────────────────────
+  app.put('/api/public/lube-product/:tenantId/:productId', async (req, res) => {
+    try {
+      const { tenantId, productId } = req.params;
+      const { name, brand, category, unit, sellingPrice, costPrice, stock, minStock,
+              hsn, gstPct, expiryDate, active, qtyPerCarton, sku, mrp, indSize, packType } = req.body;
+      const extra = JSON.stringify({ qtyPerCarton: qtyPerCarton||0, sku: sku||'', mrp: mrp||0, indSize: indSize||'', packType: packType||'' });
+      await pool.query(
+        `UPDATE lubes_products SET
+           name=$1, brand=$2, category=$3, unit=$4,
+           selling_price=$5, cost_price=$6, stock=$7, min_stock=$8,
+           hsn=$9, gst_pct=$10, expiry_date=$11, active=$12,
+           data_json=$13, updated_at=NOW()
+         WHERE id=$14 AND tenant_id=$15`,
+        [
+          name||'', brand||'', category||'', unit||'Nos',
+          parseFloat(sellingPrice)||0, parseFloat(costPrice)||0,
+          parseFloat(stock)||0, parseFloat(minStock)||5,
+          hsn||'', parseFloat(gstPct)||18, expiryDate||'',
+          active===false ? 0 : 1,
+          extra, productId, tenantId,
+        ]
+      );
+      res.json({ ok: true });
+    } catch (e) {
+      console.error('[lube-product PUT]', e.message);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ── PUBLIC: Delete (deactivate) lube product ─────────────────────────────
+  app.delete('/api/public/lube-product/:tenantId/:productId', async (req, res) => {
+    try {
+      const { tenantId, productId } = req.params;
+      await pool.query(
+        `UPDATE lubes_products SET active=0, updated_at=NOW() WHERE id=$1 AND tenant_id=$2`,
+        [productId, tenantId]
+      );
+      res.json({ ok: true });
+    } catch (e) {
+      console.error('[lube-product DELETE]', e.message);
+      res.status(500).json({ error: e.message });
     }
   });
 
