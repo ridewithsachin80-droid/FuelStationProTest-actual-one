@@ -321,7 +321,7 @@ function renderDashboard(D) {
     ${nmlAlert}
     ${subBadge}
     <div class="g g-auto-sm mb-24 gap-16">
-      ${statCard('Today\'s Revenue', cur(totalRevenue), lubesRevenue > 0 ? 'fuel + lubes' : 'all pumps today', '💰')}
+      ${statCard('Today\'s Revenue', cur(totalRevenue), lubesRevenue > 0 ? 'fuel + lubes · live' : 'all pumps · live', '💰')}
       ${statCard('Petrol Sold', fmt(petrolLiters) + ' L', 'today', '🔴')}
       ${statCard('Diesel Sold', fmt(dieselLiters) + ' L', 'today', '🟠')}
       ${statCard('Premium Sold', fmt(premiumLiters) + ' L', 'today', '🟣')}
@@ -819,9 +819,19 @@ function renderSales(D, filter = 'all') {
   }).join('');
 
   // ── Table rows ─────────────────────────────────────────────
+  const isDayLocked = !!(APP.data?.dayLocks||{})[selDate];
+  const canEdit = !isDayLocked && ['owner','admin','manager','accountant'].includes((APP.userRole||'').toLowerCase());
+
   const rows = sorted.map(s => {
     const fuel = getFuel(s.fuelType);
     const empName = s.employee ? sanitize(s.employee) : '—';
+    const actionBtns = canEdit ? `
+      <td style="white-space:nowrap">
+        <button onclick="openEditSaleModal(${s.id})" title="Edit sale"
+          style="background:none;border:1px solid var(--border);border-radius:5px;padding:3px 8px;cursor:pointer;font-size:11px;color:var(--text-2);margin-right:4px">✏️</button>
+        <button onclick="confirmDeleteSale(${s.id},'${sanitize(s.vehicle||'')}',${s.liters},${s.amount})" title="Delete sale"
+          style="background:none;border:1px solid rgba(239,68,68,0.3);border-radius:5px;padding:3px 8px;cursor:pointer;font-size:11px;color:var(--red)">🗑</button>
+      </td>` : '<td></td>';
     return `<tr>
       <td class="mono" style="font-size:11px;white-space:nowrap">${s.time || '—'}</td>
       <td class="mono fw-600">${sanitize(s.vehicle || '—')}</td>
@@ -837,6 +847,7 @@ function renderSales(D, filter = 'all') {
       </td>
       <td>${badgeColor(s.mode, payColors[s.mode])}</td>
       <td style="font-size:11px;color:var(--text-2)">${sanitize(s.customer || '') || '—'}</td>
+      ${actionBtns}
     </tr>`;
   }).join('');
 
@@ -898,6 +909,7 @@ function renderSales(D, filter = 'all') {
                 <th>Time</th><th>Vehicle</th><th>Fuel / Product</th>
                 <th class="r">Liters / Qty</th><th class="r">Amount</th>
                 <th>Employee</th><th>Payment</th>
+                ${canEdit ? '<th>Actions</th>' : ''}
               </tr>
             </thead>
             <tbody>${rows}${lubeRows}${emptyMsg}</tbody>
@@ -7436,6 +7448,106 @@ function openSaleModal() {
     <div class="form-group"><label class="form-label">Customer (for credit)</label><input class="form-input" id="saleCustomer" placeholder="Optional" /></div>
   `, `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-accent" onclick="saveSale()">💾 Save Sale</button>`);
 }
+
+// ── EDIT SALE ─────────────────────────────────────────────────────────────────
+function openEditSaleModal(saleId) {
+  if (subReadOnlyGuard()) return;
+  const s = (APP.data?.sales || []).find(x => x.id === saleId || String(x.id) === String(saleId));
+  if (!s) { toast('Sale not found — try refreshing', 'error'); return; }
+  const fuelOpts = FUEL_TYPES.map(f => `<option value="${f.id}" ${f.id===s.fuelType?'selected':''}>${f.name}</option>`).join('');
+  const pumpOpts = APP.data.pumps.map(p => `<option value="${p.id}" ${String(p.id)===String(s.pump)?'selected':''}>${sanitize(p.name)} (${getFuel(p.fuelType).short})</option>`).join('');
+  const modeOpts = ['cash','upi','card','credit'].map(m => `<option value="${m}" ${m===s.mode?'selected':''}>${m.charAt(0).toUpperCase()+m.slice(1)}</option>`).join('');
+  openModal(`✏️ Edit Sale — ${s.date} ${s.time||''}`,
+    `<div style="padding:10px 14px;background:rgba(239,68,68,0.06);border:1px solid rgba(239,68,68,0.2);border-radius:8px;margin-bottom:14px;font-size:12px;color:var(--text-2)">
+      <strong style="color:var(--red)">⚠️ Editing a sale adjusts the record only.</strong> Tank levels are NOT automatically recalculated — use Record Dip to correct tank inventory after editing.
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Fuel Type</label><select class="form-input" id="editSaleFuel">${fuelOpts}</select></div>
+      <div class="form-group"><label class="form-label">Pump</label><select class="form-input" id="editSalePump">${pumpOpts}</select></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Liters *</label><input class="form-input mono" id="editSaleLiters" type="number" step="0.1" value="${s.liters||0}" style="font-size:18px;font-weight:700;color:var(--accent-light)" /></div>
+      <div class="form-group"><label class="form-label">Amount ₹ *</label><input class="form-input mono" id="editSaleAmount" type="number" step="0.01" value="${s.amount||0}" style="font-size:18px;font-weight:700" /></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Vehicle No.</label><input class="form-input" id="editSaleVehicle" value="${sanitize(s.vehicle||'')}" style="text-transform:uppercase" oninput="this.value=this.value.toUpperCase()" /></div>
+      <div class="form-group"><label class="form-label">Payment Mode</label><select class="form-input" id="editSaleMode">${modeOpts}</select></div>
+    </div>
+    <div class="form-group"><label class="form-label">Customer</label><input class="form-input" id="editSaleCustomer" value="${sanitize(s.customer||'')}" /></div>
+    <div class="form-group"><label class="form-label">Edit Reason <span style="color:var(--red)">*</span></label>
+      <input class="form-input" id="editSaleReason" placeholder="e.g. Typo — employee entered 100 instead of 10" required />
+    </div>`,
+    `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+     <button class="btn btn-accent" onclick="saveEditedSale(${saleId})">💾 Save Changes</button>`
+  );
+}
+window.openEditSaleModal = openEditSaleModal;
+
+async function saveEditedSale(saleId) {
+  const liters  = parseFloat(document.getElementById('editSaleLiters')?.value);
+  const amount  = parseFloat(document.getElementById('editSaleAmount')?.value);
+  const vehicle = (document.getElementById('editSaleVehicle')?.value||'').toUpperCase().trim();
+  const mode    = document.getElementById('editSaleMode')?.value || 'cash';
+  const fuel    = document.getElementById('editSaleFuel')?.value;
+  const pump    = String(document.getElementById('editSalePump')?.value||'');
+  const customer= (document.getElementById('editSaleCustomer')?.value||'').trim();
+  const reason  = (document.getElementById('editSaleReason')?.value||'').trim();
+  if (isNaN(liters)||liters<=0) { toast('Enter valid liters','error'); return; }
+  if (isNaN(amount)||amount<=0) { toast('Enter valid amount','error'); return; }
+  if (!reason) { toast('Please enter a reason for editing','error'); return; }
+
+  const s = (APP.data?.sales||[]).find(x=>String(x.id)===String(saleId));
+  if (!s) { toast('Sale not found','error'); return; }
+
+  const updated = { ...s, liters, amount, vehicle, mode, fuelType: fuel, pump, customer,
+    editedAt: new Date().toISOString(), editedBy: APP.userName||'Admin', editReason: reason };
+  try {
+    await db.put('sales', updated);
+    // Update local APP.data
+    const idx = APP.data.sales.findIndex(x=>String(x.id)===String(saleId));
+    if (idx>=0) APP.data.sales[idx] = updated;
+    auditLog('sale_edit', { id: saleId, reason, oldLiters: s.liters, newLiters: liters, oldAmount: s.amount, newAmount: amount });
+    closeModal();
+    toast(`✅ Sale updated — ${fmt(s.liters)}L → ${fmt(liters)}L`, 'success');
+    renderPage();
+  } catch(e) { toast('Save failed: ' + e.message, 'error'); }
+}
+window.saveEditedSale = saveEditedSale;
+
+// ── DELETE SALE ───────────────────────────────────────────────────────────────
+function confirmDeleteSale(saleId, vehicle, liters, amount) {
+  openModal('🗑️ Delete Sale',
+    `<div style="text-align:center;padding:16px 0">
+      <div style="font-size:40px;margin-bottom:12px">⚠️</div>
+      <div style="font-size:15px;font-weight:700;color:var(--text-0);margin-bottom:8px">Delete this sale record?</div>
+      <div style="background:var(--bg-0);border-radius:8px;padding:12px;margin-bottom:12px;font-size:13px">
+        <div class="mono fw-700" style="color:var(--accent-light);font-size:18px">${fmt(liters)} L &nbsp;·&nbsp; ${cur(amount)}</div>
+        ${vehicle ? `<div style="font-size:11px;color:var(--text-3);margin-top:4px">Vehicle: ${sanitize(vehicle)}</div>` : ''}
+      </div>
+      <div style="font-size:12px;color:var(--text-3);margin-bottom:12px">This removes the sale from reports and revenue totals.<br>Tank levels are NOT automatically adjusted — use Record Dip if needed.</div>
+      <div class="form-group"><label class="form-label">Delete Reason <span style="color:var(--red)">*</span></label>
+        <input class="form-input" id="deleteSaleReason" placeholder="e.g. Duplicate entry / Employee error" />
+      </div>
+    </div>`,
+    `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+     <button class="btn btn-red" onclick="doDeleteSale(${saleId})" style="background:var(--red);color:#fff;border:none;padding:8px 18px;border-radius:var(--radius-sm);font-weight:700;cursor:pointer">🗑️ Delete Sale</button>`
+  );
+}
+window.confirmDeleteSale = confirmDeleteSale;
+
+async function doDeleteSale(saleId) {
+  const reason = (document.getElementById('deleteSaleReason')?.value||'').trim();
+  if (!reason) { toast('Please enter a reason for deletion','error'); return; }
+  try {
+    await db.delete('sales', saleId);
+    APP.data.sales = (APP.data.sales||[]).filter(x=>String(x.id)!==String(saleId));
+    auditLog('sale_delete', { id: saleId, reason });
+    closeModal();
+    toast('✅ Sale deleted and removed from reports', 'success');
+    renderPage();
+  } catch(e) { toast('Delete failed: ' + e.message, 'error'); }
+}
+window.doDeleteSale = doDeleteSale;
 
 function calcSaleAmount() {
   const fuelId = document.getElementById('saleFuel').value;

@@ -695,9 +695,31 @@ function dataRoutes(db) {
   });
 
   // ── Generic store DELETE by id ────────────────────────────────────────────
-  router.delete('/:store/:id', checkDayLock, async (req, res) => {
+  router.delete('/:store/:id', async (req, res) => {
     const meta = STORE_MAP[req.params.store];
     if (!meta) return res.status(404).json({ error: 'Unknown store' });
+    // Day lock check: fetch the record's actual date first, then check that date's lock
+    if (DAY_LOCKED_STORES.has(req.params.store)) {
+      try {
+        const rec = await pool.query(
+          `SELECT date FROM ${meta.table} WHERE ${meta.keyCol||'id'} = $1 AND tenant_id = $2`,
+          [req.params.id, req.tenantId]
+        );
+        const recDate = rec.rows[0]?.date || istDate();
+        const lockRow = await pool.query(
+          `SELECT value FROM settings WHERE key = $1 AND tenant_id = $2`,
+          [`day_lock_${recDate}`, req.tenantId]
+        );
+        if (lockRow.rows[0] && lockRow.rows[0].value === 'true') {
+          return res.status(423).json({
+            error: `Day ${recDate} is locked. Unlock from Settings → Day-Lock before deleting.`,
+            locked: true, date: recDate,
+          });
+        }
+      } catch(e) {
+        return res.status(503).json({ error: 'Cannot verify day-lock status. Please retry.', retryable: true });
+      }
+    }
     const keyCol = meta.keyCol || 'id';
     try {
       await pool.query(

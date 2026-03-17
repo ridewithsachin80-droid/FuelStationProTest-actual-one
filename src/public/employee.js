@@ -1747,7 +1747,23 @@ function emp_saveReading(mode, key, value) {
     } else {
       const ov = empState.openReadings[key];
       if (ov !== undefined && v < ov) { toast('Closing must be ≥ opening','error'); return; }
-      if (ov !== undefined && (v - ov) > 10000) { toast('Difference exceeds 10,000L. Verify reading.','error'); return; }
+      // LIMIT FIX: raised from 10,000L to 50,000L to support high-volume bulk pumps
+      // For differences > 50,000L show error (likely a data entry mistake)
+      // For differences > 10,000L show a confirmable warning but ALLOW saving
+      if (ov !== undefined && (v - ov) > 50000) {
+        toast('Reading difference exceeds 50,000L — please verify the meter value.', 'error');
+        return;
+      }
+      if (ov !== undefined && (v - ov) > 10000) {
+        // Large but plausible — show warning and let manager confirm
+        const diff = (v - ov).toFixed(0);
+        if (!window._largeReadingConfirmed || window._largeReadingConfirmed !== key + '_' + v) {
+          window._largeReadingConfirmed = key + '_' + v;
+          toast(`⚠️ Large reading: ${fmt(v-ov)}L sold on this nozzle. Tap again to confirm.`, 'warning');
+          return; // First tap shows warning; second tap saves
+        }
+        window._largeReadingConfirmed = null; // Reset after confirmed
+      }
       empState.closeReadings[key] = v;
     }
   }
@@ -2124,17 +2140,26 @@ function emp_recordSale() {
   const _activeBtn = document.querySelector('[data-pumpbtn].btn-accent');
   const p = String(_activeBtn?.dataset?.pumpbtn || '');  // pump.id from active combined button
   if (isNaN(l)||l<=0) { toast('Enter valid liters','error'); return; }
-  // Tank level validation — warn if sale exceeds available fuel
+
+  // ── TANK STOCK ENFORCEMENT ────────────────────────────────────────────────
+  // Hard block if sale > available stock. Soft warn if within 200L tolerance
+  // (allows for tank measurement variation and pending purchase receipts).
+  // Employee can fetch fresh tank data by logging out and back in.
   const _saleNozzleFuels = (APP.data?.pumps||[]).find(pm=>String(pm.id)===p)?.nozzleFuels || {};
   const _saleFuel = _saleNozzleFuels[document.querySelector('[data-pumpbtn].btn-accent')?.dataset?.nozzlebtn||'A'] || empSaleFuel;
   const _saleTank = (APP.data?.tanks||[]).find(t => (t.fuelType||'').toLowerCase() === (_saleFuel||'').toLowerCase());
-  if (_saleTank) {
-    // Calculate already-sold in this shift for this fuel (from empState.sales)
+  if (_saleTank && (_saleTank.current||0) > 0) {
+    // Subtract what this employee has already sold this shift
     const _soldThisShift = empState.sales.filter(s=>s.fuelType===_saleFuel).reduce((a,s)=>a+(s.liters||0),0);
-    const _available = (_saleTank.current||0) - _soldThisShift;
-    if (l > _available + 50) { // +50L tolerance for measurement variation
-      toast(`⚠️ Only ${fmt(_available)}L available in ${getFuel(_saleFuel).short} tank. Recording anyway — verify tank level.`, 'warning');
-      // Don't block — just warn. Admin can correct via dip reading.
+    const _available = Math.max(0, (_saleTank.current||0) - _soldThisShift);
+    const _overage = l - _available;
+    if (_overage > 200) {
+      // HARD BLOCK: selling significantly more than stock — stop the sale
+      toast(`❌ Cannot sell ${fmt(l)}L — only ${fmt(_available)}L ${getFuel(_saleFuel).short} in tank. Ask admin to record fuel purchase first.`, 'error');
+      return;
+    } else if (_overage > 0) {
+      // SOFT WARN: within 200L tolerance (measurement variation / rounding)
+      toast(`⚠️ Stock: ${fmt(_available)}L. Recording ${fmt(l)}L — verify physical tank level.`, 'warning');
     }
   }
   // Vehicle required for non-cash payments; optional for cash walk-ins

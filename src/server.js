@@ -1148,6 +1148,29 @@ async function startServer() {
       const tenantCheck = await client.query('SELECT id FROM tenants WHERE id = $1', [tenantId]);
       if (!tenantCheck.rows.length) { client.release(); return res.status(404).json({ error: 'Tenant not found' }); }
 
+      // TC-019: Server-side tank stock enforcement — prevents overselling even if client check is bypassed
+      // Allow 200L tolerance for measurement variation and pending purchase receipts.
+      // Only enforces when tank data exists AND tank has been filled (current_level > 0).
+      if (sale.fuelType && liters > 0) {
+        const tankRow = await client.query(
+          'SELECT current_level, capacity FROM tanks WHERE tenant_id=$1 AND LOWER(fuel_type)=LOWER($2)',
+          [tenantId, sale.fuelType]
+        );
+        if (tankRow.rows[0]) {
+          const tankLevel = parseFloat(tankRow.rows[0].current_level) || 0;
+          const capacity  = parseFloat(tankRow.rows[0].capacity) || 0;
+          // Only enforce if tank has been filled (> 5% capacity) — prevents false blocks on brand-new stations
+          if (tankLevel > capacity * 0.05 && liters > tankLevel + 200) {
+            client.release();
+            return res.status(422).json({
+              error: `Insufficient stock: ${sale.fuelType} tank has ${tankLevel.toFixed(0)}L, sale requires ${liters}L. Ask admin to record fuel purchase first.`,
+              available: tankLevel,
+              requested: liters,
+            });
+          }
+        }
+      }
+
       // TC-018 FIX: Validate pump is not inactive before accepting sale
       if (sale.pump) {
         const pumpCheck = await client.query(
