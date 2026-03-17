@@ -653,7 +653,15 @@ async function initDatabase() {
   const safeAlters = [
     "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS omc TEXT DEFAULT 'iocl'",
 
-    // ── SALES TABLE MIGRATIONS ─────────────────────────────────────────────
+    // ── PUMPS TABLE MIGRATIONS ─────────────────────────────────────────────
+    // current_reading and reading_updated_at were used in the reading endpoint
+    // but never added to the CREATE TABLE. Add them safely now.
+    "ALTER TABLE pumps ADD COLUMN IF NOT EXISTS current_reading REAL DEFAULT 0",
+    "ALTER TABLE pumps ADD COLUMN IF NOT EXISTS reading_updated_at TEXT DEFAULT ''",
+    "ALTER TABLE pumps ADD COLUMN IF NOT EXISTS open_reading REAL DEFAULT 0",
+
+    // ── TANKS TABLE MIGRATIONS ─────────────────────────────────────────────
+    "ALTER TABLE tanks ADD COLUMN IF NOT EXISTS last_dip_source TEXT DEFAULT ''",
     // The original schema used old column names; INSERT queries use new names.
     // Add the new columns and copy data from old ones if they exist.
     "ALTER TABLE sales ADD COLUMN IF NOT EXISTS liters REAL DEFAULT 0",

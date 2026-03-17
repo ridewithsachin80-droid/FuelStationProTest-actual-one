@@ -424,7 +424,16 @@ function emp_totalRev() {
   if (meterTotal > 0) return meterTotal;
   return empState.sales.reduce((a, s) => a + (s.amount || 0), 0);
 }
-function emp_totalCash() { return empState.sales.reduce((a,s) => a + (s.mode==='cash'?s.amount:0), 0); }
+function emp_totalCash() {
+  const fuelCash = empState.sales.reduce((a,s) => a + (s.mode==='cash'?s.amount:0), 0);
+  // Include lube/product cash sales in the cash total
+  const today = emp_today();
+  const empName = empState.user?.name || '';
+  const lubeCash = (window._lubesSales||[])
+    .filter(s => s.date === today && s.employee === empName && s.mode === 'cash')
+    .reduce((a,s) => a + (s.amount||0), 0);
+  return fuelCash + lubeCash;
+}
 
 // Sales liters recorded for a specific pump+fuelType combination
 function emp_nozzleSalesLiters(pumpId, fuelType, nozzle) {
@@ -2753,6 +2762,11 @@ async function _emp_submit_inner() {
     }
   });
 
+  // DEBUG: Log what meter readings produced
+  console.log('[TankDeduct] tankDeductionsTotalByFuel=', JSON.stringify(tankDeductionsTotalByFuel));
+  console.log('[TankDeduct] openReadings=', JSON.stringify(empState.openReadings), 'closeReadings=', JSON.stringify(empState.closeReadings));
+  console.log('[TankDeduct] sales count=', empState.sales.length, 'sales=', JSON.stringify(empState.sales.slice(0,3).map(s=>({pump:s.pump,ft:s.fuelType,l:s.liters}))));
+
   // Deduct each fuel type from its tank once (combined across all pumps)
   const tankWritePromises = [];
   const deductLog = [];
@@ -2773,11 +2787,19 @@ async function _emp_submit_inner() {
   // ── Always use public endpoint so tank deduction reaches DB even without auth ──
   try {
     const tenantTank = (typeof mt_getActiveTenant === 'function') ? mt_getActiveTenant() : null;
+    console.log('[TankDeduct] deductions=', JSON.stringify(tankDeductionsTotalByFuel), 'tenantId=', tenantTank?.id);
     if (tenantTank && tenantTank.id && Object.keys(tankDeductionsTotalByFuel).length > 0) {
-      await fetch('/api/public/tank-deduct/' + encodeURIComponent(tenantTank.id), {
+      const deductResp = await fetch('/api/public/tank-deduct/' + encodeURIComponent(tenantTank.id), {
         method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ deductions: tankDeductionsTotalByFuel, shiftDate: emp_today() }) // FA-04: pass IST date so server can compare correctly
-      }).catch(e => console.warn('[Tank deduct] server call failed:', e.message));
+        body: JSON.stringify({ deductions: tankDeductionsTotalByFuel, shiftDate: emp_today() })
+      }).catch(e => { console.error('[TankDeduct] FETCH FAILED:', e.message); return null; });
+      if (deductResp) {
+        const deductData = await deductResp.json().catch(() => ({}));
+        console.log('[TankDeduct] Response:', deductResp.status, JSON.stringify(deductData));
+        if (!deductResp.ok) console.error('[TankDeduct] SERVER ERROR:', deductData.error);
+      }
+    } else {
+      console.warn('[TankDeduct] SKIPPED - deductions empty or no tenant:', JSON.stringify(tankDeductionsTotalByFuel));
     }
   } catch(e) { console.warn('[Tank deduct] failed:', e); }
 
@@ -2889,13 +2911,18 @@ async function _emp_submit_inner() {
 
 function emp_share() {
   const uname = sanitize(empState.user?.name||'');
-  // FIX 3: Add payment mode breakdown to share message
+  const today = emp_today();
+  const empName = empState.user?.name || '';
   const modes = ['cash','upi','card','credit'];
   const modeEmoji = {cash:'💵',upi:'📱',card:'💳',credit:'🏢'};
   const payLines = modes.map(m => {
     const total = empState.sales.filter(s=>s.mode===m).reduce((a,s)=>a+s.amount,0);
     return total > 0 ? `• ${modeEmoji[m]} ${m.charAt(0).toUpperCase()+m.slice(1)}: ${cur(total)}` : null;
   }).filter(Boolean).join('\n');
+
+  // Lube sales for this employee today
+  const myLubeSales = (window._lubesSales||[]).filter(s => s.date === today && s.employee === empName);
+  const lubeTotalAmt = myLubeSales.reduce((a,s)=>a+s.amount,0);
 
   // Cash denomination breakdown
   let denomLine = '';
@@ -2906,8 +2933,19 @@ function emp_share() {
     if (denoms) denomLine = `\n💴 Denominations: ${denoms}`;
   }
 
-  let t = `⛽ FuelBunk Pro — Report\n📅 ${emp_today()}\n👤 ${uname}\n\n📊 Summary:\n• Liters: ${fmt(emp_totalSold())} L\n• Revenue: ${cur(emp_totalRev())}\n• Sales: ${empState.sales.length}\n`;
-  if (payLines) t += `\n💰 Payment:\n${payLines}${denomLine}\n`;
+  let t = `⛽ FuelBunk Pro — Report\n📅 ${today}\n👤 ${uname}\n\n📊 Fuel Summary:\n• Liters: ${fmt(emp_totalSold())} L\n• Revenue: ${cur(emp_totalRev())}\n• Sales: ${empState.sales.length}\n`;
+  if (payLines) t += `\n💰 Fuel Payment:\n${payLines}${denomLine}\n`;
+
+  // Lube sales section
+  if (lubeTotalAmt > 0) {
+    t += `\n🛢️ Lubes & Products:\n• Revenue: ${cur(lubeTotalAmt)} · Items: ${myLubeSales.length}\n`;
+    modes.forEach(m => {
+      const mt = myLubeSales.filter(s=>s.mode===m).reduce((a,s)=>a+s.amount,0);
+      if (mt > 0) t += `• ${modeEmoji[m]} ${m.charAt(0).toUpperCase()+m.slice(1)}: ${cur(mt)}\n`;
+    });
+    myLubeSales.slice(0,5).forEach(s => { t += `  - ${sanitize(s.productName)}: ${s.qty} ${s.unit||''} = ${cur(s.amount)}\n`; });
+  }
+
   t += `\n⛽ Pump-wise:\n`;
   emp_myPumps().forEach(p => { const s=emp_pumpSold(p.id); if(s>0) t+=`• ${sanitize(p.name)} (${(EMP_FUEL[p.fuelType]||p.fuelType||'Fuel').split(' ')[0]}): ${fmt(s)} L\n`; });
   t += '\n— ' + (APP.data?.upiName || APP.tenant?.name || 'Fuel Station');
@@ -2918,12 +2956,14 @@ function emp_share() {
 function emp_print() {
   const ts=emp_totalSold(), tr=emp_totalRev();
   const uname = sanitize(empState.user?.name||'');
+  const today = emp_today();
+  const empName = empState.user?.name || '';
   const rows = emp_myPumps().map(p => {
     const nr = p.nozzles.map(n => { const k=emp_key(p.id,n),o=empState.openReadings[k]||0,c=empState.closeReadings[k]||0; return '<tr><td style="padding-left:24px;color:#666">Nozzle '+n+'</td><td style="text-align:right;font-family:monospace">'+o.toFixed(1)+'</td><td style="text-align:right;font-family:monospace">'+c.toFixed(1)+'</td><td style="text-align:right;font-family:monospace;font-weight:700">'+(c-o).toFixed(1)+'</td></tr>'; }).join('');
     return '<tr style="background:#f8f9fa"><td style="font-weight:700">'+sanitize(p.name)+' — '+(EMP_FUEL[p.fuelType]||p.fuelType||'Fuel').split(' ')[0]+'</td><td></td><td></td><td style="text-align:right;font-weight:700">'+emp_pumpSold(p.id).toFixed(1)+' L</td></tr>'+nr;
   }).join('');
 
-  // FIX 3b: Build payment rows as a variable (avoids nested backtick syntax errors)
+  // Payment rows (fuel)
   const cashAmt   = empState.sales.filter(s=>s.mode==='cash').reduce((a,s)=>a+s.amount,0);
   const upiAmt    = empState.sales.filter(s=>s.mode==='upi').reduce((a,s)=>a+s.amount,0);
   const cardAmt   = empState.sales.filter(s=>s.mode==='card').reduce((a,s)=>a+s.amount,0);
@@ -2937,6 +2977,30 @@ function emp_print() {
     ? '<tr><td colspan="2" style="padding-top:8px;font-weight:700;font-size:11px;text-transform:uppercase;color:#888">Cash Denominations</td></tr>'
       + Object.entries(h.breakdown).filter(([,c])=>c>0).sort((a,b)=>b[0]-a[0])
           .map(([d,c]) => '<tr><td style="padding-left:12px;color:#555">&#8377;'+d+' &times; '+c+'</td><td style="text-align:right">&#8377;'+(d*c).toFixed(2)+'</td></tr>').join('')
+    : '';
+
+  // Lube sales for this employee today
+  const myLubeSales = (window._lubesSales||[]).filter(s => s.date === today && s.employee === empName);
+  const lubeTotalAmt = myLubeSales.reduce((a,s)=>a+s.amount,0);
+  const lubeCash   = myLubeSales.filter(s=>s.mode==='cash').reduce((a,s)=>a+s.amount,0);
+  const lubeUpi    = myLubeSales.filter(s=>s.mode==='upi').reduce((a,s)=>a+s.amount,0);
+  const lubeCard   = myLubeSales.filter(s=>s.mode==='card').reduce((a,s)=>a+s.amount,0);
+  const lubeCredit = myLubeSales.filter(s=>s.mode==='credit').reduce((a,s)=>a+s.amount,0);
+  const lubeRows = myLubeSales.map(s =>
+    '<tr><td>'+sanitize(s.productName)+'</td><td style="text-align:right">'+s.qty+' '+sanitize(s.unit||'')+'</td><td style="text-align:right">&#8377;'+s.rate.toFixed(2)+'</td><td style="text-align:right;font-weight:600">&#8377;'+s.amount.toFixed(2)+'</td><td style="text-transform:capitalize">'+s.mode+'</td></tr>'
+  ).join('');
+  const lubePayRows = (lubeCash   > 0 ? '<tr><td style="font-weight:600">&#128181; Cash</td><td style="text-align:right">&#8377;'+lubeCash.toFixed(2)+'</td></tr>'   : '')
+                   + (lubeUpi    > 0 ? '<tr><td style="font-weight:600">&#128241; UPI</td><td style="text-align:right">&#8377;'+lubeUpi.toFixed(2)+'</td></tr>'    : '')
+                   + (lubeCard   > 0 ? '<tr><td style="font-weight:600">&#128179; Card</td><td style="text-align:right">&#8377;'+lubeCard.toFixed(2)+'</td></tr>'  : '')
+                   + (lubeCredit > 0 ? '<tr><td style="font-weight:600">&#127981; Credit</td><td style="text-align:right">&#8377;'+lubeCredit.toFixed(2)+'</td></tr>' : '');
+  const lubeSection = myLubeSales.length > 0
+    ? '<h3 style="margin:16px 0 8px;font-size:13px;color:#333;border-bottom:2px solid #d4940f;padding-bottom:4px">&#128722; Lubes &amp; Products</h3>'
+      + '<table><thead><tr><th>Product</th><th style="text-align:right">Qty</th><th style="text-align:right">Rate</th><th style="text-align:right">Amount</th><th>Mode</th></tr></thead><tbody>'
+      + lubeRows
+      + '<tr class="total-row"><td colspan="3">TOTAL</td><td style="text-align:right">&#8377;'+lubeTotalAmt.toFixed(2)+'</td><td></td></tr>'
+      + '</tbody></table>'
+      + '<table><thead><tr><th>Lube Payment Mode</th><th style="text-align:right">Amount</th></tr></thead><tbody>'
+      + lubePayRows + '</tbody></table>'
     : '';
   const htmlContent = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Report</title>'
     + '<style>body{font-family:\'Segoe UI\',system-ui,sans-serif;padding:30px;font-size:12px;color:#333}'
@@ -2957,6 +3021,7 @@ function emp_print() {
     + payRows
     + denomRows
     + '</tbody></table>'
+    + lubeSection
     + '<div class="footer">FuelBunk Pro &mdash; Auto Generated<br>Signature: ________________</div>'
     + '</body></html>';
   const empBlob = new Blob([htmlContent], { type: 'text/html;charset=utf-8' });
