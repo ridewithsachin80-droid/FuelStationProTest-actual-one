@@ -2700,17 +2700,22 @@ async function _emp_submit_inner() {
     });
 
     if (hasAnyReading) {
+      // OPENING-READING FIX: store the fetch promise for later await outside the forEach.
+      // Cannot await inside forEach; we collect promises and await them all after the loop.
       try {
         const tenant2 = (typeof mt_getActiveTenant === 'function') ? mt_getActiveTenant() : null;
         if (tenant2 && tenant2.id) {
-          fetch('/api/public/reading/' + encodeURIComponent(tenant2.id), {
-            method: 'POST', headers: {'Content-Type':'application/json'},
-            body: JSON.stringify({
-              pumpId: String(pump.id),
-              nozzleReadings: nozzleReadingsForServer,
-              nozzleOpen: nozzleOpenForServer
-            })
-          }).catch(e => console.warn('[emp reading] save failed:', e.message));
+          window._empReadingPromises = window._empReadingPromises || [];
+          window._empReadingPromises.push(
+            fetch('/api/public/reading/' + encodeURIComponent(tenant2.id), {
+              method: 'POST', headers: {'Content-Type':'application/json'},
+              body: JSON.stringify({
+                pumpId: String(pump.id),
+                nozzleReadings: nozzleReadingsForServer,
+                nozzleOpen: nozzleOpenForServer
+              })
+            }).catch(e => console.warn('[emp reading] save failed:', e.message))
+          );
         }
       } catch(e) { console.warn('[emp reading]', e); }
     }
@@ -2753,6 +2758,15 @@ async function _emp_submit_inner() {
       }).catch(e => console.warn('[Tank deduct] server call failed:', e.message));
     }
   } catch(e) { console.warn('[Tank deduct] failed:', e); }
+
+  // OPENING-READING FIX: await all reading save promises collected inside forEach
+  // This ensures nozzleReadings are persisted to DB before shift submit completes,
+  // so the NEXT employee's login sees the correct previous closing as their opening reading.
+  if (window._empReadingPromises && window._empReadingPromises.length > 0) {
+    await Promise.allSettled(window._empReadingPromises);
+    window._empReadingPromises = [];
+  }
+
   // Broadcast to admin tab
   try { var bc2=new BroadcastChannel('fuelbunk_sync'); bc2.postMessage({type:'EMP_SUBMITTED',deductions:tankDeductionsTotalByFuel,employee:empState.user?empState.user.name:''}); bc2.close(); } catch(e) {}
   console.log('[FuelBunk] Deductions:', JSON.stringify(tankDeductionsTotalByFuel), '| Results:', deductLog.join(', '));

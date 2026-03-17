@@ -599,26 +599,39 @@ async function startServer() {
   // ── PUBLIC: pump/nozzle info for employee portal (no sensitive data) ──────
   app.get('/api/public/pumps/:tenantId', async (req, res) => {
     try {
+      const tenantId = req.params.tenantId;
       const r = await pool.query(
         'SELECT id, name, fuel_type, data_json FROM pumps WHERE tenant_id = $1 AND status != $2 ORDER BY id',
-        [req.params.tenantId, 'inactive']
+        [tenantId, 'inactive']
       );
+      // OPENING-READING FIX: also load settings fallback readings for each pump
+      const fallbackRows = await pool.query(
+        "SELECT key, value FROM settings WHERE tenant_id=$1 AND key LIKE 'last_closing_readings_%'",
+        [tenantId]
+      ).catch(() => ({ rows: [] }));
+      const fallbackMap = {};
+      fallbackRows.rows.forEach(row => {
+        const pumpId = row.key.replace('last_closing_readings_', '');
+        try { fallbackMap[pumpId] = JSON.parse(row.value || '{}').nozzleReadings || {}; } catch {}
+      });
+
       const pumps = r.rows.map(row => {
         let d = {};
         try { d = JSON.parse(row.data_json || '{}'); } catch {}
-        // Return nozzleLabels as array AND nozzles as integer count
-        // getEmpPumps() in client checks p.nozzleLabels first, then falls back to integer p.nozzles
         const nozzleLabels = d.nozzleLabels || ['A', 'B'];
         const nozzleFuels = d.nozzleFuels || {};
-        const nozzleReadings = d.nozzleReadings || {};
+        // Merge: pump data_json readings take priority; fallback fills missing nozzles
+        const nozzleReadings = { ...(fallbackMap[String(row.id)] || {}), ...(d.nozzleReadings || {}) };
         return {
           id: String(row.id),
           name: row.name,
           fuelType: row.fuel_type,
-          nozzles: nozzleLabels.length,       // integer count — used by getEmpPumps fallback
-          nozzleLabels: nozzleLabels,          // explicit array — used by getEmpPumps primary path
+          nozzles: nozzleLabels.length,
+          nozzleLabels: nozzleLabels,
           nozzleFuels: nozzleFuels,
           nozzleReadings: nozzleReadings,
+          nozzleOpen: d.nozzleOpen || {},
+          readingUpdatedAt: d.readingUpdatedAt || '',
         };
       });
       res.json(pumps);
@@ -810,6 +823,24 @@ async function startServer() {
       );
       await client.query('COMMIT');
       client.release();
+
+      // OPENING-READING FIX: also persist nozzleReadings to a settings key
+      // so doEmpLogin can fall back to it if pump data_json is stale/empty
+      try {
+        const settKey = `last_closing_readings_${pumpId}`;
+        const existing = await pool.query(
+          'SELECT id FROM settings WHERE tenant_id=$1 AND key=$2', [tenantId, settKey]
+        );
+        const settVal = JSON.stringify({ nozzleReadings, savedAt: new Date().toISOString() });
+        if (existing.rows.length > 0) {
+          await pool.query('UPDATE settings SET value=$1 WHERE tenant_id=$2 AND key=$3',
+            [settVal, tenantId, settKey]);
+        } else {
+          await pool.query('INSERT INTO settings(tenant_id,key,value) VALUES($1,$2,$3)',
+            [tenantId, settKey, settVal]);
+        }
+      } catch(settErr) { /* non-critical */ }
+
       res.json({ success: true, currentReading, openReading });
     } catch (e) {
       try { await client.query('ROLLBACK'); } catch {}
@@ -1804,11 +1835,15 @@ Pack decoding: "300x40ML-POU"=packQty:300,packSize:"40ml",packType:"Pouch",isCar
           const tank = tankRow.rows[0];
           if (!tank) continue;
 
-          if (tank.last_dip === today && tank.last_dip_source === 'admin_dip') {
-            console.log(`[tank-deduct] Skipping ${fuelType} — admin dip recorded today (${today}), dip takes precedence`);
-            skipped.push(fuelType);
-            continue;
-          }
+          // TANK-DEDUCT FIX: Removed the 'admin_dip blocks deduction' logic.
+          // Original FA-04 intended to prevent double-counting when admin records an
+          // END-of-day dip AND then shift close also deducts. But it was incorrectly
+          // skipping deductions when admin recorded a START-of-day dip (full tank),
+          // leaving the tank at 100% even after 1,000+ litres were dispensed.
+          //
+          // The idempotency key (checked above) already prevents duplicate deductions
+          // from network retries. Dip readings are authoritative physical measurements
+          // and should coexist with meter-based deductions independently.
 
           await client37.query(
             `UPDATE tanks
