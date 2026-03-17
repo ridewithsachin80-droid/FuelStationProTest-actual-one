@@ -45,10 +45,19 @@ function mt_getActiveTenant() {
 }
 function mt_setActiveTenant(tenant) {
   localStorage.setItem(MT_ACTIVE_KEY, JSON.stringify(tenant));
+  // CROSS-TENANT FIX: Cache tenant ID in a simple flat key so all modules
+  // (_tenantKey in employee.js, _scopedKey in api-client.js, _tenantPrefix in autosave.js)
+  // can scope their localStorage keys without needing to parse the full tenant JSON.
+  if (tenant && tenant.id) {
+    localStorage.setItem('fb_active_tenant_id', String(tenant.id));
+  } else {
+    localStorage.removeItem('fb_active_tenant_id');
+  }
 }
 function mt_clearActiveTenant() {
   localStorage.removeItem(MT_ACTIVE_KEY);
   localStorage.removeItem(MT_SUPER_KEY);
+  localStorage.removeItem('fb_active_tenant_id');
 }
 function mt_dbName(tenantId) {
   return 'FuelBunkPro_' + tenantId;

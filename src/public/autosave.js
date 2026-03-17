@@ -27,6 +27,15 @@
   const DEBOUNCE_MS    = 1200;                 // save 1.2s after last keystroke
   const STORAGE_PREFIX = 'fb_autosave_';
 
+  // CROSS-TENANT FIX: Scope autosave drafts per tenant so form drafts from
+  // Station A don't appear as restore prompts in Station B.
+  function _tenantPrefix() {
+    try {
+      const tid = localStorage.getItem('fb_active_tenant_id') || '';
+      return STORAGE_PREFIX + (tid ? tid + '_' : '');
+    } catch { return STORAGE_PREFIX; }
+  }
+
   // Titles of modals that must NOT be auto-saved (passwords, PINs, destructive actions,
   // and file-upload-only modals where there is nothing text-based to restore)
   const SKIP_TITLES = [
@@ -45,7 +54,7 @@
       .replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 60);
   }
 
-  function _storageKey(title) { return STORAGE_PREFIX + _slug(title); }
+  function _storageKey(title) { return _tenantPrefix() + _slug(title); }
 
   function _shouldSkip(title) {
     const t = (title || '').toLowerCase();
@@ -246,10 +255,11 @@
     },
     /** Debug: list all active drafts. */
     listDrafts: function() {
+      var prefix = _tenantPrefix();
       var out = [];
       for (var i = 0; i < localStorage.length; i++) {
         var k = localStorage.key(i);
-        if (k && k.startsWith(STORAGE_PREFIX)) {
+        if (k && k.startsWith(prefix)) {
           try {
             var d = JSON.parse(localStorage.getItem(k) || '{}');
             out.push({ title: d.title, savedAt: new Date(d.savedAt).toLocaleString() });
@@ -260,13 +270,14 @@
     },
     /** Clear every draft (e.g. on logout). */
     clearAll: function() {
+      var prefix = _tenantPrefix();
       var keys = [];
       for (var i = 0; i < localStorage.length; i++) {
         var k = localStorage.key(i);
-        if (k && k.startsWith(STORAGE_PREFIX)) keys.push(k);
+        if (k && k.startsWith(prefix)) keys.push(k);
       }
       keys.forEach(function(k) { localStorage.removeItem(k); });
-      console.log('[AutoSave] Cleared', keys.length, 'draft(s)');
+      console.log('[AutoSave] Cleared', keys.length, 'draft(s) for current station');
     },
   };
 

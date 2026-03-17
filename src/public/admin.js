@@ -384,7 +384,7 @@ function renderDashboard(D) {
         // Check for active employee session (same tab or cross-tab via localStorage)
         let activeSessions = [];
         try {
-          const raw = localStorage.getItem('fb_emp_session');
+          const raw = localStorage.getItem('fb_emp_session_' + (APP.tenant?.id || localStorage.getItem('fb_active_tenant_id') || ''));
           if (raw) {
             const s = verifyData(raw);
             if (s && s.active && s.user) {

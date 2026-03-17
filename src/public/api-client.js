@@ -237,55 +237,67 @@ const _OFFLINE_CACHE_KEY  = 'fb_api_cache';
 const _OFFLINE_QUEUE_KEY  = 'fb_offline_queue';
 const _OFFLINE_SNAP_KEY   = 'fb_data_snapshot';
 
+// CROSS-TENANT FIX: Generate tenant-scoped localStorage keys so data from
+// one station never leaks into another station's offline cache or queue.
+function _scopedKey(base) {
+  try {
+    const tid = localStorage.getItem('fb_active_tenant_id') || '';
+    return tid ? base + '_' + tid : base;
+  } catch { return base; }
+}
+function _offlineCacheKey()  { return _scopedKey(_OFFLINE_CACHE_KEY); }
+function _offlineQueueKey()  { return _scopedKey(_OFFLINE_QUEUE_KEY); }
+function _offlineSnapKey()   { return _scopedKey(_OFFLINE_SNAP_KEY); }
+
 // ── Read/write the localStorage cache (JSON blob keyed by API path) ──────────
 function _cacheGet(path) {
   try {
-    const store = JSON.parse(localStorage.getItem(_OFFLINE_CACHE_KEY) || '{}');
+    const store = JSON.parse(localStorage.getItem(_offlineCacheKey()) || '{}');
     return store[path];
   } catch { return undefined; }
 }
 function _cacheSet(path, value) {
   try {
-    const store = JSON.parse(localStorage.getItem(_OFFLINE_CACHE_KEY) || '{}');
+    const store = JSON.parse(localStorage.getItem(_offlineCacheKey()) || '{}');
     store[path] = value;
     // Keep cache size reasonable — evict entries older than 24 h
     const now = Date.now();
     Object.keys(store).forEach(k => {
       if (store[k]?._cachedAt && now - store[k]._cachedAt > 86400000) delete store[k];
     });
-    localStorage.setItem(_OFFLINE_CACHE_KEY, JSON.stringify(store));
+    localStorage.setItem(_offlineCacheKey(), JSON.stringify(store));
   } catch (e) { console.warn('[Offline] cache write failed:', e.message); }
 }
 
 // ── Offline write queue ───────────────────────────────────────────────────────
 function _queueGet() {
-  try { return JSON.parse(localStorage.getItem(_OFFLINE_QUEUE_KEY) || '[]'); }
+  try { return JSON.parse(localStorage.getItem(_offlineQueueKey()) || '[]'); }
   catch { return []; }
 }
 function _queuePush(op) {
   try {
     const q = _queueGet();
     q.push({ ...op, _queuedAt: Date.now() });
-    localStorage.setItem(_OFFLINE_QUEUE_KEY, JSON.stringify(q));
+    localStorage.setItem(_offlineQueueKey(), JSON.stringify(q));
     console.log('[Offline] Queued:', op.method, op.path);
   } catch (e) { console.warn('[Offline] queue write failed:', e.message); }
 }
 function _queueClear() {
-  try { localStorage.removeItem(_OFFLINE_QUEUE_KEY); } catch {}
+  try { localStorage.removeItem(_offlineQueueKey()); } catch {}
 }
 
 // ── Snapshot APP.data for offline reads ──────────────────────────────────────
 function saveDataSnapshot(data) {
   try {
     if (!data) return;
-    localStorage.setItem(_OFFLINE_SNAP_KEY, JSON.stringify({ data, savedAt: Date.now() }));
+    localStorage.setItem(_offlineSnapKey(), JSON.stringify({ data, savedAt: Date.now() }));
   } catch (e) { console.warn('[Offline] snapshot save failed:', e.message); }
 }
 // FIX F-04: Add stale-data age check — warn if snapshot is older than SNAPSHOT_STALE_MS (24h)
 // Previously: savedAt was stored but never read — stale prices shown silently for days.
 function loadDataSnapshot() {
   try {
-    const raw = localStorage.getItem(_OFFLINE_SNAP_KEY);
+    const raw = localStorage.getItem(_offlineSnapKey());
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     if (!parsed?.data) return null;
@@ -406,7 +418,7 @@ async function flushOfflineQueue() {
   // Only keep the ops that failed (preserve them for next retry)
   _queueClear();
   if (failedOps.length > 0) {
-    try { localStorage.setItem(_OFFLINE_QUEUE_KEY, JSON.stringify(failedOps)); } catch(e) {}
+    try { localStorage.setItem(_offlineQueueKey(), JSON.stringify(failedOps)); } catch(e) {}
   }
 
   window._offlineFlushing = false;
