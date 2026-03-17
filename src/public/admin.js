@@ -820,7 +820,7 @@ function renderSales(D, filter = 'all') {
 
   // ── Table rows ─────────────────────────────────────────────
   const isDayLocked = !!(APP.data?.dayLocks||{})[selDate];
-  const canEdit = !isDayLocked && ['owner'].includes((APP.userRole||'').toLowerCase());
+  const canEdit = !isDayLocked && rbac_role() === 'Owner';
 
   const rows = sorted.map(s => {
     const fuel = getFuel(s.fuelType);
@@ -7485,7 +7485,7 @@ window.openEditSaleModal = openEditSaleModal;
 
 async function saveEditedSale(saleId) {
   // Owner-only guard — employees and other admin roles cannot edit sales
-  if (!['owner'].includes((APP.userRole||'').toLowerCase())) {
+  if (rbac_role() !== 'Owner') {
     toast('❌ Only the Owner can edit sales records', 'error'); return;
   }
   const liters  = parseFloat(document.getElementById('editSaleLiters')?.value);
@@ -7548,7 +7548,7 @@ window.confirmDeleteSale = confirmDeleteSale;
 
 async function doDeleteSale(saleId) {
   // Owner-only guard — only Owner can delete sales
-  if (!['owner'].includes((APP.userRole||'').toLowerCase())) {
+  if (rbac_role() !== 'Owner') {
     toast('❌ Only the Owner can delete sales records', 'error'); return;
   }
   const reason = (document.getElementById('deleteSaleReason')?.value||'').trim();
