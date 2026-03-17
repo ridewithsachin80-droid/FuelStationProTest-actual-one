@@ -475,6 +475,13 @@ async function _fetchMgrData() {
     if (Array.isArray(data.lubesSales))    window._lubesSales    = data.lubesSales;
     if (Array.isArray(data.advances))      window._advancesData  = data.advances;
     if (data.payroll && typeof data.payroll === 'object') window._payrollSaved = data.payroll;
+    // FIX: also load pumps, tanks, prices into APP.data for voice calc + sale form
+    if (Array.isArray(data.pumps)  && data.pumps.length)  { if (!APP.data) APP.data = {}; APP.data.pumps  = data.pumps; }
+    if (Array.isArray(data.tanks)  && data.tanks.length)  { if (!APP.data) APP.data = {}; APP.data.tanks  = data.tanks; }
+    if (data.prices && typeof data.prices === 'object' && Object.keys(data.prices).length) {
+      if (!APP.data) APP.data = {};
+      APP.data.prices = data.prices;
+    }
     return true;
   } catch(e) {
     console.warn('[_fetchMgrData] failed:', e.message);
@@ -490,8 +497,12 @@ function emp_go(page) {
   empState.page = page;
 
   const isMgrPage = ['staff','payroll','lubes'].includes(page) && empState.user?.role === 'Shift Manager';
+  // FIX 2: Lubes tab - always fetch products from staff-data for any employee with lubes permission
+  // _fetchMgrData was previously only called for Shift Managers, leaving regular employees
+  // with an empty product list even when they have 'lubes' permission.
+  const needsLubesFetch = page === 'lubes' && emp_hasPerm('lubes') && !isMgrPage;
 
-  if (isMgrPage) {
+  if (isMgrPage || needsLubesFetch) {
     // Show whatever we have immediately (may be spinner if no data yet)
     renderPage();
     // Always refresh from server, then re-render with fresh data
@@ -2404,11 +2415,31 @@ function emp_applyVoiceParsed(p) {
     litEl.value = p.liters;
     litEl.dispatchEvent(new Event('input'));
     if (amtEl) { amtEl.value = ''; amtEl.dataset.manualAmt = ''; }
+    // FIX 1: Voice entry - force calculate amount after setting liters
+    // EMP_PRICES proxy reads APP.data.prices which is loaded from staff-data
+    setTimeout(() => {
+      const price = (APP.data?.prices || {})[empSaleFuel] || 0;
+      if (price > 0 && litEl && amtEl && !amtEl.dataset.manualAmt) {
+        const l = parseFloat(litEl.value) || 0;
+        if (l > 0) {
+          amtEl.value = (l * price).toFixed(2);
+          amtEl.dataset.manualAmt = '';
+        }
+      }
+    }, 50);
   } else if (p.amount && amtEl) {
     amtEl.value = p.amount;
     amtEl.dataset.manualAmt = p.amount;
     amtEl.dispatchEvent(new Event('input'));
     if (litEl) litEl.value = '';
+    // FIX 1: Voice entry - force calculate liters after setting amount
+    setTimeout(() => {
+      const price = (APP.data?.prices || {})[empSaleFuel] || 0;
+      if (price > 0 && litEl && amtEl && litEl.value === '') {
+        const a = parseFloat(amtEl.value) || 0;
+        if (a > 0) litEl.value = (a / price).toFixed(2);
+      }
+    }, 50);
   }
 
   const fuelLabel = p.fuel ? p.fuel.replace('_',' ') : '';
@@ -2822,7 +2853,26 @@ async function _emp_submit_inner() {
 
 function emp_share() {
   const uname = sanitize(empState.user?.name||'');
-  let t = `⛽ FuelBunk Pro — Report\n📅 ${emp_today()}\n👤 ${uname}\n\n📊 Summary:\n• Liters: ${fmt(emp_totalSold())} L\n• Revenue: ${cur(emp_totalRev())}\n• Sales: ${empState.sales.length}\n\n⛽ Pump-wise:\n`;
+  // FIX 3: Add payment mode breakdown to share message
+  const modes = ['cash','upi','card','credit'];
+  const modeEmoji = {cash:'💵',upi:'📱',card:'💳',credit:'🏢'};
+  const payLines = modes.map(m => {
+    const total = empState.sales.filter(s=>s.mode===m).reduce((a,s)=>a+s.amount,0);
+    return total > 0 ? `• ${modeEmoji[m]} ${m.charAt(0).toUpperCase()+m.slice(1)}: ${cur(total)}` : null;
+  }).filter(Boolean).join('\n');
+
+  // Cash denomination breakdown
+  let denomLine = '';
+  if (empState.cashHandover?.breakdown) {
+    const denoms = Object.entries(empState.cashHandover.breakdown)
+      .filter(([,c])=>c>0).sort((a,b)=>b[0]-a[0])
+      .map(([d,c])=>`₹${d}×${c}`).join(' ');
+    if (denoms) denomLine = `\n💴 Denominations: ${denoms}`;
+  }
+
+  let t = `⛽ FuelBunk Pro — Report\n📅 ${emp_today()}\n👤 ${uname}\n\n📊 Summary:\n• Liters: ${fmt(emp_totalSold())} L\n• Revenue: ${cur(emp_totalRev())}\n• Sales: ${empState.sales.length}\n`;
+  if (payLines) t += `\n💰 Payment:\n${payLines}${denomLine}\n`;
+  t += `\n⛽ Pump-wise:\n`;
   emp_myPumps().forEach(p => { const s=emp_pumpSold(p.id); if(s>0) t+=`• ${sanitize(p.name)} (${(EMP_FUEL[p.fuelType]||p.fuelType||'Fuel').split(' ')[0]}): ${fmt(s)} L\n`; });
   t += '\n— ' + (APP.data?.upiName || APP.tenant?.name || 'Fuel Station');
   if (navigator.share) navigator.share({title:'Report',text:t}).catch(()=>{});
@@ -2833,10 +2883,46 @@ function emp_print() {
   const ts=emp_totalSold(), tr=emp_totalRev();
   const uname = sanitize(empState.user?.name||'');
   const rows = emp_myPumps().map(p => {
-    const nr = p.nozzles.map(n => { const k=emp_key(p.id,n),o=empState.openReadings[k]||0,c=empState.closeReadings[k]||0; return `<tr><td style="padding-left:24px;color:#666">Nozzle ${n}</td><td style="text-align:right;font-family:monospace">${o.toFixed(1)}</td><td style="text-align:right;font-family:monospace">${c.toFixed(1)}</td><td style="text-align:right;font-family:monospace;font-weight:700">${(c-o).toFixed(1)}</td></tr>`; }).join('');
-    return `<tr style="background:#f8f9fa"><td style="font-weight:700">${sanitize(p.name)} — ${(EMP_FUEL[p.fuelType]||p.fuelType||'Fuel').split(' ')[0]}</td><td></td><td></td><td style="text-align:right;font-weight:700">${emp_pumpSold(p.id).toFixed(1)} L</td></tr>${nr}`;
+    const nr = p.nozzles.map(n => { const k=emp_key(p.id,n),o=empState.openReadings[k]||0,c=empState.closeReadings[k]||0; return '<tr><td style="padding-left:24px;color:#666">Nozzle '+n+'</td><td style="text-align:right;font-family:monospace">'+o.toFixed(1)+'</td><td style="text-align:right;font-family:monospace">'+c.toFixed(1)+'</td><td style="text-align:right;font-family:monospace;font-weight:700">'+(c-o).toFixed(1)+'</td></tr>'; }).join('');
+    return '<tr style="background:#f8f9fa"><td style="font-weight:700">'+sanitize(p.name)+' — '+(EMP_FUEL[p.fuelType]||p.fuelType||'Fuel').split(' ')[0]+'</td><td></td><td></td><td style="text-align:right;font-weight:700">'+emp_pumpSold(p.id).toFixed(1)+' L</td></tr>'+nr;
   }).join('');
-  const htmlContent = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Report</title><style>body{font-family:'Segoe UI',system-ui,sans-serif;padding:30px;font-size:12px;color:#333}h1{font-size:18px;text-align:center;margin-bottom:2px}h2{font-size:13px;text-align:center;color:#666;font-weight:400;margin-bottom:16px}.meta{text-align:center;font-size:11px;color:#888;margin-bottom:20px;padding-bottom:12px;border-bottom:2px solid #d4940f}table{width:100%;border-collapse:collapse;margin-bottom:16px}th{background:#f0f0f0;text-align:left;padding:8px;font-size:10px;text-transform:uppercase;border-bottom:2px solid #ddd}td{padding:6px 8px;border-bottom:1px solid #eee;font-size:12px}.total-row{background:#fff8e6;font-weight:700}.footer{text-align:center;font-size:10px;color:#aaa;margin-top:20px;border-top:1px solid #eee;padding-top:10px}</style></head><body><h1>${APP.data?.upiName || APP.tenant?.name || 'Fuel Station'}</h1><h2>Report — ${emp_today()}</h2><div class="meta">${emp_today()} · ${uname}</div><table><thead><tr><th>Pump / Nozzle</th><th style="text-align:right">Opening</th><th style="text-align:right">Closing</th><th style="text-align:right">Sold (L)</th></tr></thead><tbody>${rows}<tr class="total-row"><td>TOTAL</td><td></td><td></td><td style="text-align:right">${ts.toFixed(1)} L</td></tr></tbody></table><table><thead><tr><th>Metric</th><th style="text-align:right">Value</th></tr></thead><tbody><tr><td>Total Revenue</td><td style="text-align:right;font-weight:700">&#8377;${tr.toFixed(2)}</td></tr><tr><td>Sales</td><td style="text-align:right">${empState.sales.length}</td></tr><tr><td>Cash</td><td style="text-align:right">&#8377;${emp_totalCash().toFixed(2)}</td></tr></tbody></table><div class="footer">FuelBunk Pro — Auto Generated<br>Signature: ________________</div></body></html>`;
+
+  // FIX 3b: Build payment rows as a variable (avoids nested backtick syntax errors)
+  const cashAmt   = empState.sales.filter(s=>s.mode==='cash').reduce((a,s)=>a+s.amount,0);
+  const upiAmt    = empState.sales.filter(s=>s.mode==='upi').reduce((a,s)=>a+s.amount,0);
+  const cardAmt   = empState.sales.filter(s=>s.mode==='card').reduce((a,s)=>a+s.amount,0);
+  const creditAmt = empState.sales.filter(s=>s.mode==='credit').reduce((a,s)=>a+s.amount,0);
+  const payRows   = (cashAmt   > 0 ? '<tr><td style="font-weight:600">&#128181; Cash</td><td style="text-align:right;font-weight:600">&#8377;'+cashAmt.toFixed(2)+'</td></tr>'   : '')
+                  + (upiAmt    > 0 ? '<tr><td style="font-weight:600">&#128241; UPI</td><td style="text-align:right;font-weight:600">&#8377;'+upiAmt.toFixed(2)+'</td></tr>'    : '')
+                  + (cardAmt   > 0 ? '<tr><td style="font-weight:600">&#128179; Card</td><td style="text-align:right;font-weight:600">&#8377;'+cardAmt.toFixed(2)+'</td></tr>'  : '')
+                  + (creditAmt > 0 ? '<tr><td style="font-weight:600">&#127981; Credit</td><td style="text-align:right;font-weight:600">&#8377;'+creditAmt.toFixed(2)+'</td></tr>' : '');
+  const h = empState.cashHandover;
+  const denomRows = (h && h.breakdown && Object.keys(h.breakdown).length > 0)
+    ? '<tr><td colspan="2" style="padding-top:8px;font-weight:700;font-size:11px;text-transform:uppercase;color:#888">Cash Denominations</td></tr>'
+      + Object.entries(h.breakdown).filter(([,c])=>c>0).sort((a,b)=>b[0]-a[0])
+          .map(([d,c]) => '<tr><td style="padding-left:12px;color:#555">&#8377;'+d+' &times; '+c+'</td><td style="text-align:right">&#8377;'+(d*c).toFixed(2)+'</td></tr>').join('')
+    : '';
+  const htmlContent = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Report</title>'
+    + '<style>body{font-family:\'Segoe UI\',system-ui,sans-serif;padding:30px;font-size:12px;color:#333}'
+    + 'h1{font-size:18px;text-align:center;margin-bottom:2px}h2{font-size:13px;text-align:center;color:#666;font-weight:400;margin-bottom:16px}'
+    + '.meta{text-align:center;font-size:11px;color:#888;margin-bottom:20px;padding-bottom:12px;border-bottom:2px solid #d4940f}'
+    + 'table{width:100%;border-collapse:collapse;margin-bottom:16px}th{background:#f0f0f0;text-align:left;padding:8px;font-size:10px;text-transform:uppercase;border-bottom:2px solid #ddd}'
+    + 'td{padding:6px 8px;border-bottom:1px solid #eee;font-size:12px}.total-row{background:#fff8e6;font-weight:700}'
+    + '.footer{text-align:center;font-size:10px;color:#aaa;margin-top:20px;border-top:1px solid #eee;padding-top:10px}</style></head><body>'
+    + '<h1>' + (APP.data?.upiName || APP.tenant?.name || 'Fuel Station') + '</h1>'
+    + '<h2>Report &mdash; ' + emp_today() + '</h2>'
+    + '<div class="meta">' + emp_today() + ' &middot; ' + uname + '</div>'
+    + '<table><thead><tr><th>Pump / Nozzle</th><th style="text-align:right">Opening</th><th style="text-align:right">Closing</th><th style="text-align:right">Sold (L)</th></tr></thead><tbody>'
+    + rows
+    + '<tr class="total-row"><td>TOTAL</td><td></td><td></td><td style="text-align:right">' + ts.toFixed(1) + ' L</td></tr></tbody></table>'
+    + '<table><thead><tr><th>Metric</th><th style="text-align:right">Value</th></tr></thead><tbody>'
+    + '<tr><td>Total Revenue</td><td style="text-align:right;font-weight:700">&#8377;' + tr.toFixed(2) + '</td></tr>'
+    + '<tr><td>Sales</td><td style="text-align:right">' + empState.sales.length + '</td></tr>'
+    + payRows
+    + denomRows
+    + '</tbody></table>'
+    + '<div class="footer">FuelBunk Pro &mdash; Auto Generated<br>Signature: ________________</div>'
+    + '</body></html>';
   const empBlob = new Blob([htmlContent], { type: 'text/html;charset=utf-8' });
   const empUrl = URL.createObjectURL(empBlob);
   const rpw = window.open(empUrl, '_blank');

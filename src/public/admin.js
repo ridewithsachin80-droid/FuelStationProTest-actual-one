@@ -3947,7 +3947,14 @@ function renderLubes(D) {
       const isExpired = p.expiryDate && p.expiryDate < today;
       const expiringSoon = p.expiryDate && !isExpired && p.expiryDate <= new Date(Date.now()+30*86400000).toISOString().slice(0,10);
       const stockBg  = isLow ? 'rgba(239,68,68,0.08)' : '';
-      const margin   = p.sellingPrice && p.costPrice ? (((p.sellingPrice-p.costPrice)/p.sellingPrice)*100).toFixed(0) : '—';
+      // FIX 4: For carton-packed products, cost is per CARTON but selling is per PIECE
+      // Must normalise to per-piece before computing margin, otherwise get -1800% nonsense.
+      const costPc4  = (p.isCartonPacked && p.qtyPerCarton > 0)
+                         ? (p.costPrice / p.qtyPerCarton)
+                         : (p.costPrice || 0);
+      const margin   = p.sellingPrice && costPc4
+                         ? (((p.sellingPrice - costPc4) / p.sellingPrice) * 100).toFixed(0)
+                         : '—';
       return `<tr style="background:${stockBg}">
         <td>
           <div class="fw-700" style="font-size:13px;color:var(--text-0)">${sanitize(p.name)}</div>
@@ -3963,7 +3970,11 @@ function renderLubes(D) {
           ${isLow?badge('LOW','badge-red'):''}
           ${isExpired?badge('EXPIRED','badge-red'):expiringSoon?badge('EXPIRING','badge-accent'):''}
         </td>
-        <td class="r mono">${cur(p.costPrice||0)}</td>
+        <td class="r mono" title="${p.isCartonPacked&&p.qtyPerCarton>0?'Carton: '+cur(p.costPrice||0)+' (per pc: '+cur((p.costPrice||0)/(p.qtyPerCarton||1))+')':''}">${
+          p.isCartonPacked && p.qtyPerCarton > 0
+            ? cur((p.costPrice||0) / p.qtyPerCarton) + '<div style=\"font-size:9px;color:var(--text-3)\">carton: ' + cur(p.costPrice||0) + '</div>'
+            : cur(p.costPrice||0)
+        }</td>
         <td class="r mono fw-700" style="color:var(--accent-light)">${cur(p.sellingPrice||0)}</td>
         <td class="r" style="font-size:11px;color:${parseInt(margin)>=20?'var(--green)':'var(--orange)'}">${margin}%</td>
         <td style="font-size:11px;color:var(--text-3)">${p.gstPct||0}%</td>
