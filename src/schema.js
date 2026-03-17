@@ -651,8 +651,6 @@ async function initDatabase() {
   // ── Non-breaking column additions for existing deployments ─────────────────
   // These ADD COLUMN IF NOT EXISTS statements are safe to run repeatedly.
   const safeAlters = [
-    "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS omc TEXT DEFAULT 'iocl'",
-
     // ── PUMPS TABLE MIGRATIONS ─────────────────────────────────────────────
     // current_reading and reading_updated_at were used in the reading endpoint
     // but never added to the CREATE TABLE. Add them safely now.
@@ -680,6 +678,10 @@ async function initDatabase() {
     "ALTER TABLE expenses ADD COLUMN IF NOT EXISTS approved_by TEXT DEFAULT ''",
     // NOTE: 'desc' is a PostgreSQL reserved keyword — do NOT add as column name.
     // The WRITE_ALIAS maps client 'desc' → 'description' column which already exists.
+
+    // ── TENANTS TABLE MIGRATIONS ───────────────────────────────────────────
+    // Add OMC field — existing stations default to 'iocl' (no data loss)
+    "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS omc TEXT DEFAULT 'iocl'",
   ];
   for (const sql of safeAlters) {
     try { await pool.query(sql); } catch(e) {

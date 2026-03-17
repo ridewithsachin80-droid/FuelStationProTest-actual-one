@@ -7699,7 +7699,7 @@ async function saveSale() {
 
 // ── TANK MANAGEMENT ──────────────────────────────────────────
 
-const TANK_CAPACITIES = [10000, 16000, 20000];
+const TANK_CAPACITIES = [10000, 15000, 16000, 20000];
 
 function openAddTankModal() {
   if (subReadOnlyGuard()) return;
@@ -7715,7 +7715,7 @@ function openAddTankModal() {
   ).join('');
 
   const capOpts = TANK_CAPACITIES.map((c, i) => {
-    const labels = {10000:'Standard',16000:'Medium',20000:'Large'};
+    const labels = {10000:'Standard',15000:'BPCL 15K',16000:'Medium',20000:'Large'};
     return `<label style="flex:1;cursor:pointer">
       <input type="radio" name="newTankCapR" value="${c}" ${i===0?'checked':''} style="display:none">
       <div class="tank-cap-opt" id="capOpt_${c}" style="border:2px solid ${i===0?'var(--accent)':'var(--border)'};background:${i===0?'rgba(212,148,15,0.1)':'var(--bg-0)'};border-radius:10px;padding:14px 8px;text-align:center;transition:all 0.15s" onclick="selectTankCap(${c})">
@@ -7827,7 +7827,7 @@ function openEditTankModal(tankId) {
   ).join('');
 
   const capOpts = TANK_CAPACITIES.map(c => {
-    const labels = {10000:'Standard',16000:'Medium',20000:'Large'};
+    const labels = {10000:'Standard',15000:'BPCL 15K',16000:'Medium',20000:'Large'};
     const isSel = c === tank.capacity;
     return `<label style="flex:1;cursor:pointer">
       <input type="radio" name="editTankCapR" value="${c}" ${isSel?'checked':''} style="display:none">
@@ -8019,6 +8019,7 @@ function _tankChartType(tank) {
   if (!tank) return null;
   const cap = parseInt(tank.capacity);
   if (cap === 10000) return '10K';
+  if (cap === 15000) return '15K';
   if (cap === 20000) return '20K';
   return null;
 }
@@ -8028,20 +8029,26 @@ function _chartLabel(type) {
   const OMC_NAMES = { iocl:'IOCL', bpcl:'BPCL', hpcl:'HPCL', mrpl:'MRPL', private:'Custom' };
   const omc = (APP?.tenant?.omc || 'iocl').toLowerCase();
   const omcName = OMC_NAMES[omc] || 'IOCL';
-  // Check if the OMC has its own dip table; if not warn about fallback to IOCL
+  // Check if the OMC has its own dip table
   const HAS_TABLE = {
-    bpcl: typeof BPCL_DIP_10K !== 'undefined' && BPCL_DIP_10K,
+    bpcl: (typeof BPCL_DIP_15K !== 'undefined' && BPCL_DIP_15K) || (typeof BPCL_DIP_20K !== 'undefined' && BPCL_DIP_20K),
     hpcl: typeof HPCL_DIP_10K !== 'undefined' && HPCL_DIP_10K,
     mrpl: typeof MRPL_DIP_10K !== 'undefined' && MRPL_DIP_10K,
   };
-  const is10K = type === '10K';
-  const size  = is10K ? '10,000L' : '20,000L';
-  const cm    = is10K ? '1–194 cm' : '1–210 cm';
+  const sizeLabels = { '10K':'10,000L', '15K':'15,000L', '20K':'20,000L' };
+  const size = sizeLabels[type] || type;
+  // OMC-specific cm ranges
+  const cmRanges = {
+    bpcl: { '10K': '1–194 cm', '15K': '1–200 cm', '20K': '1–200 cm' },
+    iocl: { '10K': '1–194 cm', '15K': '1–194 cm', '20K': '1–210 cm' },
+  };
+  const cm = (cmRanges[omc] || cmRanges.iocl)[type] || '1–200 cm';
   if (omc === 'iocl' || !HAS_TABLE[omc]) {
     if (omc !== 'iocl' && !HAS_TABLE[omc]) {
       return '⚠ ' + omcName + ' chart pending — using IOCL chart as fallback (' + cm + ')';
     }
     if (type === '10K') return '📊 IOCL 10,000L Chart (1–194 cm)';
+    if (type === '15K') return '📊 IOCL 10,000L Chart (fallback — no 15K IOCL chart)';
     if (type === '20K') return '📊 IOCL 20,000L Chart (1–210 cm)';
   }
   return '📊 ' + omcName + ' ' + size + ' Chart (' + cm + ')';
@@ -8050,8 +8057,16 @@ function _chartLabel(type) {
 function _cmRange(type) {
   if (!type) return null;
   const k = type.toLowerCase();
-  if (k.endsWith('_10k') || k === '10k') return { min: 1, max: 194, placeholder: 'e.g. 87' };
-  if (k.endsWith('_20k') || k === '20k') return { min: 1, max: 210, placeholder: 'e.g. 105' };
+  const omc = (APP?.tenant?.omc || 'iocl').toLowerCase();
+  if (k === '15k') return { min: 1, max: 200, placeholder: 'e.g. 90' };
+  // BPCL 10K/20K ranges (kept for completeness, 15K is the BPCL standard now)
+  if (k.endsWith('_10k') || k === '10k') {
+    return { min: 1, max: 194, placeholder: 'e.g. 87' };
+  }
+  if (k.endsWith('_20k') || k === '20k') {
+    if (omc === 'bpcl') return { min: 1, max: 200, placeholder: 'e.g. 105' };
+    return { min: 1, max: 210, placeholder: 'e.g. 105' };
+  }
   return null;
 }
 
@@ -8069,7 +8084,8 @@ function openDipModal(preselect) {
   const tankOpts = APP.data.tanks.map(t => {
     const tf = getFuel(t.fuelType);
     const ct = _tankChartType(t);
-    const tag = ct ? ` 📊 IOCL ${ct}` : '';
+    const omc = (APP?.tenant?.omc || 'iocl').toUpperCase();
+    const tag = ct ? ` 📊 ${omc} ${ct}` : '';
     return `<option value="${t.id}" ${t.id==firstTank?.id?'selected':''}">Tank ${t.id} — ${tf.short}${tag} (${fmt(t.capacity)}L)</option>`;
   }).join('');
 
@@ -8192,19 +8208,25 @@ function updateDipPreview() {
   let row = null, total = null;
 
   if (ct === '10K') {
-    if (cm < 1 || cm > 194) { preview.style.display = 'none'; return; }
-    const _dipTable10 = (typeof BPCL_DIP_10K !== 'undefined' && BPCL_DIP_10K && APP?.tenant?.omc === 'bpcl') ? BPCL_DIP_10K
-                      : (typeof HPCL_DIP_10K !== 'undefined' && HPCL_DIP_10K && APP?.tenant?.omc === 'hpcl') ? HPCL_DIP_10K
+    const _maxCm10 = 194;
+    if (cm < 1 || cm > _maxCm10) { preview.style.display = 'none'; return; }
+    const _dipTable10 = (typeof HPCL_DIP_10K !== 'undefined' && HPCL_DIP_10K && APP?.tenant?.omc === 'hpcl') ? HPCL_DIP_10K
                       : (typeof MRPL_DIP_10K !== 'undefined' && MRPL_DIP_10K && APP?.tenant?.omc === 'mrpl') ? MRPL_DIP_10K
                       : IOCL_DIP_10K;
     row = _dipTable10[cm];
+  } else if (ct === '15K') {
+    // BPCL 15,000L official chart — 1 to 200cm
+    if (cm < 1 || cm > 200) { preview.style.display = 'none'; return; }
+    const _dipTable15 = (typeof BPCL_DIP_15K !== 'undefined' && BPCL_DIP_15K) ? BPCL_DIP_15K : IOCL_DIP_10K;
+    row = _dipTable15[cm];
   } else if (ct === '20K') {
-    // Show below-range notice if cm < 127
-    if (cm < IOCL_20K_MIN_CM) {
+    const _minCm20 = IOCL_20K_MIN_CM;
+    const _maxCm20 = APP?.tenant?.omc === 'bpcl' ? 200 : IOCL_20K_MAX_CM;
+    if (cm < _minCm20) {
         preview.style.display = 'none';
       return;
     }
-    if (cm > IOCL_20K_MAX_CM) { preview.style.display = 'none'; return; }
+    if (cm > _maxCm20) { preview.style.display = 'none'; return; }
     const _dipTable20 = (typeof BPCL_DIP_20K !== 'undefined' && BPCL_DIP_20K && APP?.tenant?.omc === 'bpcl') ? BPCL_DIP_20K
                       : (typeof HPCL_DIP_20K !== 'undefined' && HPCL_DIP_20K && APP?.tenant?.omc === 'hpcl') ? HPCL_DIP_20K
                       : (typeof MRPL_DIP_20K !== 'undefined' && MRPL_DIP_20K && APP?.tenant?.omc === 'mrpl') ? MRPL_DIP_20K
@@ -8220,10 +8242,11 @@ function updateDipPreview() {
   const pct = Math.min(100, Math.round(total / capacity * 100));
   const barCol = pct < 20 ? 'var(--red)' : pct < 40 ? '#f97316' : 'var(--green)';
 
+  const _omcLabel = { iocl:'IOCL', bpcl:'BPCL', hpcl:'HPCL', mrpl:'MRPL' }[APP?.tenant?.omc || 'iocl'] || 'IOCL';
   volEl.textContent = total.toLocaleString('en-IN', { maximumFractionDigits: 2 });
   fmlaEl.innerHTML = mm > 0 && row.diff
     ? `${cm}cm = ${row.vol}L + ${mm}mm × ${row.diff} L/mm = <strong>+${mmAdd.toFixed(2)}L</strong>`
-    : `${cm}cm → ${row.vol}L (IOCL ${ct} chart)`;
+    : `${cm}cm → ${row.vol}L (${_omcLabel} ${ct} chart)`;
   pctEl.textContent = pct + '% full';
   pctEl.style.background = pct < 20 ? 'rgba(239,68,68,0.12)' : pct < 40 ? 'rgba(249,115,22,0.12)' : 'rgba(34,197,94,0.12)';
   pctEl.style.color = barCol;
