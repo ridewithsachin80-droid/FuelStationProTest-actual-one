@@ -5306,12 +5306,21 @@ function renderGSTTab(D) {
   const fuelSales = D.sales.filter(s => { const d=(s.date||'').slice(0,10); return d>=startDate&&d<=endDate; });
   const lubeSales = (window._lubesSales||[]).filter(s => s.date>=startDate&&s.date<=endDate);
 
-  // Build GSTR-1 B2C summary by HSN+GST rate
+  // ── IMPORTANT: Petrol, Diesel, ATF, Natural Gas and Crude Oil are EXCLUDED from GST
+  // in India (Article 279A of the Constitution). They are taxed under Central Excise
+  // Duty + State VAT / Local Sales Tax (LST). ONLY lubes/products fall under GST.
+  // Fuel sales are shown separately below under "Excluded from GST — Under State VAT/LST"
+  const GST_EXCLUDED_FUELS = new Set(['petrol', 'diesel', 'premium_petrol', 'atf', 'cng', 'lng']);
+  const fuelGSTSales = fuelSales.filter(s => !GST_EXCLUDED_FUELS.has((s.fuelType||'').toLowerCase()));
+  const fuelLSTSales = fuelSales.filter(s =>  GST_EXCLUDED_FUELS.has((s.fuelType||'').toLowerCase()));
+
+  // Build GSTR-1 B2C summary by HSN+GST rate (lubes + non-excluded fuels only)
   // isInterState flag: sale.interState = true → IGST instead of CGST+SGST
   const gstSummary = {};
   const taxRates   = D.fuelTaxRates || [];
 
-  fuelSales.forEach(s => {
+  // Non-excluded fuel sales (CNG etc.) — rare but possible
+  fuelGSTSales.forEach(s => {
     const tr = taxRates.find(t => t.fuelType === s.fuelType) || {};
     const gstPct = tr.rate ? parseFloat(tr.rate) : 0;
     const isIGST = !!s.interState;
@@ -5380,15 +5389,44 @@ function renderGSTTab(D) {
     </div>` : ''}
 
     <div class="g g-auto-sm gap-12 mb-14">
-      ${statCard('Taxable Value', cur(totalTaxable), 'excl. GST', '📋')}
+      ${statCard('Taxable Value', cur(totalTaxable), 'excl. GST (lubes only)', '📋')}
       ${statCard('CGST', cur(totalCGST), 'central GST', '🏛️')}
       ${statCard('SGST', cur(totalSGST), 'state GST', '🏛️')}
       ${totalIGST > 0 ? statCard('IGST', cur(totalIGST), 'inter-state', '🔀') : ''}
       ${statCard('Total Tax', cur(totalGST), 'CGST + SGST' + (totalIGST>0?' + IGST':''), '🧾')}
     </div>
 
+    <div class="card mb-14" style="border-color:rgba(234,179,8,0.3);background:rgba(234,179,8,0.03)">
+      <div class="card-head" style="border-bottom:1px solid rgba(234,179,8,0.2)">
+        <h4 style="color:var(--yellow)">⚠️ Excluded from GST — Under State VAT / Local Sales Tax (LST)</h4>
+      </div>
+      <div class="card-body">
+        <p style="font-size:12px;color:var(--text-3);margin-bottom:10px">Petrol, Diesel, Aviation Fuel, CNG and Crude Oil are <strong>constitutionally excluded from GST</strong> (Article 279A). They are taxed under Central Excise Duty + State VAT/LST and must be reported to your state tax authority separately — NOT in GSTR-1.</p>
+        ${(() => {
+          const lstByFuel = {};
+          fuelLSTSales.forEach(s => {
+            const ft = s.fuelType || 'petrol';
+            if (!lstByFuel[ft]) lstByFuel[ft] = { name: getFuel(ft).name, total: 0, liters: 0, txns: 0 };
+            lstByFuel[ft].total  += s.amount || 0;
+            lstByFuel[ft].liters += s.liters || 0;
+            lstByFuel[ft].txns   += 1;
+          });
+          const rows = Object.values(lstByFuel).map(f =>
+            `<tr><td style="font-weight:600">${sanitize(f.name)}</td><td class="r mono">${fmt(f.liters)} L</td><td class="r mono">${cur(f.total)}</td><td class="r" style="font-size:11px;color:var(--text-3)">${f.txns} txns</td></tr>`
+          ).join('');
+          const lstTotal = Object.values(lstByFuel).reduce((a,f)=>a+f.total,0);
+          if (!rows) return '<p style="font-size:12px;color:var(--text-3)">No fuel sales in this period.</p>';
+          return `<div class="tbl-wrap"><table>
+            <thead><tr><th>Fuel</th><th class="r">Liters</th><th class="r">Revenue</th><th class="r">Txns</th></tr></thead>
+            <tbody>${rows}</tbody>
+            <tfoot><tr style="font-weight:700;border-top:2px solid rgba(234,179,8,0.3)"><td>TOTAL (LST)</td><td></td><td class="r mono" style="color:var(--yellow)">${cur(lstTotal)}</td><td></td></tr></tfoot>
+          </table></div>`;
+        })()}
+      </div>
+    </div>
+
     <div class="card mb-14">
-      <div class="card-head"><h4>HSN-wise Summary</h4></div>
+      <div class="card-head"><h4>HSN-wise Summary — Lubes & Products (GST)</h4></div>
       <div class="card-body"><div class="tbl-wrap"><table>
         <thead><tr><th>Supply</th><th class="r">HSN</th><th class="r">GST%</th><th class="r">Taxable</th><th class="r">CGST</th><th class="r">SGST</th>${hasIGST ? '<th class="r">IGST</th>' : ''}<th class="r">Total Tax</th><th class="r">Gross</th><th class="r">Txns</th></tr></thead>
         <tbody>${gstRows}</tbody>
@@ -10842,6 +10880,20 @@ function renderInsights(D) {
         action:'Schedule fuel purchase within the next 24 hours.' });
     }
   });
+
+  // ── Rule 10: Lubes & Products low stock ───────────────────────────────────
+  const lowStockProds = (window._lubesProducts||[]).filter(p => p.active !== false && (p.minStock||0) > 0 && (p.stock||0) <= (p.minStock||5));
+  const outOfStockProds = (window._lubesProducts||[]).filter(p => p.active !== false && (p.stock||0) <= 0);
+  if (outOfStockProds.length > 0) {
+    alerts.push({ sev:'critical', icon:'🛢️', title:`${outOfStockProds.length} lube product${outOfStockProds.length>1?'s':''} out of stock`,
+      msg: outOfStockProds.map(p => sanitize(p.name)).join(', ') + '.',
+      action: 'Place a purchase order or restock from existing inventory.' });
+  }
+  if (lowStockProds.length > 0) {
+    alerts.push({ sev:'warning', icon:'🛢️', title:`${lowStockProds.length} lube product${lowStockProds.length>1?'s':''} below minimum stock`,
+      msg: lowStockProds.map(p => `${sanitize(p.name)}: ${p.stock} ${p.unit||''} (min ${p.minStock})`).join(' · ') + '.',
+      action: 'Review Lubes & Products → Low Stock tab and reorder.' });
+  }
 
   // Render
   const sevOrd = {critical:0, warning:1, info:2};
