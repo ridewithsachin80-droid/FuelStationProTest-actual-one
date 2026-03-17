@@ -229,6 +229,7 @@
       var _origLogout = window.appLogout;
       window.appLogout = async function() {
         window.autoSave.clearAll();
+        window._backfillDone = false; // reset so next login re-checks correctly
         return _origLogout.apply(this, arguments);
       };
     }

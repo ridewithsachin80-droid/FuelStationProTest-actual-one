@@ -4121,29 +4121,40 @@ async function loadData() {
         ];
 
     // ── Backfill: ensure every fuel purchase has a matching expense entry ──
-    // This handles purchases entered before the auto-expense feature was added
-    const existingPurchaseExpIds = new Set(
-      APP.data.expenses.filter(e => e.source === 'fuel_purchase').map(e => e.purchaseId)
-    );
-    const missingPurchases = APP.data.fuelPurchases.filter(p => !existingPurchaseExpIds.has(p.id));
-    if (missingPurchases.length > 0) {
-      const newExpenses = missingPurchases.map(p => {
-        const fi = getFuel(p.fuelType) || { short: p.fuelType };
-        return {
-          id: p.id + 0.1, // stable ID derived from purchase
-          date: p.date || today(),
-          category: 'Fuel Purchase',
-          desc: `${fi.short} — ${fmt(p.liters)}L @ ₹${p.rate}/L${p.invoice ? ' · ' + p.invoice : ''}`,
-          amount: p.total || (p.liters * p.rate),
-          source: 'fuel_purchase',
-          purchaseId: p.id,
-        };
-      });
-      for (const e of newExpenses) {
-        APP.data.expenses.push(e);
-        db.add('expenses', e).catch(() => {});
+    // This handles purchases entered before the auto-expense feature was added.
+    // DUPLICATE FIX: The expenses table has no dedicated purchase_id column — source/purchaseId
+    // are stored in data_json. Coerce both sides to String for comparison to avoid
+    // numeric vs string mismatch (PostgreSQL SERIAL vs JS timestamp integer).
+    // Also guard with a session flag so this only runs ONCE per login — repeated
+    // loadData() calls (tab switches, refreshes) were adding duplicates on every call.
+    if (!window._backfillDone) {
+      window._backfillDone = true;
+      const existingPurchaseExpIds = new Set(
+        APP.data.expenses
+          .filter(e => e.source === 'fuel_purchase' && (e.purchaseId !== undefined && e.purchaseId !== null))
+          .map(e => String(e.purchaseId))
+      );
+      const missingPurchases = APP.data.fuelPurchases.filter(p => !existingPurchaseExpIds.has(String(p.id)));
+      if (missingPurchases.length > 0) {
+        console.log('[Backfill] Creating expense entries for', missingPurchases.length, 'purchase(s) missing from expenses table');
+        const newExpenses = missingPurchases.map(p => {
+          const fi = getFuel(p.fuelType) || { short: p.fuelType };
+          return {
+            id: p.id + 0.1, // stable in-memory ID — DB will assign its own SERIAL id
+            date: p.date || today(),
+            category: 'Fuel Purchase',
+            desc: `${fi.short} — ${fmt(p.liters)}L @ ₹${p.rate}/L${p.invoice ? ' · ' + p.invoice : ''}`,
+            amount: p.total || (p.liters * p.rate),
+            source: 'fuel_purchase',
+            purchaseId: p.id,
+          };
+        });
+        for (const e of newExpenses) {
+          APP.data.expenses.push(e);
+          db.add('expenses', e).catch(() => {});
+        }
+        APP.data.expenses.sort((a, b) => (b.id || 0) - (a.id || 0));
       }
-      APP.data.expenses.sort((a, b) => (b.id || 0) - (a.id || 0));
     }
     // ── Write employee cache for login screen (survives logout + new sessions) ──
     try {

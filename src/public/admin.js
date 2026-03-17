@@ -1443,7 +1443,21 @@ function renderFinance(D) {
   }).join('');
 
   // Merge all expenses (incl. fuel purchases auto-entries) sorted by date desc
-  const allExpRows = [...(D.expenses || [])].sort((a, b) => (b.id || 0) - (a.id || 0));
+  // DUPLICATE FIX: Deduplicate fuel purchase expense entries by purchaseId.
+  // The backfill in loadData() could have created duplicate DB rows on earlier versions.
+  // We deduplicate here at render time so the display is always correct even if
+  // duplicates exist in the DB (they will be cleaned up on next save/delete).
+  const seenPurchaseIds = new Set();
+  const allExpRows = [...(D.expenses || [])]
+    .sort((a, b) => (b.id || 0) - (a.id || 0))
+    .filter(e => {
+      if (e.source === 'fuel_purchase' && e.purchaseId != null) {
+        const key = String(e.purchaseId);
+        if (seenPurchaseIds.has(key)) return false; // skip duplicate
+        seenPurchaseIds.add(key);
+      }
+      return true;
+    });
   const expRows = allExpRows.length > 0
     ? allExpRows.map(e => {
         const isFuel = (e.category || '') === 'Fuel Purchase';
