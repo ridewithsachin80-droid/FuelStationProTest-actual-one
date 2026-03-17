@@ -217,6 +217,49 @@ async function startServer() {
     }
   });
 
+  // ── ONE-TIME CLEANUP: Remove duplicate fuel purchase expense entries ──────
+  // Visit /api/cleanup/dedup-expenses?secret=fuelbunk2026 once to fix duplicates.
+  // This endpoint is safe to call multiple times — it is idempotent.
+  // Remove or comment out after use.
+  app.get('/api/cleanup/dedup-expenses', async (req, res) => {
+    if (req.query.secret !== 'fuelbunk2026') {
+      return res.status(403).json({ error: 'Invalid secret' });
+    }
+    try {
+      // Count before
+      const before = await pool.query(
+        `SELECT COUNT(*) as total FROM expenses
+         WHERE data_json::jsonb->>'source' = 'fuel_purchase'`
+      );
+      // Delete duplicates — keep the one with the lowest id for each purchaseId
+      const result = await pool.query(`
+        DELETE FROM expenses e1
+        USING expenses e2
+        WHERE e1.tenant_id = e2.tenant_id
+          AND e1.data_json::jsonb->>'purchaseId' = e2.data_json::jsonb->>'purchaseId'
+          AND e1.data_json::jsonb->>'source' = 'fuel_purchase'
+          AND e2.data_json::jsonb->>'source' = 'fuel_purchase'
+          AND e1.id > e2.id
+      `);
+      // Count after
+      const after = await pool.query(
+        `SELECT COUNT(*) as total FROM expenses
+         WHERE data_json::jsonb->>'source' = 'fuel_purchase'`
+      );
+      res.json({
+        success: true,
+        message: 'Duplicate fuel purchase expense entries removed',
+        before: parseInt(before.rows[0].total),
+        after: parseInt(after.rows[0].total),
+        deleted: result.rowCount,
+      });
+    } catch (e) {
+      console.error('[Cleanup] dedup-expenses error:', e.message);
+      res.status(500).json({ error: e.message });
+    }
+  });
+  // ── END ONE-TIME CLEANUP ──────────────────────────────────────────────────
+
   // PRODUCTION ENHANCEMENT: Detailed health check with metrics
   // Provides comprehensive system status for monitoring and alerting
   app.get('/api/health/detailed', async (req, res) => {
