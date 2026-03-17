@@ -223,6 +223,17 @@ async function startServer() {
     }
   });
 
+  // ── QA Test Dashboard — served from same origin (avoids CORS) ──────────
+  // Access: /qa-test?secret=fuelbunk2026
+  // Served from same origin so fetch() calls to /api/* work without CORS issues.
+  app.get('/qa-test', (req, res) => {
+    if (req.query.secret !== 'fuelbunk2026') {
+      return res.status(403).send('<h2>403 — Add ?secret=fuelbunk2026 to access QA dashboard</h2>');
+    }
+    res.sendFile(path.join(__dirname, 'public', 'qa-test.html'));
+  });
+  // ── END QA TEST DASHBOARD ────────────────────────────────────────────────
+
   // ── ONE-TIME CLEANUP: Unlock super admin (clear login_attempts lockout) ──
   // Visit /api/cleanup/unlock-admin?secret=fuelbunk2026 to clear lockout instantly.
   app.get('/api/cleanup/unlock-admin', async (req, res) => {
