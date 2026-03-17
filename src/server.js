@@ -1901,8 +1901,9 @@ Pack decoding: "300x40ML-POU"=packQty:300,packSize:"40ml",packType:"Pouch",isCar
         [tenantId, fromDate, toDate]
       );
       const tankRows = await pool.query(
-        // SCHEMA FIX: old schema uses 'current_level', new uses 'current'
-        'SELECT fuel_type, COALESCE(current_level, current, 0) as current_level, capacity FROM tanks WHERE tenant_id=$1', [tenantId]
+        // tanks table always uses current_level (confirmed in schema.js)
+        // NOTE: 'current' is a PostgreSQL reserved word — never use it bare in SQL
+        'SELECT fuel_type, current_level, capacity FROM tanks WHERE tenant_id=$1', [tenantId]
       );
       const empRows = await pool.query(
         'SELECT COUNT(*) AS cnt FROM employees WHERE tenant_id=$1 AND active=1', [tenantId]
