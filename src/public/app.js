@@ -318,9 +318,6 @@ async function doResetEmployeePin() {
   const emp = APP.data.employees.find(e => parseInt(e.id) === parseInt(empId));
   if (!emp) { toast('Employee not found', 'error'); return; }
   try {
-    // PIN-HASH FIX: Was computing SHA-256(pin) and calling db.put() — generic upsert
-    // stores whatever hash the client sends, but server verifies with bcrypt.compare().
-    // Now call the dedicated set-pin endpoint which bcrypts server-side.
     if (db && typeof db.setEmployeePin === 'function') {
       await db.setEmployeePin(empId, pin);
     } else {
@@ -329,16 +326,8 @@ async function doResetEmployeePin() {
       emp.pinHash = hash;
       await db.put('employees', emp);
     }
-    // Store SHA-256 locally for offline verification fallback
-    if (typeof sha256 === 'function') {
-      const localHash = await sha256(pin);
-      emp.pinHash = localHash;
-      if (typeof loadEmpPins === 'function') {
-        const pins = loadEmpPins();
-        pins[empId] = localHash;
-        if (typeof saveEmpPins === 'function') saveEmpPins(pins);
-      }
-    }
+    // PERMANENT FIX: Do not write SHA-256 to fb_emp_pins.
+    // Online login always verifies via server (bcrypt). No local hash cache needed.
     closeModal();
     toast(`PIN reset for ${emp.name}`, 'success');
     renderPage();

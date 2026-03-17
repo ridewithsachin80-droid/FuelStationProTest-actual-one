@@ -9745,12 +9745,8 @@ async function addEmployee() {
       if (db && typeof db.setEmployeePin === 'function') {
         await db.setEmployeePin(newEmp.id, defaultPin);
       }
-      // Also store SHA-256 locally for offline PIN fallback (verify-pin falls back to this)
-      const pinHash = await sha256(defaultPin);
-      newEmp.pinHash = pinHash;
-      const pins = loadEmpPins();
-      pins[newEmp.id] = pinHash;
-      saveEmpPins(pins);
+      // PERMANENT FIX: Do not write SHA-256 to fb_emp_pins — stale after bcrypt migration.
+      // Online login always verifies via server. Offline uses '__server__' sentinel.
     } catch(pinErr) {
       console.warn('[addEmployee] Default PIN setup failed:', pinErr.message);
     }
@@ -9896,21 +9892,18 @@ async function saveEmployeePIN() {
     if (db && typeof db.setEmployeePin === 'function') {
       await db.setEmployeePin(empId, pin);
     } else {
-      // Fallback: also store SHA-256 locally for offline verification only
+      // Fallback: store SHA-256 locally for offline verification only
       const hash = await sha256(pin);
       emp.pinHash = hash;
       await db.put('employees', emp);
     }
-    // Store SHA-256 locally for offline PIN fallback
-    const hash = await sha256(pin);
-    emp.pinHash = hash;
-    const pins = loadEmpPins();
-    pins[empId] = hash;
-    saveEmpPins(pins);
+    // PERMANENT FIX: Do NOT write SHA-256 to fb_emp_pins anymore.
+    // fb_emp_pins stores SHA-256 hashes which are stale after bcrypt migration.
+    // The login flow now always verifies via server (bcrypt) when online.
+    // Offline fallback uses '__server__' sentinel — no local hash needed.
     const freshEmps = await db.getAll('employees').catch(() => null);
     if (freshEmps && freshEmps.length) APP.data.employees = freshEmps;
-    // Refresh employee cache so login screen picks up new PIN immediately
-    getEmpList(); // triggers cache update
+    getEmpList();
     closeModal();
     toast(`PIN set for ${emp.name}`, 'success');
     renderPage();
