@@ -670,7 +670,8 @@ async function initDatabase() {
     "ALTER TABLE expenses ADD COLUMN IF NOT EXISTS mode TEXT DEFAULT 'cash'",
     "ALTER TABLE expenses ADD COLUMN IF NOT EXISTS paid_to TEXT DEFAULT ''",
     "ALTER TABLE expenses ADD COLUMN IF NOT EXISTS approved_by TEXT DEFAULT ''",
-    "ALTER TABLE expenses ADD COLUMN IF NOT EXISTS desc TEXT DEFAULT ''",
+    // NOTE: 'desc' is a PostgreSQL reserved keyword — do NOT add as column name.
+    // The WRITE_ALIAS maps client 'desc' → 'description' column which already exists.
   ];
   for (const sql of safeAlters) {
     try { await pool.query(sql); } catch(e) {
