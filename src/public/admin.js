@@ -7572,6 +7572,19 @@ async function saveSale() {
   const errors = validateSaleInput(fuelType, liters, amount, vehicle, APP.data.prices, mode);
   if (errors.length > 0) { _releaseSale(); toast(errors[0], 'error'); return; }
 
+  // ── TANK STOCK ENFORCEMENT (Admin) ────────────────────────────────────────
+  // Hard block if liters requested exceeds available tank stock.
+  const _adminTank = (APP.data?.tanks||[]).find(t => (t.fuelType||'').toLowerCase() === fuelType.toLowerCase());
+  if (_adminTank) {
+    const _adminAvailable = Math.max(0, _adminTank.current || 0);
+    if (liters > _adminAvailable) {
+      _releaseSale();
+      toast(`❌ Cannot sell ${fmt(liters)}L — only ${fmt(_adminAvailable)}L ${getFuel(fuelType).short} available in tank. Record a fuel purchase first.`, 'error');
+      return;
+    }
+  }
+  // ─────────────────────────────────────────────────────────────────────────
+
   const sale = {
     id: _genId(), date: today(), time: now(), fuelType, liters, amount,
     // FIX 34: idempotency key prevents duplicate sales if the request is retried

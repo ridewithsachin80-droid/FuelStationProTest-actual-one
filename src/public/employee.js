@@ -2142,24 +2142,19 @@ function emp_recordSale() {
   if (isNaN(l)||l<=0) { toast('Enter valid liters','error'); return; }
 
   // ── TANK STOCK ENFORCEMENT ────────────────────────────────────────────────
-  // Hard block if sale > available stock. Soft warn if within 200L tolerance
-  // (allows for tank measurement variation and pending purchase receipts).
+  // Hard block if sale > available stock. No tolerance — any overage is blocked.
   // Employee can fetch fresh tank data by logging out and back in.
   const _saleNozzleFuels = (APP.data?.pumps||[]).find(pm=>String(pm.id)===p)?.nozzleFuels || {};
   const _saleFuel = _saleNozzleFuels[document.querySelector('[data-pumpbtn].btn-accent')?.dataset?.nozzlebtn||'A'] || empSaleFuel;
   const _saleTank = (APP.data?.tanks||[]).find(t => (t.fuelType||'').toLowerCase() === (_saleFuel||'').toLowerCase());
-  if (_saleTank && (_saleTank.current||0) > 0) {
+  if (_saleTank) {
     // Subtract what this employee has already sold this shift
     const _soldThisShift = empState.sales.filter(s=>s.fuelType===_saleFuel).reduce((a,s)=>a+(s.liters||0),0);
     const _available = Math.max(0, (_saleTank.current||0) - _soldThisShift);
-    const _overage = l - _available;
-    if (_overage > 200) {
-      // HARD BLOCK: selling significantly more than stock — stop the sale
-      toast(`❌ Cannot sell ${fmt(l)}L — only ${fmt(_available)}L ${getFuel(_saleFuel).short} in tank. Ask admin to record fuel purchase first.`, 'error');
+    if (l > _available) {
+      // HARD BLOCK: any overage is rejected — no tolerance
+      toast(`❌ Cannot sell ${fmt(l)}L — only ${fmt(_available)}L ${getFuel(_saleFuel).short} available in tank. Ask admin to record a fuel purchase first.`, 'error');
       return;
-    } else if (_overage > 0) {
-      // SOFT WARN: within 200L tolerance (measurement variation / rounding)
-      toast(`⚠️ Stock: ${fmt(_available)}L. Recording ${fmt(l)}L — verify physical tank level.`, 'warning');
     }
   }
   // Vehicle required for non-cash payments; optional for cash walk-ins
@@ -2243,6 +2238,13 @@ function emp_recordSale() {
                 const creditCust = APP.data?.creditCustomers?.find(c => c.name === sale.customer);
                 if (creditCust) creditCust.outstanding = Math.max(0, (creditCust.outstanding || 0) - sale.amount);
               }
+              emp_saveSession();
+              renderPage();
+            } else if (resp.status === 422 && err.error && err.error.startsWith('Insufficient stock')) {
+              // Server hard-blocked: tank stock exceeded — remove from local state
+              empState.sales = empState.sales.filter(s => s.id !== sale.id);
+              if (APP.data?.sales) APP.data.sales = APP.data.sales.filter(s => s.id !== sale.id);
+              toast(`❌ ${err.error}`, 'error');
               emp_saveSession();
               renderPage();
             } else {
