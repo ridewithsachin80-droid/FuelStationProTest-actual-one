@@ -4738,37 +4738,57 @@ async function emp_saveLubeSale(productId) {
   const cust = (document.getElementById('els_cust')?.value || '').trim();
   if (isNaN(qty) || qty <= 0)    { toast('Please enter a valid quantity', 'error'); return; }
   if (isNaN(rate) || rate <= 0)  { toast('Please enter a valid rate', 'error'); return; }
-  const p = (window._lubesProducts||[]).find(x => x.id === productId);
-  if (!p) { toast('Product not found — please refresh', 'error'); return; }
-  if (qty > p.stock)             { toast(`Only ${p.stock} ${p.unit||''} in stock`, 'error'); return; }
-  const amount = +(qty * rate).toFixed(2);
-  const now2   = new Date();
-  if (!window._lubesSales) window._lubesSales = [];
-  window._lubesSales.unshift({
-    id: Date.now(),
-    // BUG-10 FIX: was using now2.toISOString().slice(0,10) which returns UTC date,
-    // giving wrong date for evening/night shifts (after 18:30 IST = next UTC day).
-    date: emp_today(),
-    time: now2.toTimeString().slice(0, 5),
-    productId, productName: p.name,
-    qty, unit: p.unit || '',
-    rate, amount,
-    customer: cust,
-    mode,
-    employee: empState.user?.name || '',
-  });
-  p.stock = +(p.stock - qty).toFixed(3);
-  try {
-    await Promise.all([
-      db.setSetting('lubes_products', window._lubesProducts),
-      db.setSetting('lubes_sales',    window._lubesSales),
-    ]);
-  } catch(e) { console.warn('[emp_saveLubeSale]', e.message); }
+  const p = (window._lubesProducts||[]).find(x => String(x.id) === String(productId));
+  if (!p) { toast('Product not found — please refresh the lubes tab', 'error'); return; }
+  if (qty > (p.stock||0)) { toast(`Only ${p.stock} ${p.unit||''} in stock`, 'error'); return; }
+
+  const tenant = (typeof mt_getActiveTenant === 'function') ? mt_getActiveTenant() : null;
+  if (!tenant || !tenant.id) { toast('Session error — please log in again', 'error'); return; }
+
+  const idempotencyKey = (typeof crypto !== 'undefined' && crypto.randomUUID)
+    ? crypto.randomUUID() : (Date.now().toString(36) + '-' + Math.random().toString(36).slice(2));
+
   closeModal();
-  toast(`✅ Sold ${qty} ${p.unit||''} ${p.name} — ₹${amount.toFixed(2)}`, 'success');
-  // Low stock warning
-  if (p.stock <= (p.minStock||5)) toast(`⚠️ Low stock alert: only ${p.stock} ${p.unit||''} left — inform admin`, 'warning');
-  renderPage();
+  toast(`⏳ Recording sale…`, 'info');
+
+  try {
+    // USE SERVER-SIDE ENDPOINT: atomic read-deduct-write, no race condition
+    const resp = await fetch('/api/public/lube-sale/' + encodeURIComponent(tenant.id), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        productId: String(productId),
+        qty, rate, mode, customer: cust,
+        employee: empState.user?.name || '',
+        date: emp_today(),
+        time: new Date().toTimeString().slice(0, 5),
+        idempotencyKey,
+      })
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      toast(`❌ ${data.error || 'Sale failed — please try again'}`, 'error');
+      return;
+    }
+    if (data.duplicate) {
+      toast('ℹ️ Sale already recorded (duplicate prevented)', 'info');
+      return;
+    }
+    // Update local in-memory state from server response
+    const prod = (window._lubesProducts||[]).find(x => String(x.id) === String(productId));
+    if (prod) prod.stock = data.product.newStock;
+    if (!window._lubesSales) window._lubesSales = [];
+    if (data.sale) window._lubesSales.unshift(data.sale);
+
+    toast(`✅ Sold ${qty} ${p.unit||''} ${p.name} — ₹${data.amount.toFixed(2)}`, 'success');
+    if ((data.product.newStock||0) <= (p.minStock||5)) {
+      toast(`⚠️ Low stock alert: only ${data.product.newStock} ${p.unit||''} left — inform admin`, 'warning');
+    }
+    renderPage();
+  } catch(e) {
+    toast(`❌ Network error — please try again`, 'error');
+    console.error('[emp_saveLubeSale]', e.message);
+  }
 }
 window.emp_saveLubeSale = emp_saveLubeSale;
 

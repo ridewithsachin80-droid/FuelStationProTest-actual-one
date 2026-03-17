@@ -304,6 +304,35 @@ async function startServer() {
     }
   });
 
+  // ── LUBES DEBUG: Show actual lubes_products and lubes_sales from DB ──────
+  app.get('/api/cleanup/lubes-debug', async (req, res) => {
+    if (req.query.secret !== 'fuelbunk2026') return res.status(403).json({ error: 'Forbidden' });
+    const tenantId = req.query.tenantId;
+    if (!tenantId) return res.status(400).json({ error: 'tenantId required' });
+    try {
+      const prodsRow = await pool.query(
+        "SELECT value, updated_at FROM settings WHERE key='lubes_products' AND tenant_id=$1",
+        [tenantId]
+      );
+      const salesRow = await pool.query(
+        "SELECT value, updated_at FROM settings WHERE key='lubes_sales' AND tenant_id=$1",
+        [tenantId]
+      );
+      const prods = prodsRow.rows[0] ? JSON.parse(prodsRow.rows[0].value || '[]') : [];
+      const sales = salesRow.rows[0] ? JSON.parse(salesRow.rows[0].value || '[]') : [];
+      res.json({
+        productsCount: prods.length,
+        productsUpdatedAt: prodsRow.rows[0]?.updated_at,
+        products: prods.map(p => ({ id: p.id, name: p.name, stock: p.stock })),
+        salesCount: sales.length,
+        salesUpdatedAt: salesRow.rows[0]?.updated_at,
+        recentSales: sales.slice(0, 10).map(s => ({ date: s.date, product: s.productName, qty: s.qty, amount: s.amount, employee: s.employee })),
+      });
+    } catch(e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // ── ONE-TIME CLEANUP: Unlock super admin (clear login_attempts lockout) ──
   // Visit /api/cleanup/unlock-admin?secret=fuelbunk2026 to clear lockout instantly.
   app.get('/api/cleanup/unlock-admin', async (req, res) => {
@@ -916,6 +945,100 @@ async function startServer() {
       try { await client.query('ROLLBACK'); } catch {}
       client.release();
       console.error('[public/reading]', e.message);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ── PUBLIC: lube sale — atomically deduct stock & record sale (no auth needed) ──
+  // This is the AUTHORITATIVE stock deduction path. Instead of relying on the client
+  // to read→mutate→write the full products array (race-prone), we do it server-side:
+  // 1. Read current lubes_products from settings
+  // 2. Find product by id, deduct qty
+  // 3. Append to lubes_sales
+  // 4. Write both back atomically in one transaction
+  app.post('/api/public/lube-sale/:tenantId', async (req, res) => {
+    const { tenantId } = req.params;
+    const { productId, qty, rate, mode, customer, employee, date, time, idempotencyKey } = req.body;
+    if (!tenantId || !productId || !qty || qty <= 0 || !rate || rate <= 0) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      // Idempotency: prevent double-recording on network retry
+      if (idempotencyKey) {
+        const idem = await client.query(
+          "SELECT value FROM settings WHERE tenant_id=$1 AND key=$2",
+          [tenantId, `lube_sale_idem_${idempotencyKey}`]
+        );
+        if (idem.rows.length > 0) {
+          await client.query('ROLLBACK');
+          client.release();
+          return res.json({ success: true, duplicate: true });
+        }
+      }
+      // Read current products
+      const prodsRow = await client.query(
+        "SELECT value FROM settings WHERE key='lubes_products' AND tenant_id=$1 FOR UPDATE",
+        [tenantId]
+      );
+      const products = prodsRow.rows[0] ? JSON.parse(prodsRow.rows[0].value || '[]') : [];
+      // Find product — match by id (number or string)
+      const prod = products.find(p => String(p.id) === String(productId));
+      if (!prod) {
+        await client.query('ROLLBACK');
+        client.release();
+        return res.status(404).json({ error: 'Product not found: ' + productId });
+      }
+      const currentStock = parseFloat(prod.stock) || 0;
+      if (qty > currentStock) {
+        await client.query('ROLLBACK');
+        client.release();
+        return res.status(400).json({ error: `Insufficient stock: have ${currentStock}, need ${qty}` });
+      }
+      // Deduct stock
+      prod.stock = +(currentStock - qty).toFixed(3);
+      const amount = +(qty * rate).toFixed(2);
+      // Save products back
+      await client.query(
+        "INSERT INTO settings(key,tenant_id,value,updated_at) VALUES('lubes_products',$1,$2,NOW()) ON CONFLICT(key,tenant_id) DO UPDATE SET value=$2,updated_at=NOW()",
+        [tenantId, JSON.stringify(products)]
+      );
+      // Read and append to sales
+      const salesRow = await client.query(
+        "SELECT value FROM settings WHERE key='lubes_sales' AND tenant_id=$1 FOR UPDATE",
+        [tenantId]
+      );
+      const sales = salesRow.rows[0] ? JSON.parse(salesRow.rows[0].value || '[]') : [];
+      const saleRecord = {
+        id: Date.now() * 1000 + Math.floor(Math.random() * 999),
+        date: date || istDate(),
+        time: time || new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Kolkata' }),
+        productId, productName: prod.name,
+        qty, unit: prod.unit || '',
+        rate, amount, customer: customer || '', mode: mode || 'cash',
+        employee: employee || '',
+      };
+      sales.unshift(saleRecord);
+      await client.query(
+        "INSERT INTO settings(key,tenant_id,value,updated_at) VALUES('lubes_sales',$1,$2,NOW()) ON CONFLICT(key,tenant_id) DO UPDATE SET value=$2,updated_at=NOW()",
+        [tenantId, JSON.stringify(sales)]
+      );
+      // Save idempotency key
+      if (idempotencyKey) {
+        await client.query(
+          "INSERT INTO settings(key,tenant_id,value,updated_at) VALUES($1,$2,$3,NOW()) ON CONFLICT DO NOTHING",
+          [`lube_sale_idem_${idempotencyKey}`, tenantId, JSON.stringify({ date: istDate(), amount })]
+        );
+      }
+      await client.query('COMMIT');
+      client.release();
+      console.log(`[lube-sale] ${tenantId}: sold ${qty} ${prod.name} (${prod.stock + qty} → ${prod.stock})`);
+      res.json({ success: true, product: { id: prod.id, name: prod.name, newStock: prod.stock }, amount, sale: saleRecord });
+    } catch (e) {
+      await client.query('ROLLBACK').catch(() => {});
+      client.release();
+      console.error('[lube-sale]', e.message);
       res.status(500).json({ error: e.message });
     }
   });

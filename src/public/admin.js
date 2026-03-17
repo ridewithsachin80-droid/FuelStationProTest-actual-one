@@ -1520,7 +1520,7 @@ function renderFinance(D) {
       </div>
     </div>
     <div class="g g-auto-sm mb-24 gap-16">
-      ${statCard("Today's Revenue", cur(totalRevenue), 'all sales', '💰')}
+      ${statCard("Today's Revenue", cur(totalRevenue + lubesRevenue), lubesRevenue > 0 ? 'fuel + lubes' : 'all sales', '💰')}
       ${statCard('Fuel Purchased', cur(totalFuelCost), fuelPurchases.length + ' purchase(s)', '🛢️')}
       ${statCard('Gross Profit', cur(grossProfit), totalRevenue > 0 ? ((grossProfit / totalRevenue) * 100).toFixed(1) + '% margin' : '—', '📊')}
       ${statCard('Operating Exp', cur(opEx), 'this month', '🧾')}
@@ -3679,7 +3679,7 @@ window.saveNozzleMeterEntry = saveNozzleMeterEntry;
 //   Send  "I allow callmebot to send me messages"  to +34 644 21 65 38 on WhatsApp
 //   Wait for API key reply, paste it in Settings.
 
-function wa_phone() { return (APP.data?.waPhone || '').replace(/\D/g,''); }
+function wa_phone() { return String(APP.data?.waPhone || '').replace(/\D/g,''); }
 function wa_apiKey() { return (APP.data?.waApiKey || '').trim(); }
 function wa_stationName() { return APP.data?.upiName || APP.tenant?.name || 'Fuel Station'; }
 
@@ -3978,15 +3978,20 @@ function renderLubes(D) {
       var freshProds = res[0], freshSales = res[1];
       var changed = false;
       if (Array.isArray(freshProds) && freshProds.length > 0) {
-        // Check if any stock changed
+        // Check if any stock changed (deep compare stock values)
         var stockChanged = freshProds.some(function(fp) {
           var old = (window._lubesProducts||[]).find(function(op){ return op.id === fp.id; });
-          return !old || old.stock !== fp.stock;
-        });
+          return !old || Math.abs((old.stock||0) - (fp.stock||0)) > 0.001;
+        }) || freshProds.length !== (window._lubesProducts||[]).length;
         if (stockChanged) { window._lubesProducts = freshProds; changed = true; }
       }
       if (Array.isArray(freshSales)) {
-        if (freshSales.length !== (window._lubesSales||[]).length) { window._lubesSales = freshSales; changed = true; }
+        // Compare by count AND total amount to detect any change
+        var oldTotal = (window._lubesSales||[]).reduce(function(a,s){return a+s.amount;},0);
+        var newTotal = freshSales.reduce(function(a,s){return a+s.amount;},0);
+        if (freshSales.length !== (window._lubesSales||[]).length || Math.abs(oldTotal-newTotal) > 0.01) {
+          window._lubesSales = freshSales; changed = true;
+        }
       }
       if (changed) {
         var el3 = document.getElementById('content');
@@ -4473,38 +4478,53 @@ function calcLubeSaleTotal(defaultRate) {
 }
 window.calcLubeSaleTotal = calcLubeSaleTotal;
 
-function saveLubeSale(productId) {
+async function saveLubeSale(productId) {
   const qty      = parseFloat(document.getElementById('ls_qty')?.value);
   const rate     = parseFloat(document.getElementById('ls_rate')?.value);
   const mode     = document.getElementById('ls_mode')?.value||'cash';
   const customer = (document.getElementById('ls_customer')?.value||'').trim();
   if (isNaN(qty)||qty<=0) { toast('Enter valid quantity','error'); return; }
   if (isNaN(rate)||rate<=0) { toast('Enter valid rate','error'); return; }
-  const p = (window._lubesProducts||[]).find(x=>x.id===productId);
+  const p = (window._lubesProducts||[]).find(x=>String(x.id)===String(productId));
   if (!p) { toast('Product not found — please refresh','error'); return; }
   if (p.active === false) { toast('This product is inactive','error'); return; }
-  if (qty > p.stock) { toast(`Only ${p.stock} ${p.unit||''} in stock`,'error'); return; }
-  const amount = +(qty * rate).toFixed(2);
-  const now2 = new Date();
-  if (!window._lubesSales) window._lubesSales = [];
-  window._lubesSales.unshift({
-    id: _genId(), date: (typeof today === 'function' ? today() : now2.toISOString().slice(0,10)),
-    time: now2.toTimeString().slice(0,5),
-    productId, productName: p.name, qty, unit: p.unit||'',
-    rate, amount, customer, mode,
-    employee: APP.data?.employees?.find(e=>e.id===APP.empId)?.name || '',
-  });
-  p.stock = +(p.stock - qty).toFixed(3);
-  p._stockChanged = true;  // admin explicitly sold stock
-  lubes_save(); lubesSales_save();
+  if (qty > (p.stock||0)) { toast(`Only ${p.stock} ${p.unit||''} in stock`,'error'); return; }
+
+  const tenantId = APP.tenant?.id || APP.tenantId;
+  if (!tenantId) { toast('Session error — please reload','error'); return; }
+
   closeModal();
-  auditLog('lube_sale', { product: p.name, qty, amount, mode, customer });
-  toast(`✅ Sold ${qty} ${p.unit||''} ${p.name} — ${cur(amount)}`, 'success');
-  // Low stock WA alert
-  if (p.stock <= (p.minStock||5) && typeof wa_send === 'function' && wa_phone()) {
-    wa_send(wa_phone(), `⚠️ LOW STOCK: ${p.name} — Only ${p.stock} ${p.unit||''} left. Please reorder.\n\n_— FuelBunk Pro_`, 'low_stock').catch(()=>{});
+  const idempotencyKey = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : (Date.now().toString(36) + '-' + Math.random().toString(36).slice(2));
+  try {
+    const resp = await fetch('/api/public/lube-sale/' + encodeURIComponent(tenantId), {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        productId: String(productId), qty, rate, mode, customer,
+        employee: APP.data?.employees?.find(e=>e.id===APP.empId)?.name || APP.userName || '',
+        date: (typeof today === 'function' ? today() : new Date().toISOString().slice(0,10)),
+        time: new Date().toTimeString().slice(0,5),
+        idempotencyKey,
+      })
+    });
+    const data = await resp.json();
+    if (!resp.ok) { toast(`❌ ${data.error||'Sale failed'}`, 'error'); return; }
+    // Update local state from server response
+    if (data.product) {
+      const local = (window._lubesProducts||[]).find(x=>String(x.id)===String(productId));
+      if (local) local.stock = data.product.newStock;
+    }
+    if (!window._lubesSales) window._lubesSales = [];
+    if (data.sale) window._lubesSales.unshift(data.sale);
+    auditLog('lube_sale', { product: p.name, qty, amount: data.amount, mode, customer });
+    toast(`✅ Sold ${qty} ${p.unit||''} ${p.name} — ${cur(data.amount)}`, 'success');
+    if ((data.product?.newStock||0) <= (p.minStock||5) && typeof wa_send === 'function' && wa_phone()) {
+      wa_send(wa_phone(), `⚠️ LOW STOCK: ${p.name} — Only ${data.product.newStock} ${p.unit||''} left.\n\n_— FuelBunk Pro_`, 'low_stock').catch(()=>{});
+    }
+    renderPage();
+  } catch(e) {
+    toast('❌ Network error — please try again', 'error');
+    console.error('[saveLubeSale]', e.message);
   }
-  renderPage();
 }
 window.saveLubeSale = saveLubeSale;
 
