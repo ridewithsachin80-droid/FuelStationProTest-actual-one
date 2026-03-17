@@ -590,7 +590,11 @@ function renderPumps(D) {
     </div>`;
   }).join('');
 
-  const reconRows = D.pumps.flatMap(p => {
+  const reconRows = [...D.pumps].sort((a, b) => {
+    const ai = parseInt(a.id) || parseInt((a.name||'').replace(/\D/g,'')) || 0;
+    const bi = parseInt(b.id) || parseInt((b.name||'').replace(/\D/g,'')) || 0;
+    return ai - bi;
+  }).flatMap(p => {
     const labels = p.nozzleLabels || (p.nozzles === 1 ? ['A'] : p.nozzles === 2 ? ['A','B'] : ['A','B','C'].slice(0, p.nozzles));
     const nf = p.nozzleFuels || {};
     const nr = p.nozzleReadings || {};
@@ -948,9 +952,10 @@ function renderStaff(D) {
   const rosteredIds = (window._rosterData && window._rosterData[rosterKey]) || [];
   // If roster has assignments for this date+shift, show only those employees
   // Otherwise fall back to employees whose shift field includes this shift
-  const shiftEmps = rosteredIds.length > 0
+  const shiftEmps = (rosteredIds.length > 0
     ? D.employees.filter(e => rosteredIds.includes(String(e.id)))
-    : D.employees.filter(e => { const sh=(e.shift||'').trim(); return !sh || sh.split(',').map(s=>s.trim()).includes(allocShift); });
+    : D.employees.filter(e => { const sh=(e.shift||'').trim(); return !sh || sh.split(',').map(s=>s.trim()).includes(allocShift); })
+  ).sort((a, b) => (a.name||'').localeCompare(b.name||''));
   const rosterFiltered = rosteredIds.length > 0;
 
   const empOptions = shiftEmps.map(e => `<option value="${e.id}">${e.name} (${e.role})</option>`).join('')
@@ -1173,7 +1178,7 @@ function renderStaff(D) {
   }).join('');
 
   // ═══ EMPLOYEE DIRECTORY ═══
-  const empRows = D.employees.map(e => {
+  const empRows = [...D.employees].sort((a, b) => (a.name||'').localeCompare(b.name||'')).map(e => {
     const hasPIN = !!getEmpPinHash(e.id);
     const isDefaultPIN = hasPIN && e.phone && e.phone.length >= 4; // set by auto-default
     const pendingBal = e.pendingBalance || 0;
@@ -2186,7 +2191,7 @@ function renderRoster(D) {
     const bi = SHIFT_ORDER_ROSTER.findIndex(k => (b.name||'').toLowerCase().includes(k));
     return (ai < 0 ? 99 : ai) - (bi < 0 ? 99 : bi);
   });
-  const emps = D.employees || [];
+  const emps = [...(D.employees || [])].sort((a, b) => (a.name||'').localeCompare(b.name||''));
 
   // Load saved roster from settings (in-memory for now, persisted via db.setSetting)
   if (!window._rosterData) window._rosterData = {};
@@ -2389,7 +2394,7 @@ function renderAttendance(D) {
   const today = (()=>{const _d=new Date();return _d.getFullYear()+'-'+String(_d.getMonth()+1).padStart(2,'0')+'-'+String(_d.getDate()).padStart(2,'0');})();
   if (!window._attendanceData) window._attendanceData = {};
   const att = window._attendanceData;
-  const emps = (D.employees || []).filter(e => e.status !== 'inactive');
+  const emps = [...(D.employees || [])].filter(e => e.status !== 'inactive').sort((a, b) => (a.name||'').localeCompare(b.name||''));
   const shifts = D.shifts && D.shifts.length ? D.shifts : [{name:'Morning'},{name:'Afternoon'},{name:'Night'}];
 
   // Date picker — default today
@@ -2931,7 +2936,7 @@ function renderPayroll(D) {
     if (dow !== 0) workingDays++; // count Mon-Sat (exclude Sun)
   }
 
-  const emps = (D.employees||[]).filter(e => e.status !== 'inactive');
+  const emps = [...(D.employees||[])].filter(e => e.status !== 'inactive').sort((a, b) => (a.name||'').localeCompare(b.name||''));
 
   // Build per-employee attendance summary for the month
   const empAttSummary = empId => {
