@@ -6318,7 +6318,7 @@ window.exportTallyXML = exportTallyXML;
 const ROLE_PAGES = {
   Owner:      null,  // null = all pages
   Manager:    null,  // null = all pages (same as Owner — full operational access)
-  Accountant: ['dashboard','finance','credit','exports','reports','analytics','lubes','insights','balsheet'],
+  Accountant: ['dashboard','finance','credit','exports','reports','analytics','lubes','insights','balsheet','dms'],
   Cashier:    ['dashboard','tanks','pumps','sales','lubes'],
 };
 
@@ -7272,7 +7272,15 @@ function updateStationBreadcrumb() {
 function navigate(pageId) {
   // RBAC: block pages the current role can't see
   if (APP.loggedIn && APP.role === 'admin' && !rbac_canPage(pageId)) {
-    toast('Access denied — your role does not have permission for this', 'error');
+    // If triggered by URL hash on load, redirect silently to dashboard
+    // instead of showing an error toast (confuses users on reload)
+    if (APP.page === pageId || !APP.page) {
+      APP.page = 'dashboard';
+      window.location.hash = 'dashboard';
+      renderPage();
+    } else {
+      toast('Access denied — your role does not have permission for this', 'error');
+    }
     return;
   }
   APP.page = pageId;
