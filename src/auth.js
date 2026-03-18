@@ -51,8 +51,11 @@ function authRoutes(db) {
         await db.prepare('UPDATE super_admin SET pass_hash = $1 WHERE id = 1').run(newHash);
       }
       await recordLoginAttempt(db, req._bruteForceIp, username, '', true);
-      // FIX (a): Only one superadmin session allowed — invalidate all previous super sessions
-      await db.prepare("DELETE FROM sessions WHERE user_type = 'super'").run();
+      // FIX: Only clean up EXPIRED super sessions, not all of them.
+      // Previously wiping all super sessions on login would invalidate valid tokens
+      // mid-test (e.g. UAT-11 session duration check) — now sessions expire naturally
+      // after 4 hours. Old expired sessions are cleaned up by createSession() already.
+      await db.prepare("DELETE FROM sessions WHERE user_type = 'super' AND expires_at < NOW()").run();
       const token = await createSession(db, {
         tenantId: '', userId: 0, userType: 'super',
         userName: 'Super Admin', role: 'super',
