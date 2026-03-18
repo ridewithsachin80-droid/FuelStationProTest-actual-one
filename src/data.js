@@ -376,7 +376,14 @@ function dataRoutes(db) {
         tanks: tanks.rows.map(parseRow),
         pumps: pumps.rows.map(parseRow),
         shifts: shifts.rows.map(parseRow),
-        employees: employees.rows.map(parseRow),
+        // PIN-DISPLAY FIX: pin_hash is stripped by parseRow() for security (null alias).
+        // Add a safe hasPin boolean so the admin directory can show "✓ PIN Set" correctly
+        // without ever exposing the actual hash to the frontend.
+        employees: employees.rows.map(r => {
+          const obj = parseRow(r);
+          obj.hasPin = !!(r.pin_hash && r.pin_hash.trim() !== '');
+          return obj;
+        }),
         sales: sales.rows.map(parseRow),
         creditCustomers: creditCustomers.rows.map(parseRow),
         creditTransactions: creditTransactions.rows.map(parseRow),
