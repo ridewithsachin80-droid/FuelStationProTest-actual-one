@@ -6318,7 +6318,7 @@ window.exportTallyXML = exportTallyXML;
 const ROLE_PAGES = {
   Owner:      null,  // null = all pages
   Manager:    null,  // null = all pages (same as Owner — full operational access)
-  Accountant: ['dashboard','finance','credit','exports','reports','analytics','lubes','insights'],
+  Accountant: ['dashboard','finance','credit','exports','reports','analytics','lubes','insights','balsheet'],
   Cashier:    ['dashboard','tanks','pumps','sales','lubes'],
 };
 
