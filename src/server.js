@@ -1128,6 +1128,18 @@ async function startServer() {
         return res.status(400).json({ error: 'Invalid fuel type' });
       }
       
+      // FIX: Validate vehicle number format (Indian format) if provided
+      // Accepts: KA06AB1234, MH12CD5678, DL3CAF1234, TN01A1234 etc.
+      // Rejects: clearly malformed values like INVALID123, random strings
+      if (sale.vehicle && sale.vehicle.trim() !== '') {
+        const vehicleRegex = /^[A-Z]{2}[0-9]{1,2}[A-Z]{1,3}[0-9]{1,4}$/i;
+        const cleanVehicle = sale.vehicle.trim().replace(/[\s-]/g, '');
+        if (!vehicleRegex.test(cleanVehicle)) {
+          client.release();
+          return res.status(400).json({ error: 'Invalid vehicle number format. Use format: KA06AB1234' });
+        }
+      }
+
       // FIX: Validate date is not in the future — compare in IST (UTC+5:30)
       // CRITICAL: new Date('2026-03-18') is parsed as UTC midnight.
       // At 00:21 IST = 18:51 UTC prev day, this makes a valid IST date appear "in the future".
@@ -2262,6 +2274,12 @@ Pack decoding: "300x40ML-POU"=packQty:300,packSize:"40ml",packType:"Pouch",isCar
       // FIX: Validate required fields and amounts
       if (!e || !e.amount || !e.category) {
         return res.status(400).json({ error: 'Missing required fields' });
+      }
+
+      // FIX: Reject empty description — description is required for audit trail
+      const desc = e.desc || e.description || '';
+      if (!desc || desc.trim() === '') {
+        return res.status(400).json({ error: 'Description is required for expenses' });
       }
       
       // FIX: Validate amount is positive and reasonable
