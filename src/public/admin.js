@@ -645,7 +645,7 @@ function renderPumps(D) {
 
   // ── Compute tab content as variable (avoids nested template literal issues) ──
   const _pumpsTabContent = _pumpsTab === 'meterlog'
-    ? renderNozzleMeterPage(D)
+    ? renderNozzleMeterPage(D).replace(/<div class="page-hdr">[\s\S]*?<\/div>\s*/m, '')
     : `${pumpCards.trim() ? `<div class="g g-auto gap-16 mb-24">${pumpCards}</div>` : `
       <div style="text-align:center;padding:48px 20px;color:var(--text-3)">
         <div style="font-size:48px;margin-bottom:12px;opacity:0.4">⛽</div>
@@ -2643,7 +2643,7 @@ function renderAnalytics(D) {
   ];
 
   const tabBar = `<div style="display:flex;gap:6px;margin-bottom:20px;flex-wrap:wrap">
-    ${tabs.map(t => `<button onclick="window._analyticsTab='${t.id}';renderPage()" style="padding:8px 16px;border-radius:8px;border:1px solid var(--border);background:${_analyticsTab===t.id?'var(--accent-light)':'var(--bg-1)'};color:${_analyticsTab===t.id?'#000':'var(--text-2)'};font-weight:700;cursor:pointer;font-size:12px">${t.icon} ${t.label}</button>`).join('')}
+    ${tabs.map(t => `<button onclick="if('${t.id}'!=='vehicle')window._drillVehicle=null;window._analyticsTab='${t.id}';renderPage()" style="padding:8px 16px;border-radius:8px;border:1px solid var(--border);background:${_analyticsTab===t.id?'var(--accent-light)':'var(--bg-1)'};color:${_analyticsTab===t.id?'#000':'var(--text-2)'};font-weight:700;cursor:pointer;font-size:12px">${t.icon} ${t.label}</button>`).join('')}
   </div>`;
 
   let body = '';
@@ -2842,7 +2842,7 @@ function renderAnalytics(D) {
       </div>`}`;
 
   } else if (_analyticsTab === 'pilferage') {
-    body = renderPilferage(D).replace(/<div class="page-hdr">.*?<\/div>\s*/s, '');
+    body = renderPilferage(D).replace(/^<div class="page-hdr">[\s\S]*?<\/div>\s*/, '');
 
   } else if (_analyticsTab === 'bankrecon') {
     // ── Bank Reconciliation ────────────────────────────────────────────────
@@ -6318,7 +6318,7 @@ window.exportTallyXML = exportTallyXML;
 const ROLE_PAGES = {
   Owner:      null,  // null = all pages
   Manager:    null,  // null = all pages (same as Owner — full operational access)
-  Accountant: ['dashboard','finance','credit','exports','reports','analytics','lubes','insights','balsheet','dms'],
+  Accountant: ['dashboard','finance','credit','exports','reports','analytics','lubes','insights','balsheet','dms','settings'],
   Cashier:    ['dashboard','tanks','pumps','sales','lubes'],
 };
 
@@ -11556,7 +11556,7 @@ window.validateGSTIN = validateGSTIN;
 
 // Show live GSTIN validation feedback in the GSTIN modal
 function nmCheckGSTIN() {
-  const val = (document.getElementById('gstinInput')||{}).value || '';
+  const val = (document.getElementById('g_gstin')||{}).value || '';
   const msg = document.getElementById('gstinValidMsg');
   if (!msg) return;
   if (!val) { msg.textContent = ''; return; }
@@ -11577,6 +11577,50 @@ function generateDSRReport() {
   else generateIOCLDSR(D, date);
 }
 window.generateDSRReport = generateDSRReport;
+
+function exportDSRCSV() {
+  const D = APP.data;
+  const date = reportDate || (typeof window.today==='function'?window.today():new Date().toLocaleString('en-CA',{timeZone:'Asia/Kolkata'}).slice(0,10));
+  const sales = (D.sales||[]).filter(s=>(s.date||'').slice(0,10)===date);
+  const nml   = (window._nozzleMeterLog||[]).filter(e=>e.date===date);
+  const purchases = (D.fuelPurchases||[]).filter(p=>(p.date||'').slice(0,10)===date);
+
+  let csv = `DSR — Daily Sales Report,${date}\n\n`;
+  csv += `SALES SUMMARY\nFuel Type,Litres,Amount,Mode\n`;
+  const byFuel = {};
+  sales.forEach(s => {
+    if (!byFuel[s.fuelType]) byFuel[s.fuelType] = {litres:0,amount:0};
+    byFuel[s.fuelType].litres += s.liters||0;
+    byFuel[s.fuelType].amount += s.amount||0;
+  });
+  Object.entries(byFuel).forEach(([ft,v]) => {
+    csv += `${getFuel(ft).short},${v.litres.toFixed(2)},${v.amount.toFixed(2)}\n`;
+  });
+
+  csv += `\nPAYMENT MODE\nMode,Amount,Transactions\n`;
+  ['cash','upi','card','credit'].forEach(m => {
+    const ms = sales.filter(s=>s.mode===m);
+    csv += `${m},${ms.reduce((a,s)=>a+(s.amount||0),0).toFixed(2)},${ms.length}\n`;
+  });
+
+  csv += `\nNOZZLE METER READINGS\nPump,Nozzle,Fuel,Opening,Closing,Meter Sold,System Sold,Variance\n`;
+  nml.forEach(e => {
+    csv += `${sanitize(e.pumpName||e.pumpId||'')},${e.nozzle},${getFuel(e.fuelType).short},${e.openReading||0},${e.closeReading||0},${e.meterSold||0},${e.systemSold||0},${(e.variance||0).toFixed(2)}\n`;
+  });
+
+  csv += `\nFUEL PURCHASES\nFuel,Litres,Rate,Amount,Invoice\n`;
+  purchases.forEach(p => {
+    csv += `${getFuel(p.fuelType).short},${p.liters||0},${p.rate||0},${p.total||p.amount||0},${p.invoice||''}\n`;
+  });
+
+  const blob = new Blob([csv],{type:'text/csv'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `DSR_${date}.csv`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+window.exportDSRCSV = exportDSRCSV;
 
 function generateBPCLDSR(D, date) {
   const sales = (D.sales||[]).filter(s=>(s.date||'').slice(0,10)===date);
@@ -12178,10 +12222,12 @@ function saveDMSEntry() {
   const notes  = document.getElementById('dms_notes')?.value?.trim();
   if (!date || !type) { toast('Please fill in date and type','error'); return; }
   if (!window._dmsLog) window._dmsLog = [];
-  window._dmsLog.unshift({
+  const entry = {
     id: Date.now(), date, type, fuelType: fuel, quantity: qty, rate, amount: qty*rate,
     referenceNo: ref, status, notes, reconciled: false, createdAt: new Date().toISOString(),
-  });
+  };
+  window._dmsLog.unshift(entry);
+  // Save to settings (offline-first) + attempt server sync
   if (window.db) db.setSetting('dms_log', window._dmsLog).catch(()=>{});
   closeModal();
   toast('✅ DMS entry saved','success');
