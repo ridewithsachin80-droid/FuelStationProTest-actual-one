@@ -12,6 +12,9 @@ const { authMiddleware, inputSanitizerMiddleware } = require('./security');
 const authRoutes = require('./auth');
 const dataRoutes = require('./data');
 
+// ── Cleanup route secret — set CLEANUP_SECRET env var in Railway to override ──
+const CLEANUP_SECRET = process.env.CLEANUP_SECRET || 'fuelbunk2026';
+
 // ── ENHANCED FEATURES ──────────────────────────────────────────────
 const { startMonitoring, getActiveAlerts, acknowledgeAlert, getAlertStats } = require('./alerts');
 const { autoCloseShift, getShiftSummary } = require('./shift-close-enhanced');
@@ -227,7 +230,7 @@ async function startServer() {
   // Access: /qa-test?secret=fuelbunk2026
   // Served from same origin so fetch() calls to /api/* work without CORS issues.
   app.get('/qa-test', (req, res) => {
-    if (req.query.secret !== 'fuelbunk2026') {
+    if (req.query.secret !== CLEANUP_SECRET) {
       return res.status(403).send('<h2>403 — Add ?secret=fuelbunk2026 to access QA dashboard</h2>');
     }
     res.sendFile(path.join(__dirname, 'public', 'qa-test.html'));
@@ -238,7 +241,7 @@ async function startServer() {
   // GET /api/cleanup/sync-tanks?secret=fuelbunk2026&tenantId=stn_xxx
   // This is a one-time fix for when tank-deduct calls failed silently
   app.get('/api/cleanup/sync-tanks', async (req, res) => {
-    if (req.query.secret !== 'fuelbunk2026') return res.status(403).json({ error: 'Forbidden' });
+    if (req.query.secret !== CLEANUP_SECRET) return res.status(403).json({ error: 'Forbidden' });
     const tenantId = req.query.tenantId;
     if (!tenantId) return res.status(400).json({ error: 'tenantId required' });
     try {
@@ -283,7 +286,7 @@ async function startServer() {
 
   // ── TANK DEBUG: Show actual DB tank state ──────────────────────────────────
   app.get('/api/cleanup/tank-debug', async (req, res) => {
-    if (req.query.secret !== 'fuelbunk2026') return res.status(403).json({ error: 'Forbidden' });
+    if (req.query.secret !== CLEANUP_SECRET) return res.status(403).json({ error: 'Forbidden' });
     const tenantId = req.query.tenantId;
     if (!tenantId) return res.status(400).json({ error: 'tenantId required' });
     try {
@@ -306,7 +309,7 @@ async function startServer() {
 
   // ── LUBES DEBUG: Show actual lubes_products and lubes_sales from DB ──────
   app.get('/api/cleanup/lubes-debug', async (req, res) => {
-    if (req.query.secret !== 'fuelbunk2026') return res.status(403).json({ error: 'Forbidden' });
+    if (req.query.secret !== CLEANUP_SECRET) return res.status(403).json({ error: 'Forbidden' });
     const tenantId = req.query.tenantId;
     if (!tenantId) return res.status(400).json({ error: 'tenantId required' });
     try {
@@ -336,7 +339,7 @@ async function startServer() {
   // ── ONE-TIME CLEANUP: Unlock super admin (clear login_attempts lockout) ──
   // Visit /api/cleanup/unlock-admin?secret=fuelbunk2026 to clear lockout instantly.
   app.get('/api/cleanup/unlock-admin', async (req, res) => {
-    if (req.query.secret !== 'fuelbunk2026') {
+    if (req.query.secret !== CLEANUP_SECRET) {
       return res.status(403).json({ error: 'Invalid secret' });
     }
     try {
@@ -363,7 +366,7 @@ async function startServer() {
   // Visit /api/cleanup/dedup-expenses?secret=fuelbunk2026 once to fix duplicates.
   // This endpoint is safe to call multiple times — it is idempotent.
   app.get('/api/cleanup/dedup-expenses', async (req, res) => {
-    if (req.query.secret !== 'fuelbunk2026') {
+    if (req.query.secret !== CLEANUP_SECRET) {
       return res.status(403).json({ error: 'Invalid secret' });
     }
     try {
