@@ -682,6 +682,33 @@ async function initDatabase() {
     // ── TENANTS TABLE MIGRATIONS ───────────────────────────────────────────
     // Add OMC field — existing stations default to 'iocl' (no data loss)
     "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS omc TEXT DEFAULT 'iocl'",
+
+    // ── ATTENDANCE CLOCK-IN / CLOCK-OUT ────────────────────────────────────
+    "ALTER TABLE shifts ADD COLUMN IF NOT EXISTS clock_in TIMESTAMP",
+    "ALTER TABLE shifts ADD COLUMN IF NOT EXISTS clock_out TIMESTAMP",
+
+    // ── NOZZLE METER VARIANCE ──────────────────────────────────────────────
+    "ALTER TABLE pump_readings ADD COLUMN IF NOT EXISTS variance_litres REAL DEFAULT 0",
+    "ALTER TABLE pump_readings ADD COLUMN IF NOT EXISTS variance_flag BOOLEAN DEFAULT FALSE",
+
+    // ── DMS TRANSACTIONS TABLE ─────────────────────────────────────────────
+    `CREATE TABLE IF NOT EXISTS dms_transactions (
+      id SERIAL PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      date DATE,
+      omc TEXT DEFAULT '',
+      transaction_type TEXT DEFAULT '',
+      reference_no TEXT DEFAULT '',
+      fuel_type TEXT DEFAULT '',
+      quantity REAL DEFAULT 0,
+      rate REAL DEFAULT 0,
+      amount REAL DEFAULT 0,
+      status TEXT DEFAULT 'placed',
+      reconciled BOOLEAN DEFAULT FALSE,
+      matched_purchase_id INTEGER,
+      notes TEXT DEFAULT '',
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
   ];
   for (const sql of safeAlters) {
     try { await pool.query(sql); } catch(e) {
