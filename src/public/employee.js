@@ -119,7 +119,13 @@ function getEmpPinHash(empId) {
   // 1st: check live employee data from DB (most reliable, survives across devices)
   if (APP.data?.employees) {
     const emp = APP.data.employees.find(e => parseInt(e.id) === parseInt(empId));
-    if (emp && emp.pinHash) return emp.pinHash;
+    if (emp) {
+      // Local pinHash (set via admin Set PIN modal) takes priority
+      if (emp.pinHash) return emp.pinHash;
+      // hasPin=true means DB has a bcrypt hash — return sentinel so hasPIN evaluates true
+      // pin_hash is deliberately stripped from API response for security; hasPin is the safe signal
+      if (emp.hasPin) return '__server__';
+    }
   }
   // 2nd: check localStorage (set by saveEmployeePIN for fast local access)
   const saved = loadEmpPins();
