@@ -1549,20 +1549,23 @@ function renderReports(D) {
   ].map(i => `<div class="dbox"><div class="dbox-label">${i.l}</div><div class="dbox-value mono" style="font-size:14px;${i.cls || ''}">${i.v}</div></div>`).join('');
 
   const reports = [
-    { n: 'Monthly P&L Statement', d: 'Revenue, COGS, expenses, net profit', fn: 'generatePLReport()', csv: 'exportPLCSV()' },
     { n: 'Daily Shift Report', d: 'Complete DSR with pump readings', fn: 'generateDSRReport()', csv: 'exportDSRCSV()' },
     { n: 'Credit Outstanding', d: 'Customer-wise aging report', fn: 'generateCreditReport()', csv: 'exportCreditCSV()' },
     { n: 'Tank Reconciliation', d: 'Dip vs book stock variance', fn: 'generateTankReport()', csv: 'exportDipCSV()' },
     { n: 'Pump Sales Report', d: 'Per-pump meter & sales data', fn: 'generatePumpReport()', csv: 'exportPumpCSV()' },
     { n: 'GST Summary', d: 'Tax computation for filing', fn: 'generateGSTReport()', csv: 'exportGSTCSV()' },
     { n: 'Employee Shift Report', d: 'Monthly attendance & shift history per employee', fn: 'generateShiftReport()', csv: 'exportShiftCSV()' },
-  ].map(r => `<div class="flex-between" style="padding:10px 0;border-bottom:1px solid var(--border-light)">
+    { n: 'Balance Sheet', d: 'Assets, liabilities & owner equity', fn: 'navigate(\'balsheet\')', csv: 'generateBalanceSheetPDF()' },
+  ].map(r => {
+    const isBalSheet = r.n === 'Balance Sheet';
+    return `<div class="flex-between" style="padding:10px 0;border-bottom:1px solid var(--border-light)">
     <div><div class="fw-600" style="font-size:13px;color:var(--text-1)">${r.n}</div><div style="font-size:11px;color:var(--text-3)">${r.d}</div></div>
     <div style="display:flex;gap:6px">
-      <button class="btn btn-ghost btn-sm" onclick="${r.fn}" style="font-size:11px">📄 PDF</button>
-      <button class="btn btn-ghost btn-sm" onclick="${r.csv}" style="font-size:11px;color:var(--green)">📊 Excel</button>
+      <button class="btn btn-ghost btn-sm" onclick="${r.fn}" style="font-size:11px">${isBalSheet ? '🏦 Open' : '📄 PDF'}</button>
+      <button class="btn btn-ghost btn-sm" onclick="${r.csv}" style="font-size:11px;color:var(--green)">${isBalSheet ? '📄 PDF' : '📊 Excel'}</button>
     </div>
-  </div>`).join('');
+  </div>`;
+  }).join('');
 
   const creditPct = totalRevenue ? ((D.sales.filter(s => s.mode === 'credit').reduce((a, s) => a + s.amount, 0) / totalRevenue) * 100).toFixed(1) : 0;
   const upiPct = totalRevenue ? ((D.sales.filter(s => s.mode === 'upi').reduce((a, s) => a + s.amount, 0) / totalRevenue) * 100).toFixed(1) : 0;
@@ -7252,7 +7255,6 @@ const PAGES = [
   { id: 'billing', label: 'Subscriptions', icon: '💳', group: 'reports', superAdminOnly: true },
   { id: 'insights', label: 'AI Insights', icon: '🤖', group: 'reports' },
   { id: 'dms',       label: 'DMS / Indent',      icon: '📦', group: 'finance' },
-  { id: 'balsheet',  label: 'Balance Sheet',     icon: '🏦', group: 'finance' },
   { id: 'settings',  label: 'Settings',          icon: '⚙️', group: 'reports' },
 ];
 
