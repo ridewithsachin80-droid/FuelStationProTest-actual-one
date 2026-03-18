@@ -29,6 +29,7 @@ const STORE_MAP = {
   auditLog:           { table: 'audit_log',          hasAutoId: true },
   lubesProducts:      { table: 'lubes_products',     hasAutoId: false, keyCol: 'id' },
   lubesSales:         { table: 'lubes_sales',        hasAutoId: true },
+  dmsTransactions:    { table: 'dms_transactions',   hasAutoId: true },
 };
 
 // ── Frontend → DB column mapping (write) ──────────────────────────────────
