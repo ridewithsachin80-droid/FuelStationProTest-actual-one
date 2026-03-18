@@ -6341,7 +6341,7 @@ function rbac_can(action) {
 
 function rbac_pages() {
   const allowed = ROLE_PAGES[rbac_role()];
-  return allowed === null ? PAGES.map(p => p.id) : (allowed || []);
+  return (allowed === null || allowed === undefined) ? PAGES.map(p => p.id) : allowed;
 }
 
 function rbac_canPage(pageId) {
