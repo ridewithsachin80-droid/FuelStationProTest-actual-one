@@ -1555,7 +1555,7 @@ function renderReports(D) {
     { n: 'Pump Sales Report', d: 'Per-pump meter & sales data', fn: 'generatePumpReport()', csv: 'exportPumpCSV()' },
     { n: 'GST Summary', d: 'Tax computation for filing', fn: 'generateGSTReport()', csv: 'exportGSTCSV()' },
     { n: 'Employee Shift Report', d: 'Monthly attendance & shift history per employee', fn: 'generateShiftReport()', csv: 'exportShiftCSV()' },
-    { n: 'Balance Sheet', d: 'Assets, liabilities & owner equity', fn: 'navigate(\'balsheet\')', csv: 'generateBalanceSheetPDF()' },
+    { n: 'Balance Sheet', d: 'Assets, liabilities & Owner equity', fn: 'navigate(\'balsheet\')', csv: 'generateBalanceSheetPDF()' },
   ].map(r => {
     const isBalSheet = r.n === 'Balance Sheet';
     return `<div class="flex-between" style="padding:10px 0;border-bottom:1px solid var(--border-light)">
