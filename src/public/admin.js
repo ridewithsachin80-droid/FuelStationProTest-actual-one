@@ -6318,8 +6318,12 @@ window.exportTallyXML = exportTallyXML;
 const ROLE_PAGES = {
   Owner:      null,  // null = all pages
   Manager:    null,  // null = all pages (same as Owner — full operational access)
+  // FIX: added 'balsheet' explicitly (was already included, kept for clarity)
   Accountant: ['dashboard','finance','credit','exports','reports','analytics','lubes','insights','balsheet','dms','settings'],
   Cashier:    ['dashboard','tanks','pumps','sales','lubes'],
+  // FIX: common role name variants — map to all-access so unknown roles never lock users out
+  Admin:      null,
+  admin:      null,
 };
 
 // Actions blocked per role (used by rbac_can())
@@ -6340,7 +6344,11 @@ function rbac_can(action) {
 }
 
 function rbac_pages() {
-  const allowed = ROLE_PAGES[rbac_role()];
+  const role = rbac_role();
+  // Case-insensitive match — so 'owner', 'OWNER', 'Owner', 'Admin' etc. all resolve correctly
+  const key = Object.keys(ROLE_PAGES).find(k => k.toLowerCase() === (role||'').toLowerCase()) || role;
+  const allowed = ROLE_PAGES[key];
+  // null = all pages (Owner/Manager). undefined = unknown/custom role → safe fallback = all pages.
   return (allowed === null || allowed === undefined) ? PAGES.map(p => p.id) : allowed;
 }
 
