@@ -2523,6 +2523,7 @@ function renderAttendance(D) {
       <div style="display:flex;gap:8px;align-items:center">
         <input type="date" class="form-input" style="padding:6px 12px;font-size:13px;width:160px" value="${attDate}" onchange="window._attDate=this.value;renderPage()" />
         <button class="btn btn-ghost btn-sm" onclick="attMarkAllPresent('${dateKey}')">✅ All Present</button>
+        <button class="btn btn-ghost btn-sm" onclick="exportAttendanceCSV()">📊 Export CSV</button>
         <span id="att-autosave-ind" style="display:none;font-size:11px;font-weight:700;margin-left:4px"></span>
       </div>
     </div>
@@ -2713,11 +2714,47 @@ function renderAnalytics(D) {
       return `<option value="${id}" ${vFuel===id?'selected':''}>${f.short}</option>`;
     }).join('');
 
+    // ── Drill-down: single vehicle detail view ──────────────────────────────
+    if (window._drillVehicle) {
+      const dVno = window._drillVehicle;
+      const dSales = D.sales.filter(s=>(s.vehicle||'').trim().toUpperCase()===dVno).sort((a,b)=>(b.date||'')>(a.date||'')?1:-1);
+      const dTotal = dSales.reduce((a,s)=>a+(s.amount||0),0);
+      const dLtrs  = dSales.reduce((a,s)=>a+(s.liters||0),0);
+      const dCred  = dSales.filter(s=>s.mode==='credit').reduce((a,s)=>a+(s.amount||0),0);
+      body = `
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px">
+          <button class="btn btn-ghost btn-sm" onclick="window._drillVehicle=null;renderPage()">← Back</button>
+          <h4 class="fw-700" style="font-size:16px;color:var(--text-0)">🚗 ${sanitize(dVno)}</h4>
+          <button class="btn btn-ghost btn-sm" style="margin-left:auto" onclick="generateVehicleStatementPDF('${dVno}')">📄 Statement PDF</button>
+        </div>
+        <div class="g g-auto-sm gap-12 mb-16">
+          ${statCard('Transactions', dSales.length, 'all time', '🔢')}
+          ${statCard('Fuel Dispensed', fmt(dLtrs)+' L', 'total', '⛽')}
+          ${statCard('Total Revenue', cur(dTotal), 'all payments', '💰')}
+          ${dCred>0?statCard('Credit Outstanding', cur(dCred), 'unpaid credit sales', '💳'):''}
+        </div>
+        <div class="card card-pad" style="padding:0;overflow:hidden">
+          <div class="tbl-wrap"><table>
+            <thead><tr><th>Date</th><th>Fuel</th><th class="r">Litres</th><th class="r">Amount</th><th>Mode</th><th>Employee</th><th>Pump</th></tr></thead>
+            <tbody>${dSales.length>0 ? dSales.map(s=>`<tr>
+              <td class="mono" style="font-size:11px">${s.date||'—'}</td>
+              <td style="color:${getFuel(s.fuelType).color}">${getFuel(s.fuelType).short}</td>
+              <td class="mono r">${fmt(s.liters)} L</td>
+              <td class="mono r fw-700">${cur(s.amount)}</td>
+              <td>${badgeColor(s.mode,payColors[s.mode])}</td>
+              <td style="font-size:11px;color:var(--text-2)">${sanitize(s.employee||s.employeeName||'—')}</td>
+              <td style="font-size:11px;color:var(--text-3)">${s.pump?'P'+s.pump:'—'}</td>
+            </tr>`).join('') : '<tr><td colspan="7" style="text-align:center;padding:20px;color:var(--text-3)">No sales found</td></tr>'}
+            </tbody>
+          </table></div>
+        </div>`;
+    } else {
+
     body = `
       <div class="g g-auto-sm gap-12 mb-16">
-        ${statCard('Vehicles', totalVehicles, 'in date range', '🚗')}
-        ${statCard('Fuel Dispensed', fmt(totalLiters) + ' L', 'all vehicles', '⛽')}
-        ${statCard('Revenue', cur(totalAmt), 'from vehicles', '💰')}
+        ${statCard('Vehicles', totalVehicles, 'in date range', '🚗')}\
+        ${statCard('Fuel Dispensed', fmt(totalLiters) + ' L', 'all vehicles', '⛽')}\
+        ${statCard('Revenue', cur(totalAmt), 'from vehicles', '💰')}\
       </div>
       <div class="card card-pad mb-16">
         <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
@@ -2746,7 +2783,7 @@ function renderAnalytics(D) {
           <thead><tr><th>Vehicle No</th><th>Fuel Types</th><th>Txns</th><th>Litres</th><th>Amount</th><th>Last Visit</th><th>Customer</th></tr></thead>
           <tbody>
             ${rows.map(([vno, v]) => `<tr>
-              <td class="fw-700" style="color:var(--text-0)">${sanitize(vno)}</td>
+              <td class="fw-700" style="color:var(--text-0);cursor:pointer" onclick="window._drillVehicle='${vno}';window._analyticsTab='vehicle';renderPage()">${sanitize(vno)}</td>
               <td>${[...v.fuelTypes].map(f => { const fi=getFuel(f); return `<span style="font-size:10px;font-weight:700;color:${fi.color};background:${fi.color}20;padding:1px 6px;border-radius:4px">${fi.short}</span>`; }).join(' ')}</td>
               <td class="mono">${v.txns}</td>
               <td class="mono fw-700">${fmt(v.liters)} L</td>
@@ -2761,6 +2798,7 @@ function renderAnalytics(D) {
         <div class="fw-600">No vehicle data found</div>
         <div style="font-size:12px;margin-top:6px">Vehicle numbers are captured during sales recording</div>
       </div>`}`;
+    } // end else (no drill-down)
 
   } else if (_analyticsTab === 'density') {
     // ── Density Variance Analysis ──────────────────────────────────────────
@@ -5463,6 +5501,14 @@ function renderGSTTab(D) {
           <button class="btn btn-accent btn-sm" style="flex:1" onclick="exportTallyXML(${gstMonth},${gstYear})">📥 Tally XML (Lubes)</button>
           <button class="btn btn-ghost btn-sm" style="flex:1" onclick="openGSTINModal()">⚙️ GSTIN Settings</button>
         </div>
+        <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border-light)">
+          <div style="font-size:12px;font-weight:700;color:var(--text-1);margin-bottom:6px">🔄 Tally Direct Sync</div>
+          <p style="font-size:11px;color:var(--text-3);margin-bottom:8px">Push vouchers directly to Tally running on this machine (requires Tally HTTP server on port 9000).</p>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-accent btn-sm" style="flex:1" onclick="syncToTally()">🔄 Sync to Tally</button>
+            <button class="btn btn-ghost btn-sm" style="flex:1" onclick="testTallyConnection()">🔌 Test Connection</button>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -6023,7 +6069,8 @@ function openGSTINModal() {
   const D = APP.data;
   openModal('⚙️ GST Settings', `
     <div class="form-group"><label class="form-label">GSTIN *</label>
-      <input class="form-input" id="g_gstin" value="${sanitize(D.gstin||'')}" placeholder="e.g. 29AAAPL1234C1ZK" style="font-family:var(--mono);font-weight:700;text-transform:uppercase" oninput="this.value=this.value.toUpperCase()" maxlength="15" />
+      <input class="form-input" id="g_gstin" value="${sanitize(D.gstin||'')}" placeholder="e.g. 29AAAPL1234C1ZK" style="font-family:var(--mono);font-weight:700;text-transform:uppercase" oninput="this.value=this.value.toUpperCase();nmCheckGSTIN()" maxlength="15" />
+      <div id="gstinValidMsg" style="font-size:11px;margin-top:4px;min-height:16px"></div>
     </div>
     <div class="form-group"><label class="form-label">Legal / Trade Name</label>
       <input class="form-input" id="g_legal" value="${sanitize(D.legalName||D.upiName||'')}" placeholder="Registered business name" />
@@ -6032,6 +6079,7 @@ function openGSTINModal() {
       <input class="form-input" id="g_state" value="${sanitize(D.stateCode||'29')}" placeholder="e.g. 29 for Karnataka" maxlength="2" />
     </div>
   `, `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-accent" onclick="saveGSTINSettings()">Save</button>`);
+  setTimeout(() => { const v = document.getElementById('g_gstin'); if(v&&v.value) nmCheckGSTIN(); }, 80);
 }
 window.openGSTINModal = openGSTINModal;
 
@@ -7233,7 +7281,11 @@ const PAGES = [
   { id: 'compare', label: 'Compare Stations', icon: '🏢', group: 'reports', superAdminOnly: true },
   { id: 'billing', label: 'Subscriptions', icon: '💳', group: 'reports', superAdminOnly: true },
   { id: 'insights', label: 'AI Insights', icon: '🤖', group: 'reports' },
-  { id: 'settings', label: 'Settings', icon: '⚙️', group: 'reports' },
+  { id: 'nozzle',    label: 'Nozzle Meters',    icon: '📟', group: 'main' },
+  { id: 'pilferage', label: 'Pilferage',         icon: '🔍', group: 'main' },
+  { id: 'dms',       label: 'DMS / Indent',      icon: '📦', group: 'finance' },
+  { id: 'balsheet',  label: 'Balance Sheet',     icon: '🏦', group: 'finance' },
+  { id: 'settings',  label: 'Settings',          icon: '⚙️', group: 'reports' },
 ];
 
 function updateStationBreadcrumb() {
@@ -7409,6 +7461,10 @@ function renderPage() {
       case 'insights': html = renderInsights(D); break;
       case 'employee': html = renderEmployeePortal(); break;
       case 'settings': html = renderSettings(D); break;
+      case 'nozzle':   html = renderNozzleMeterPage(D); break;
+      case 'pilferage':html = renderPilferage(D); break;
+      case 'dms':      html = renderDMSLog(D); break;
+      case 'balsheet': html = renderBalanceSheet(D); break;
       default: html = renderDashboard(D);
     }
     if (!html || html.trim().length === 0) {
@@ -11330,3 +11386,987 @@ function renderInsights(D) {
     </div>`;
 }
 window.renderInsights = renderInsights;
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// FEATURE 1 — DEDICATED NOZZLE METER PAGE
+// ═══════════════════════════════════════════════════════════════════════════════
+function renderNozzleMeterPage(D) {
+  const log     = window._nozzleMeterLog || [];
+  const todayIs = typeof window.today === 'function' ? window.today() : new Date().toLocaleString('en-CA',{timeZone:'Asia/Kolkata'}).slice(0,10);
+  const logDate = window._nmPageDate || todayIs;
+  const dayEntries = log.filter(e => e.date === logDate);
+
+  // Per-pump summary for selected date
+  const pumps = D.pumps || [];
+  const pumpCards = pumps.map(p => {
+    const nozzleLabels = p.nozzleLabels || (p.nozzles===1?['A']:p.nozzles===2?['A','B']:['A','B','C'].slice(0,p.nozzles||2));
+    const nozzleFuels  = p.nozzleFuels || {};
+    const nozzleRows = nozzleLabels.map(n => {
+      const entry = dayEntries.find(e => String(e.pumpId)===String(p.id) && e.nozzle===n);
+      const ft = getFuel(nozzleFuels[n] || p.fuelType);
+      const hasData = entry && (entry.openReading || entry.closeReading);
+      const variance = entry ? entry.variance : null;
+      const varColor = variance == null ? 'var(--text-3)' : Math.abs(variance) < 0.5 ? 'var(--green)' : Math.abs(variance) < 5 ? 'var(--orange)' : 'var(--red)';
+      const varFlag  = variance != null && Math.abs(variance) >= 0.5;
+      return `<tr>
+        <td style="padding:8px 12px;font-weight:700;color:${ft.color}">${sanitize(p.name)} · N${n}</td>
+        <td style="padding:8px 12px;font-size:11px;color:var(--text-2)">${ft.short}</td>
+        <td class="mono" style="padding:8px 12px">${entry ? fmt(entry.openReading) : '—'}</td>
+        <td class="mono" style="padding:8px 12px">${entry ? fmt(entry.closeReading) : '—'}</td>
+        <td class="mono fw-700" style="padding:8px 12px;color:var(--accent-light)">${entry ? fmt(entry.meterSold) : '—'} L</td>
+        <td class="mono" style="padding:8px 12px">${entry ? fmt(entry.systemSold) : '—'} L</td>
+        <td class="mono fw-700" style="padding:8px 12px;color:${varColor}">${variance != null ? (variance>=0?'+':'')+variance.toFixed(2)+' L' : '—'}${varFlag?' ⚠️':''}</td>
+        <td style="padding:8px 12px">
+          <button class="btn btn-ghost btn-sm" onclick="openNozzleMeterModal(${p.id},'${n}')">✏️ Entry</button>
+        </td>
+      </tr>`;
+    }).join('');
+
+    const pumpTotal = nozzleLabels.reduce((a,n) => {
+      const e = dayEntries.find(x => String(x.pumpId)===String(p.id) && x.nozzle===n);
+      return a + (e ? e.meterSold||0 : 0);
+    }, 0);
+
+    return `<div class="card card-pad mb-12" style="padding:0;overflow:hidden">
+      <div style="padding:12px 16px;background:var(--bg-0);border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+        <span class="fw-700" style="font-size:14px;color:var(--text-0)">${sanitize(p.name)}</span>
+        <span class="mono fw-700" style="color:var(--accent-light);font-size:13px">${fmt(pumpTotal)} L today</span>
+      </div>
+      <div class="tbl-wrap"><table>
+        <thead><tr>
+          <th>Pump · Nozzle</th><th>Fuel</th><th class="r">Open</th><th class="r">Close</th>
+          <th class="r">Meter Sold</th><th class="r">System Sold</th><th class="r">Variance</th><th></th>
+        </tr></thead>
+        <tbody>${nozzleRows}</tbody>
+      </table></div>
+    </div>`;
+  }).join('');
+
+  // Summary stats
+  const totalMeter  = dayEntries.reduce((a,e)=>a+(e.meterSold||0),0);
+  const totalSystem = dayEntries.reduce((a,e)=>a+(e.systemSold||0),0);
+  const totalVar    = dayEntries.reduce((a,e)=>a+(e.variance||0),0);
+  const flaggedCnt  = dayEntries.filter(e=>e.flagged).length;
+
+  return `<div class="page-hdr">
+    <h3>📟 Nozzle Meter Log</h3>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <input type="date" class="form-input" style="width:160px;padding:6px 12px;font-size:13px" value="${logDate}"
+        max="${todayIs}" onchange="window._nmPageDate=this.value;renderPage()" />
+      <button class="btn btn-ghost btn-sm" onclick="generateNozzleMeterPDF()">📄 PDF</button>
+    </div>
+  </div>
+
+  <div class="g g-auto-sm gap-12 mb-16">
+    ${statCard('Meter Dispensed', fmt(totalMeter)+' L', 'from nozzle readings', '📟')}
+    ${statCard('System Sold', fmt(totalSystem)+' L', 'from sale records', '💰')}
+    ${statCard('Variance', (totalVar>=0?'+':'')+totalVar.toFixed(2)+' L', totalVar>5?'⚠️ investigate':'within tolerance', '⚖️')}
+    ${statCard('Flagged Nozzles', flaggedCnt, 'variance ≥ 0.5L', flaggedCnt>0?'🚨':'✅')}
+  </div>
+
+  ${pumps.length > 0 ? pumpCards : `<div class="card card-pad" style="text-align:center;padding:40px;color:var(--text-3)">
+    <div style="font-size:32px;margin-bottom:12px">📟</div>
+    <div class="fw-600">No pumps configured</div>
+    <div style="font-size:12px;margin-top:6px">Add pumps in the Pumps & Meters page first</div>
+  </div>`}
+
+  <div class="card card-pad mt-12">
+    <h4 class="fw-700 mb-10" style="font-size:13px;color:var(--text-0)">📋 All Entries — ${logDate}</h4>
+    ${dayEntries.length > 0 ? `<div class="tbl-wrap"><table>
+      <thead><tr><th>Shift</th><th>Employee</th><th>Pump</th><th>N</th><th>Fuel</th>
+        <th class="r">Open</th><th class="r">Close</th><th class="r">Meter</th>
+        <th class="r">System</th><th class="r">Variance</th><th>Source</th></tr></thead>
+      <tbody>${dayEntries.map(e => {
+        const vc = Math.abs(e.variance||0)<0.5?'var(--green)':Math.abs(e.variance||0)<5?'var(--orange)':'var(--red)';
+        return `<tr>
+          <td>${sanitize(e.shift||'—')}</td>
+          <td>${sanitize(e.employee||'—')}</td>
+          <td>${sanitize(e.pumpName||e.pumpId||'—')}</td>
+          <td class="fw-700">${sanitize(e.nozzle||'')}</td>
+          <td style="color:${getFuel(e.fuelType).color}">${getFuel(e.fuelType).short}</td>
+          <td class="mono r">${fmt(e.openReading)}</td>
+          <td class="mono r">${fmt(e.closeReading)}</td>
+          <td class="mono r fw-700">${fmt(e.meterSold)} L</td>
+          <td class="mono r">${fmt(e.systemSold)} L</td>
+          <td class="mono r fw-700" style="color:${vc}">${(e.variance>=0?'+':'')+(e.variance||0).toFixed(2)} L</td>
+          <td style="font-size:11px;color:var(--text-3)">${e.source||'admin'}</td>
+        </tr>`;
+      }).join('')}</tbody>
+    </table></div>` : `<p style="color:var(--text-3);font-size:13px;padding:20px 0;text-align:center">No meter readings recorded for ${logDate}</p>`}
+  </div>`;
+}
+window.renderNozzleMeterPage = renderNozzleMeterPage;
+
+function generateNozzleMeterPDF() {
+  const D = APP.data;
+  const logDate = window._nmPageDate || (typeof window.today==='function'?window.today():new Date().toLocaleString('en-CA',{timeZone:'Asia/Kolkata'}).slice(0,10));
+  const entries = (window._nozzleMeterLog||[]).filter(e=>e.date===logDate);
+  const totalVar = entries.reduce((a,e)=>a+(e.variance||0),0);
+  const rows = entries.map(e=>`<tr>
+    <td>${sanitize(e.shift||'—')}</td><td>${sanitize(e.employee||'—')}</td>
+    <td>${sanitize(e.pumpName||String(e.pumpId)||'—')} · N${sanitize(e.nozzle||'')}</td>
+    <td style="color:${getFuel(e.fuelType).color}">${getFuel(e.fuelType).short}</td>
+    <td class="r">${fmt(e.openReading)}</td><td class="r">${fmt(e.closeReading)}</td>
+    <td class="r fw-700">${fmt(e.meterSold)} L</td><td class="r">${fmt(e.systemSold)} L</td>
+    <td class="r fw-700" style="color:${Math.abs(e.variance||0)<0.5?'#16a34a':Math.abs(e.variance||0)<5?'#d97706':'#dc2626'}">${(e.variance>=0?'+':'')+(e.variance||0).toFixed(2)} L</td>
+  </tr>`).join('');
+  generatePDFReport(`Nozzle Meter Log — ${logDate}`, [
+    `<div class="summary-grid">
+      <div class="summary-box"><div class="label">Meter Dispensed</div><div class="value">${fmt(entries.reduce((a,e)=>a+(e.meterSold||0),0))} L</div></div>
+      <div class="summary-box"><div class="label">System Sold</div><div class="value">${fmt(entries.reduce((a,e)=>a+(e.systemSold||0),0))} L</div></div>
+      <div class="summary-box"><div class="label">Net Variance</div><div class="value" style="color:${Math.abs(totalVar)<1?'#16a34a':'#dc2626'}">${(totalVar>=0?'+':'')+totalVar.toFixed(2)} L</div></div>
+    </div>`,
+    `<section class="section"><h3>Nozzle Readings</h3>
+    <table><thead><tr><th>Shift</th><th>Employee</th><th>Pump/Nozzle</th><th>Fuel</th>
+      <th class="r">Open</th><th class="r">Close</th><th class="r">Meter</th><th class="r">System</th><th class="r">Variance</th></tr></thead>
+    <tbody>${rows||'<tr><td colspan="9" style="text-align:center">No entries</td></tr>'}</tbody></table></section>`,
+  ]);
+}
+window.generateNozzleMeterPDF = generateNozzleMeterPDF;
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// FEATURE 2 — VEHICLE DRILL-DOWN + STATEMENT PDF
+// (Extends existing vehicle report in analytics — adds drill-down and statement)
+// ═══════════════════════════════════════════════════════════════════════════════
+function generateVehicleStatementPDF(vno) {
+  const D = APP.data;
+  const sales = (D.sales||[]).filter(s=>(s.vehicle||'').trim().toUpperCase()===(vno||'').toUpperCase()).sort((a,b)=>(b.date||'')>(a.date||'')?1:-1);
+  const totalL  = sales.reduce((a,s)=>a+(s.liters||0),0);
+  const totalAmt= sales.reduce((a,s)=>a+(s.amount||0),0);
+  const creditSales = sales.filter(s=>s.mode==='credit');
+  const creditAmt   = creditSales.reduce((a,s)=>a+(s.amount||0),0);
+  const rows = sales.map(s=>`<tr>
+    <td>${s.date||'—'}</td>
+    <td style="color:${getFuel(s.fuelType).color}">${getFuel(s.fuelType).short}</td>
+    <td class="r">${fmt(s.liters)} L</td>
+    <td class="r fw-700">₹${fmt(s.amount)}</td>
+    <td>${badgeColor(s.mode,payColors[s.mode])}</td>
+    <td style="font-size:11px">${sanitize(s.employee||s.employeeName||'—')}</td>
+  </tr>`).join('');
+  generatePDFReport(`Vehicle Statement — ${vno}`, [
+    `<div class="summary-grid">
+      <div class="summary-box"><div class="label">Total Transactions</div><div class="value">${sales.length}</div></div>
+      <div class="summary-box"><div class="label">Fuel Dispensed</div><div class="value">${fmt(totalL)} L</div></div>
+      <div class="summary-box"><div class="label">Total Amount</div><div class="value">₹${fmt(totalAmt)}</div></div>
+    </div>
+    ${creditAmt > 0 ? `<div class="summary-box" style="margin-bottom:16px;border-left-color:#dc2626"><div class="label">Credit Outstanding</div><div class="value" style="color:#dc2626">₹${fmt(creditAmt)}</div></div>` : ''}`,
+    `<section class="section"><h3>Transaction History</h3>
+    <table><thead><tr><th>Date</th><th>Fuel</th><th class="r">Litres</th><th class="r">Amount</th><th>Mode</th><th>Employee</th></tr></thead>
+    <tbody>${rows||'<tr><td colspan="6" style="text-align:center">No transactions</td></tr>'}</tbody></table></section>`,
+  ]);
+}
+window.generateVehicleStatementPDF = generateVehicleStatementPDF;
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// FEATURE 3 — GSTIN VALIDATION
+// ═══════════════════════════════════════════════════════════════════════════════
+function validateGSTIN(gstin) {
+  if (!gstin) return false;
+  const g = gstin.trim().toUpperCase();
+  if (!/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/.test(g)) return false;
+  // Checksum validation (GSTIN mod-36 algorithm)
+  const chars = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  let sum = 0;
+  for (let i = 0; i < 14; i++) {
+    const c = chars.indexOf(g[i]);
+    const p = c * (i % 2 === 0 ? 1 : 2);
+    sum += Math.floor(p / 36) + (p % 36);
+  }
+  const expected = chars[(36 - (sum % 36)) % 36];
+  return g[14] === expected;
+}
+window.validateGSTIN = validateGSTIN;
+
+// Show live GSTIN validation feedback in the GSTIN modal
+function nmCheckGSTIN() {
+  const val = (document.getElementById('gstinInput')||{}).value || '';
+  const msg = document.getElementById('gstinValidMsg');
+  if (!msg) return;
+  if (!val) { msg.textContent = ''; return; }
+  const valid = validateGSTIN(val);
+  msg.textContent = valid ? '✅ Valid GSTIN format' : '⚠️ Invalid GSTIN — check format and checksum';
+  msg.style.color = valid ? 'var(--green)' : 'var(--orange)';
+}
+window.nmCheckGSTIN = nmCheckGSTIN;
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// FEATURE 4 — OMC-SPECIFIC DSR FORMAT
+// ═══════════════════════════════════════════════════════════════════════════════
+function generateDSRReport() {
+  const D = APP.data;
+  const omc = (APP.tenant?.omc || D?.omc || 'iocl').toLowerCase();
+  const date = reportDate || (typeof window.today==='function'?window.today():new Date().toLocaleString('en-CA',{timeZone:'Asia/Kolkata'}).slice(0,10));
+  if (omc === 'bpcl') generateBPCLDSR(D, date);
+  else generateIOCLDSR(D, date);
+}
+window.generateDSRReport = generateDSRReport;
+
+function generateBPCLDSR(D, date) {
+  const sales = (D.sales||[]).filter(s=>(s.date||'').slice(0,10)===date);
+  const pumps = D.pumps || [];
+  const tanks = D.tanks || [];
+  const purchases = (D.fuelPurchases||[]).filter(p=>(p.date||'').slice(0,10)===date);
+  const nmlEntries = (window._nozzleMeterLog||[]).filter(e=>e.date===date);
+
+  // Nozzle readings section
+  const nozzleRows = [];
+  pumps.forEach(p => {
+    const labels = p.nozzleLabels || (p.nozzles===1?['A']:p.nozzles===2?['A','B']:['A','B','C'].slice(0,p.nozzles||2));
+    labels.forEach(n => {
+      const e = nmlEntries.find(x=>String(x.pumpId)===String(p.id)&&x.nozzle===n);
+      const testStock = 0; // test/calibration litres
+      const diff = e ? e.meterSold : 0;
+      nozzleRows.push(`<tr>
+        <td>${sanitize(p.name)} · N${n}</td>
+        <td style="color:${getFuel(p.nozzleFuels?.[n]||p.fuelType).color}">${getFuel(p.nozzleFuels?.[n]||p.fuelType).short}</td>
+        <td class="r">${e ? fmt(e.openReading) : '—'}</td>
+        <td class="r">${e ? fmt(e.closeReading) : '—'}</td>
+        <td class="r">${testStock}</td>
+        <td class="r fw-700">${fmt(diff)} L</td>
+        <td class="r" style="color:${e&&Math.abs(e.variance||0)>=0.5?'#dc2626':'#16a34a'}">${e ? (e.variance>=0?'+':'')+e.variance.toFixed(2)+' L' : '—'}</td>
+      </tr>`);
+    });
+  });
+
+  // Tank dip section
+  const dipRows = tanks.map(t => {
+    const dipEntries = (D.dipReadings||[]).filter(d=>d.tankId===t.id&&(d.date||'').slice(0,10)===date).sort((a,b)=>a.id-b.id);
+    const open  = dipEntries[0]?.level || '—';
+    const close = dipEntries[dipEntries.length-1]?.level || t.current || '—';
+    const diff  = (typeof open==='number'&&typeof close==='number') ? (open-close).toFixed(1) : '—';
+    return `<tr>
+      <td>${sanitize(t.name||t.fuelType)}</td>
+      <td style="color:${getFuel(t.fuelType).color}">${getFuel(t.fuelType).short}</td>
+      <td class="r">${typeof open==='number'?fmt(open)+' L':open}</td>
+      <td class="r">${typeof close==='number'?fmt(close)+' L':close}</td>
+      <td class="r">${purchases.filter(p=>(p.fuelType||'').toLowerCase()===(t.fuelType||'').toLowerCase()).reduce((a,p)=>a+(p.liters||0),0)} L</td>
+      <td class="r fw-700">${diff !== '—' ? diff+' L' : '—'}</td>
+    </tr>`;
+  }).join('');
+
+  // Payment mode summary
+  const cash   = sales.filter(s=>s.mode==='cash').reduce((a,s)=>a+(s.amount||0),0);
+  const upi    = sales.filter(s=>s.mode==='upi').reduce((a,s)=>a+(s.amount||0),0);
+  const card   = sales.filter(s=>s.mode==='card').reduce((a,s)=>a+(s.amount||0),0);
+  const credit = sales.filter(s=>s.mode==='credit').reduce((a,s)=>a+(s.amount||0),0);
+  const totalRev = cash + upi + card + credit;
+  const stationCode = D.stationCode || APP.tenant?.stationCode || '';
+
+  generatePDFReport(`BPCL Daily Sales Report (DSR) — ${date}`, [
+    `<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;font-size:12px">
+      <div><strong>Station Code:</strong> ${sanitize(stationCode)||'—'}</div>
+      <div><strong>Date:</strong> ${date}</div>
+      <div><strong>OMC:</strong> BPCL SmartDrive</div>
+      <div><strong>Territory:</strong> ${sanitize(APP.tenant?.location||'')}</div>
+    </div>`,
+    `<section class="section"><h3>Nozzle Meter Readings</h3>
+    <table><thead><tr><th>Pump · Nozzle</th><th>Fuel</th><th class="r">Opening</th><th class="r">Closing</th><th class="r">Testing</th><th class="r">Difference</th><th class="r">Variance</th></tr></thead>
+    <tbody>${nozzleRows.join('')||'<tr><td colspan="7" style="text-align:center">No meter readings</td></tr>'}</tbody></table></section>`,
+    `<section class="section"><h3>Tank Dip Readings & Stock</h3>
+    <table><thead><tr><th>Tank</th><th>Fuel</th><th class="r">Opening Dip</th><th class="r">Closing Dip</th><th class="r">Received</th><th class="r">Consumption</th></tr></thead>
+    <tbody>${dipRows||'<tr><td colspan="6" style="text-align:center">No dip readings</td></tr>'}</tbody></table></section>`,
+    `<section class="section"><h3>Payment Mode Summary</h3>
+    <table><thead><tr><th>Mode</th><th class="r">Amount</th><th class="r">Transactions</th></tr></thead>
+    <tbody>
+      <tr><td>Cash</td><td class="r">₹${fmt(cash)}</td><td class="r">${sales.filter(s=>s.mode==='cash').length}</td></tr>
+      <tr><td>UPI / Digital</td><td class="r">₹${fmt(upi)}</td><td class="r">${sales.filter(s=>s.mode==='upi').length}</td></tr>
+      <tr><td>Card</td><td class="r">₹${fmt(card)}</td><td class="r">${sales.filter(s=>s.mode==='card').length}</td></tr>
+      <tr><td>Credit</td><td class="r">₹${fmt(credit)}</td><td class="r">${sales.filter(s=>s.mode==='credit').length}</td></tr>
+      <tr><td class="fw-700">Total</td><td class="r fw-700">₹${fmt(totalRev)}</td><td class="r fw-700">${sales.length}</td></tr>
+    </tbody></table></section>`,
+  ]);
+}
+window.generateBPCLDSR = generateBPCLDSR;
+
+function generateIOCLDSR(D, date) {
+  const sales = (D.sales||[]).filter(s=>(s.date||'').slice(0,10)===date);
+  const tanks = D.tanks||[];
+  const purchases = (D.fuelPurchases||[]).filter(p=>(p.date||'').slice(0,10)===date);
+  const nmlEntries = (window._nozzleMeterLog||[]).filter(e=>e.date===date);
+  const cash   = sales.filter(s=>s.mode==='cash').reduce((a,s)=>a+(s.amount||0),0);
+  const upi    = sales.filter(s=>s.mode==='upi').reduce((a,s)=>a+(s.amount||0),0);
+  const card   = sales.filter(s=>s.mode==='card').reduce((a,s)=>a+(s.amount||0),0);
+  const credit = sales.filter(s=>s.mode==='credit').reduce((a,s)=>a+(s.amount||0),0);
+  const totalRev = cash+upi+card+credit;
+  const totalL   = sales.reduce((a,s)=>a+(s.liters||0),0);
+  const stationCode = D.stationCode || APP.tenant?.stationCode || '';
+
+  const tankRows = tanks.map(t => {
+    const dipE = (D.dipReadings||[]).filter(d=>d.tankId===t.id&&(d.date||'').slice(0,10)===date).sort((a,b)=>a.id-b.id);
+    const opDip = dipE[0]?.level;
+    const clDip = dipE[dipE.length-1]?.level ?? t.current;
+    const receipt = purchases.filter(p=>(p.fuelType||'').toLowerCase()===(t.fuelType||'').toLowerCase()).reduce((a,p)=>a+(p.liters||0),0);
+    return `<tr>
+      <td>${sanitize(t.name||t.fuelType)}</td>
+      <td style="color:${getFuel(t.fuelType).color}">${getFuel(t.fuelType).short}</td>
+      <td class="r">${opDip!=null?fmt(opDip)+' L':'—'}</td>
+      <td class="r">${receipt?fmt(receipt)+' L':'—'}</td>
+      <td class="r fw-700">${nmlEntries.filter(e=>(e.fuelType||'').toLowerCase()===(t.fuelType||'').toLowerCase()).reduce((a,e)=>a+(e.meterSold||0),0).toFixed(1)} L</td>
+      <td class="r">${clDip!=null?fmt(clDip)+' L':'—'}</td>
+    </tr>`;
+  }).join('');
+
+  generatePDFReport(`IndianOil ONE — Daily Sales Report (DSR) — ${date}`, [
+    `<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;font-size:12px">
+      <div><strong>Dealer Code:</strong> ${sanitize(stationCode)||'—'}</div>
+      <div><strong>Report Date:</strong> ${date}</div>
+      <div><strong>OMC:</strong> IOCL — IndianOil ONE</div>
+      <div><strong>Location:</strong> ${sanitize(APP.tenant?.location||'')}</div>
+    </div>`,
+    `<section class="section"><h3>Stock Position</h3>
+    <table><thead><tr><th>Product</th><th>Grade</th><th class="r">Opening Stock</th><th class="r">Received</th><th class="r">Meter Sales</th><th class="r">Closing Stock</th></tr></thead>
+    <tbody>${tankRows||'<tr><td colspan="6" style="text-align:center">No tank data</td></tr>'}</tbody></table></section>`,
+    `<section class="section"><h3>Sales Summary</h3>
+    <div class="summary-grid">
+      <div class="summary-box"><div class="label">Total Volume</div><div class="value">${fmt(totalL)} L</div></div>
+      <div class="summary-box"><div class="label">Total Revenue</div><div class="value">₹${fmt(totalRev)}</div></div>
+      <div class="summary-box"><div class="label">Transactions</div><div class="value">${sales.length}</div></div>
+    </div>
+    <table><thead><tr><th>Payment Mode</th><th class="r">Amount</th><th class="r">Count</th></tr></thead>
+    <tbody>
+      <tr><td>Cash</td><td class="r">₹${fmt(cash)}</td><td class="r">${sales.filter(s=>s.mode==='cash').length}</td></tr>
+      <tr><td>Digital (UPI/Card)</td><td class="r">₹${fmt(upi+card)}</td><td class="r">${sales.filter(s=>s.mode==='upi'||s.mode==='card').length}</td></tr>
+      <tr><td>Credit</td><td class="r">₹${fmt(credit)}</td><td class="r">${sales.filter(s=>s.mode==='credit').length}</td></tr>
+    </tbody></table></section>`,
+  ]);
+}
+window.generateIOCLDSR = generateIOCLDSR;
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// FEATURE 5 — PILFERAGE DETECTION MODULE
+// ═══════════════════════════════════════════════════════════════════════════════
+function renderPilferage(D) {
+  const todayIs = typeof window.today==='function'?window.today():new Date().toLocaleString('en-CA',{timeZone:'Asia/Kolkata'}).slice(0,10);
+  const tolerance = window._pilferageTol || 50; // litres
+  const avgPrice  = (() => {
+    const sales = D.sales||[];
+    if (!sales.length) return 94;
+    return sales.reduce((a,s)=>a+(s.amount||0),0) / Math.max(1, sales.reduce((a,s)=>a+(s.liters||0),0));
+  })();
+
+  // Build 30-day variance data
+  const days = [];
+  for (let i = 29; i >= 0; i--) {
+    const d = new Date(); d.setDate(d.getDate()-i);
+    days.push(d.toLocaleString('en-CA',{timeZone:'Asia/Kolkata'}).slice(0,10));
+  }
+
+  const nmlLog = window._nozzleMeterLog || [];
+  const dayData = days.map(date => {
+    const meterSold = nmlLog.filter(e=>e.date===date).reduce((a,e)=>a+(e.meterSold||0),0);
+    const systemSold= (D.sales||[]).filter(s=>(s.date||'').slice(0,10)===date).reduce((a,s)=>a+(s.liters||0),0);
+    // Dip reduction for this day
+    const dipEntries = (D.dipReadings||[]).filter(d=>(d.date||'').slice(0,10)===date);
+    const dipReduc   = Math.max(0, -dipEntries.reduce((a,d)=>a+(d.delta||0),0));
+    const variance   = meterSold > 0 ? +(meterSold - systemSold).toFixed(1) : null;
+    const flagged    = variance !== null && Math.abs(variance) > tolerance;
+    return { date, meterSold, systemSold, dipReduc, variance, flagged };
+  });
+
+  const flaggedDays = dayData.filter(d=>d.flagged);
+  const totalLoss   = dayData.reduce((a,d)=>a+(d.variance&&d.variance>0?d.variance:0),0);
+  const estLossRs   = totalLoss * avgPrice;
+
+  // Chart data
+  const chartDates  = JSON.stringify(days.map(d=>d.slice(5)));
+  const chartVars   = JSON.stringify(dayData.map(d=>d.variance===null?0:d.variance));
+  const chartColors = JSON.stringify(dayData.map(d=>d.flagged?'#dc2626':'#16a34a'));
+
+  const tableRows = dayData.filter(d=>d.meterSold>0||d.systemSold>0).map(d=>`<tr>
+    <td class="mono">${d.date}</td>
+    <td class="mono r">${d.meterSold?fmt(d.meterSold)+' L':'—'}</td>
+    <td class="mono r">${d.systemSold?fmt(d.systemSold)+' L':'—'}</td>
+    <td class="mono r fw-700" style="color:${d.flagged?'var(--red)':'var(--green)'}">${d.variance!==null?(d.variance>=0?'+':'')+d.variance+' L':'—'}</td>
+    <td>${d.flagged?'<span style="color:var(--red);font-weight:700">⚠️ Flagged</span>':'<span style="color:var(--green)">✓ OK</span>'}</td>
+  </tr>`).join('');
+
+  return `<div class="page-hdr">
+    <h3>🔍 Pilferage Detection</h3>
+    <div style="display:flex;gap:8px;align-items:center">
+      <label style="font-size:12px;color:var(--text-3)">Tolerance:</label>
+      <input type="number" class="form-input" style="width:80px;padding:5px 8px;font-size:13px"
+        value="${tolerance}" min="0" max="500" step="5"
+        onchange="window._pilferageTol=parseFloat(this.value)||50;renderPage()" />
+      <span style="font-size:12px;color:var(--text-3)">L/day</span>
+      <button class="btn btn-ghost btn-sm" onclick="generatePilferageReport()">📄 Report</button>
+    </div>
+  </div>
+
+  <div class="g g-auto-sm gap-12 mb-16">
+    ${statCard('Days Flagged', flaggedDays.length, 'last 30 days', flaggedDays.length>3?'🚨':'✅')}
+    ${statCard('Est. Cumulative Loss', fmt(totalLoss.toFixed(0))+' L', 'positive variances only', '⛽')}
+    ${statCard('Est. Revenue Loss', '₹'+fmt(estLossRs.toFixed(0)), 'at avg ₹'+avgPrice.toFixed(0)+'/L', '💰')}
+    ${statCard('IS-1460 Anomalies', (D.fuelPurchases||[]).filter(p=>{
+      const r = {petrol:{min:0.720,max:0.775},diesel:{min:0.820,max:0.860},premium_petrol:{min:0.720,max:0.775}}[p.fuelType];
+      return r && p.density && (p.density<r.min||p.density>r.max);
+    }).length, 'density out of range', '⚗️')}
+  </div>
+
+  <div class="card card-pad mb-16">
+    <h4 class="fw-700 mb-10" style="font-size:13px;color:var(--text-0)">📊 30-Day Meter vs System Variance</h4>
+    <p style="font-size:11px;color:var(--text-3);margin-bottom:12px">
+      Positive = more dispensed by meter than recorded in sales (possible pilferage/leakage).
+      Red bars exceed ${tolerance}L tolerance threshold.
+    </p>
+    <div style="position:relative;height:200px;max-width:100%">
+      <canvas id="pilferageChart"></canvas>
+    </div>
+  </div>
+
+  <script>
+  (function(){
+    if (typeof Chart === 'undefined') return;
+    const existing = Chart.getChart('pilferageChart');
+    if (existing) existing.destroy();
+    new Chart(document.getElementById('pilferageChart'), {
+      type: 'bar',
+      data: { labels: ${chartDates}, datasets: [{
+        label: 'Variance (L)', data: ${chartVars},
+        backgroundColor: ${chartColors}, borderRadius: 3,
+      }]},
+      options: { responsive:true, maintainAspectRatio:false,
+        plugins:{ legend:{display:false} },
+        scales:{ y:{ grid:{color:'rgba(255,255,255,0.05)'}, ticks:{color:'#888',font:{size:10}}, title:{display:true,text:'Variance (L)',color:'#888',font:{size:10}} },
+          x:{ grid:{display:false}, ticks:{color:'#888',font:{size:9},maxRotation:45} }
+        }
+      }
+    });
+  })();
+  </script>
+
+  <div class="card card-pad" style="padding:0;overflow:hidden">
+    <div style="padding:12px 16px;border-bottom:1px solid var(--border)">
+      <h4 class="fw-700" style="font-size:13px;color:var(--text-0)">📋 Daily Variance Log</h4>
+    </div>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Date</th><th class="r">Meter Dispensed</th><th class="r">System Sold</th><th class="r">Variance</th><th>Status</th></tr></thead>
+      <tbody>${tableRows || `<tr><td colspan="5" style="text-align:center;padding:24px;color:var(--text-3)">
+        Record nozzle meter readings via the 📟 Nozzle Meters page to see variance data
+      </td></tr>`}</tbody>
+    </table></div>
+  </div>`;
+}
+window.renderPilferage = renderPilferage;
+
+function generatePilferageReport() {
+  const D = APP.data;
+  const tolerance = window._pilferageTol || 50;
+  const nmlLog = window._nozzleMeterLog || [];
+  const days = [];
+  for (let i = 29; i >= 0; i--) {
+    const d = new Date(); d.setDate(d.getDate()-i);
+    days.push(d.toLocaleString('en-CA',{timeZone:'Asia/Kolkata'}).slice(0,10));
+  }
+  const dayData = days.map(date => {
+    const meterSold  = nmlLog.filter(e=>e.date===date).reduce((a,e)=>a+(e.meterSold||0),0);
+    const systemSold = (D.sales||[]).filter(s=>(s.date||'').slice(0,10)===date).reduce((a,s)=>a+(s.liters||0),0);
+    const variance   = meterSold > 0 ? +(meterSold - systemSold).toFixed(1) : null;
+    return { date, meterSold, systemSold, variance, flagged: variance!==null&&Math.abs(variance)>tolerance };
+  });
+  const totalLoss = dayData.reduce((a,d)=>a+(d.variance&&d.variance>0?d.variance:0),0);
+  const rows = dayData.filter(d=>d.meterSold>0).map(d=>`<tr>
+    <td class="mono">${d.date}</td>
+    <td class="r">${fmt(d.meterSold)} L</td>
+    <td class="r">${fmt(d.systemSold)} L</td>
+    <td class="r fw-700" style="color:${d.flagged?'#dc2626':'#16a34a'}">${d.variance!==null?(d.variance>=0?'+':'')+d.variance+' L':'—'}</td>
+    <td style="color:${d.flagged?'#dc2626':'#16a34a'}">${d.flagged?'⚠️ FLAGGED':'OK'}</td>
+  </tr>`).join('');
+  generatePDFReport('Pilferage Detection Report — Last 30 Days', [
+    `<div class="summary-grid">
+      <div class="summary-box"><div class="label">Days Flagged</div><div class="value">${dayData.filter(d=>d.flagged).length}</div></div>
+      <div class="summary-box"><div class="label">Estimated Loss</div><div class="value">${totalLoss.toFixed(1)} L</div></div>
+      <div class="summary-box"><div class="label">Tolerance</div><div class="value">${tolerance} L/day</div></div>
+    </div>`,
+    `<section class="section"><h3>Daily Variance Log</h3>
+    <table><thead><tr><th>Date</th><th class="r">Meter Dispensed</th><th class="r">System Sold</th><th class="r">Variance</th><th>Status</th></tr></thead>
+    <tbody>${rows||'<tr><td colspan="5" style="text-align:center">No meter readings recorded</td></tr>'}</tbody></table></section>`,
+  ]);
+}
+window.generatePilferageReport = generatePilferageReport;
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// FEATURE 6 — BALANCE SHEET
+// ═══════════════════════════════════════════════════════════════════════════════
+function renderBalanceSheet(D) {
+  const todayIs = typeof window.today==='function'?window.today():new Date().toLocaleString('en-CA',{timeZone:'Asia/Kolkata'}).slice(0,10);
+  const asOfDate = window._bsDate || todayIs;
+  const month = asOfDate.slice(0,7);
+
+  // ── ASSETS ──────────────────────────────────────────────────────────────────
+  // 1. Cash on hand = sum of cash sales this month
+  const cashSales = (D.sales||[]).filter(s=>s.mode==='cash'&&(s.date||'').startsWith(month));
+  const cashInHand = cashSales.reduce((a,s)=>a+(s.amount||0),0);
+
+  // 2. UPI/Card collected (banked the same day)
+  const digitalSales = (D.sales||[]).filter(s=>(s.mode==='upi'||s.mode==='card')&&(s.date||'').startsWith(month));
+  const digitalAmt   = digitalSales.reduce((a,s)=>a+(s.amount||0),0);
+
+  // 3. Credit receivables
+  const creditReceivables = (D.creditCustomers||[]).reduce((a,c)=>a+(c.outstanding||c.balance||0),0);
+
+  // 4. Tank inventory at cost
+  const tankInventory = (D.tanks||[]).reduce((a,t)=>{
+    const lastPurch = (D.fuelPurchases||[]).filter(p=>(p.fuelType||'').toLowerCase()===(t.fuelType||'').toLowerCase()).sort((a,b)=>(b.date||'')-(a.date||''))[0];
+    const rate = lastPurch?.rate || 0;
+    return a + (t.current||0) * rate;
+  }, 0);
+
+  // 5. Lube stock at cost
+  const lubeStock = (window._lubesProducts||[]).reduce((a,p)=>a+(p.stock||0)*(p.costPrice||p.cost_price||0),0);
+
+  const totalAssets = cashInHand + digitalAmt + creditReceivables + tankInventory + lubeStock;
+
+  // ── LIABILITIES ─────────────────────────────────────────────────────────────
+  // 1. Fuel purchase payables (credit purchases unpaid)
+  const fuelPayables = (D.fuelPurchases||[]).filter(p=>(p.mode||'')!=='paid'&&(p.date||'').startsWith(month)).reduce((a,p)=>a+(p.total||p.amount||0),0);
+
+  // 2. Salary payables (unpaid this month)
+  const paidSalary = Object.values(window._payrollSaved||{}).filter(p=>p.status==='paid'&&p.month===(new Date(asOfDate).getMonth()+1)&&p.year===new Date(asOfDate).getFullYear()).reduce((a,p)=>a+(p.net||0),0);
+  const totalSalaryDue = (D.employees||[]).reduce((a,e)=>a+(e.salary||0),0);
+  const salaryPayable  = Math.max(0, totalSalaryDue - paidSalary);
+
+  // 3. Credit advances received (from credit customers who prepaid)
+  const advancesReceived = 0; // placeholder
+
+  const totalLiabilities = fuelPayables + salaryPayable + advancesReceived;
+  const ownersEquity = totalAssets - totalLiabilities;
+
+  const assetRow = (label, amount, sub='') => `
+    <div class="flex-between" style="padding:8px 0;border-bottom:1px solid var(--border-light)">
+      <div><span style="color:var(--text-2);font-size:13px">${label}</span>${sub?`<div style="font-size:10px;color:var(--text-3)">${sub}</div>`:''}</div>
+      <span class="mono fw-700" style="color:var(--text-1)">₹${fmt(amount)}</span>
+    </div>`;
+
+  return `<div class="page-hdr">
+    <h3>🏦 Balance Sheet</h3>
+    <div style="display:flex;gap:8px;align-items:center">
+      <input type="month" class="form-input" style="width:160px;padding:6px 12px;font-size:13px"
+        value="${month}" onchange="window._bsDate=this.value+'-01';renderPage()" />
+      <button class="btn btn-ghost btn-sm" onclick="generateBalanceSheetPDF()">📄 PDF</button>
+    </div>
+  </div>
+
+  <div class="g gap-16" style="grid-template-columns:1fr 1fr">
+    <div class="card card-pad">
+      <h4 class="fw-700 mb-14" style="font-size:14px;color:var(--text-0);border-bottom:2px solid var(--green);padding-bottom:8px">📈 Assets</h4>
+      <div style="font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px">Current Assets</div>
+      ${assetRow('Cash in Hand', cashInHand, 'cash sales this month')}
+      ${assetRow('Digital Collections', digitalAmt, 'UPI + card this month')}
+      ${assetRow('Credit Receivables', creditReceivables, 'outstanding from credit customers')}
+      ${assetRow('Fuel Tank Inventory', tankInventory, 'current stock × last purchase rate')}
+      ${assetRow('Lube / Product Stock', lubeStock, 'stock quantity × cost price')}
+      <div class="flex-between" style="padding:10px 0;margin-top:6px;border-top:2px solid var(--border)">
+        <span class="fw-800" style="font-size:14px;color:var(--text-0)">Total Assets</span>
+        <span class="mono fw-800" style="font-size:16px;color:var(--green)">₹${fmt(totalAssets)}</span>
+      </div>
+    </div>
+
+    <div class="card card-pad">
+      <h4 class="fw-700 mb-14" style="font-size:14px;color:var(--text-0);border-bottom:2px solid var(--red);padding-bottom:8px">📉 Liabilities & Equity</h4>
+      <div style="font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px">Current Liabilities</div>
+      ${assetRow('Fuel Purchase Payables', fuelPayables, 'unpaid purchases this month')}
+      ${assetRow('Salary Payable', salaryPayable, 'unpaid salaries this month')}
+      <div class="flex-between" style="padding:10px 0;border-top:1px solid var(--border-light)">
+        <span class="fw-700" style="font-size:13px;color:var(--text-2)">Total Liabilities</span>
+        <span class="mono fw-700" style="color:var(--red)">₹${fmt(totalLiabilities)}</span>
+      </div>
+      <div style="margin-top:12px;font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px">Owner's Equity</div>
+      <div class="flex-between" style="padding:8px 0;border-bottom:1px solid var(--border-light)">
+        <span style="color:var(--text-2);font-size:13px">Net Worth</span>
+        <span class="mono fw-700" style="color:${ownersEquity>=0?'var(--accent-light)':'var(--red)'}">₹${fmt(Math.abs(ownersEquity))}</span>
+      </div>
+      <div class="flex-between" style="padding:10px 0;margin-top:6px;border-top:2px solid var(--border)">
+        <span class="fw-800" style="font-size:14px;color:var(--text-0)">Total L+E</span>
+        <span class="mono fw-800" style="font-size:16px;color:${Math.abs(totalLiabilities+ownersEquity-totalAssets)<1?'var(--green)':'var(--orange)'}">₹${fmt(totalLiabilities+ownersEquity)}</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="card card-pad mt-16" style="background:var(--bg-0)">
+    <p style="font-size:11px;color:var(--text-3);line-height:1.6">
+      <strong>Note:</strong> This balance sheet is an estimate based on available records.
+      Cash in hand and digital collections reflect recorded sales only.
+      Tank inventory is valued at the last recorded purchase rate.
+      For auditor-certified statements, export data to your accountant.
+    </p>
+  </div>`;
+}
+window.renderBalanceSheet = renderBalanceSheet;
+
+function generateBalanceSheetPDF() {
+  const D = APP.data;
+  const month = (window._bsDate||new Date().toLocaleString('en-CA',{timeZone:'Asia/Kolkata'}).slice(0,10)).slice(0,7);
+  const monthName = new Date(month+'-01').toLocaleString('en-IN',{month:'long',year:'numeric'});
+  const cashInHand = (D.sales||[]).filter(s=>s.mode==='cash'&&(s.date||'').startsWith(month)).reduce((a,s)=>a+(s.amount||0),0);
+  const digitalAmt = (D.sales||[]).filter(s=>(s.mode==='upi'||s.mode==='card')&&(s.date||'').startsWith(month)).reduce((a,s)=>a+(s.amount||0),0);
+  const creditReceivables = (D.creditCustomers||[]).reduce((a,c)=>a+(c.outstanding||c.balance||0),0);
+  const tankInventory = (D.tanks||[]).reduce((a,t)=>{
+    const lp = (D.fuelPurchases||[]).filter(p=>(p.fuelType||'').toLowerCase()===(t.fuelType||'').toLowerCase()).sort((a,b)=>(b.date||'')-(a.date||''))[0];
+    return a+(t.current||0)*(lp?.rate||0);
+  },0);
+  const lubeStock = (window._lubesProducts||[]).reduce((a,p)=>a+(p.stock||0)*(p.costPrice||p.cost_price||0),0);
+  const totalAssets = cashInHand+digitalAmt+creditReceivables+tankInventory+lubeStock;
+  const fuelPayables = (D.fuelPurchases||[]).filter(p=>(p.mode||'')!=='paid'&&(p.date||'').startsWith(month)).reduce((a,p)=>a+(p.total||0),0);
+  const paidSal = Object.values(window._payrollSaved||{}).filter(p=>p.status==='paid').reduce((a,p)=>a+(p.net||0),0);
+  const totalSal = (D.employees||[]).reduce((a,e)=>a+(e.salary||0),0);
+  const salPay = Math.max(0,totalSal-paidSal);
+  const totalLiab = fuelPayables+salPay;
+  const equity = totalAssets-totalLiab;
+  const gstin = D.gstin || '';
+  generatePDFReport(`Balance Sheet — ${monthName}`, [
+    gstin ? `<p style="font-size:11px;color:#666;margin-bottom:12px">GSTIN: <strong>${sanitize(gstin)}</strong> | Period: <strong>${monthName}</strong></p>` : '',
+    `<table style="width:100%;border-collapse:collapse;font-size:12px">
+      <tr><th colspan="2" style="background:#f0fdf4;padding:10px;text-align:left;color:#16a34a;font-size:13px">ASSETS</th></tr>
+      <tr><td style="padding:7px 10px">Cash in Hand (recorded sales)</td><td class="r" style="padding:7px 10px">₹${fmt(cashInHand)}</td></tr>
+      <tr><td style="padding:7px 10px">Digital Collections (UPI+Card)</td><td class="r" style="padding:7px 10px">₹${fmt(digitalAmt)}</td></tr>
+      <tr><td style="padding:7px 10px">Credit Receivables</td><td class="r" style="padding:7px 10px">₹${fmt(creditReceivables)}</td></tr>
+      <tr><td style="padding:7px 10px">Fuel Tank Inventory (at cost)</td><td class="r" style="padding:7px 10px">₹${fmt(tankInventory)}</td></tr>
+      <tr><td style="padding:7px 10px">Lube/Product Stock (at cost)</td><td class="r" style="padding:7px 10px">₹${fmt(lubeStock)}</td></tr>
+      <tr style="background:#f0fdf4;font-weight:700"><td style="padding:9px 10px">TOTAL ASSETS</td><td class="r" style="padding:9px 10px;color:#16a34a">₹${fmt(totalAssets)}</td></tr>
+      <tr><th colspan="2" style="background:#fef2f2;padding:10px;text-align:left;color:#dc2626;font-size:13px">LIABILITIES</th></tr>
+      <tr><td style="padding:7px 10px">Fuel Purchase Payables</td><td class="r" style="padding:7px 10px">₹${fmt(fuelPayables)}</td></tr>
+      <tr><td style="padding:7px 10px">Salary Payable</td><td class="r" style="padding:7px 10px">₹${fmt(salPay)}</td></tr>
+      <tr style="font-weight:700"><td style="padding:9px 10px">TOTAL LIABILITIES</td><td class="r" style="padding:9px 10px;color:#dc2626">₹${fmt(totalLiab)}</td></tr>
+      <tr><th colspan="2" style="background:#fffbeb;padding:10px;text-align:left;color:#d97706;font-size:13px">OWNER'S EQUITY</th></tr>
+      <tr><td style="padding:7px 10px">Net Worth (Assets − Liabilities)</td><td class="r fw-700" style="padding:7px 10px;color:${equity>=0?'#16a34a':'#dc2626'}">₹${fmt(Math.abs(equity))}</td></tr>
+      <tr style="background:#f5f5f5;font-weight:700"><td style="padding:9px 10px">TOTAL L + EQUITY</td><td class="r" style="padding:9px 10px">₹${fmt(totalLiab+equity)}</td></tr>
+    </table>`,
+  ]);
+}
+window.generateBalanceSheetPDF = generateBalanceSheetPDF;
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// FEATURE 7 — ATTENDANCE CLOCK-IN/CLOCK-OUT (extends existing renderAttendance)
+// ═══════════════════════════════════════════════════════════════════════════════
+function getClockTimes(D) {
+  // Build clock-in/out map from shifts data
+  const clockMap = {};
+  (D.shifts||[]).forEach(s => {
+    if (!s.employeeId && !s.employee_id) return;
+    const empId = s.employeeId || s.employee_id;
+    const date  = (s.date||s.startTime||'').slice(0,10);
+    if (!date) return;
+    const key = `${empId}_${date}`;
+    if (!clockMap[key]) clockMap[key] = {};
+    if (s.startTime || s.clock_in) clockMap[key].clockIn  = s.clock_in || s.startTime;
+    if (s.endTime   || s.clock_out) clockMap[key].clockOut = s.clock_out || s.endTime;
+  });
+  return clockMap;
+}
+window.getClockTimes = getClockTimes;
+
+function exportAttendanceCSV() {
+  const D = APP.data;
+  const att = window._attendanceData || {};
+  const emps = (D.employees||[]).filter(e=>e.status!=='inactive');
+  const clockMap = getClockTimes(D);
+  const allDates = Object.keys(att).sort();
+  let csv = 'Employee,Date,Status,Clock In,Clock Out,Hours\n';
+  emps.forEach(e => {
+    allDates.forEach(date => {
+      const rec   = att[date]?.[e.id] || {};
+      const clock = clockMap[`${e.id}_${date}`] || {};
+      const inT   = clock.clockIn  ? new Date(clock.clockIn).toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit',hour12:false,timeZone:'Asia/Kolkata'}) : '';
+      const outT  = clock.clockOut ? new Date(clock.clockOut).toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit',hour12:false,timeZone:'Asia/Kolkata'}) : '';
+      const hrs   = (clock.clockIn&&clock.clockOut) ? ((new Date(clock.clockOut)-new Date(clock.clockIn))/3600000).toFixed(1) : '';
+      if (rec.status) csv += `"${e.name}","${date}","${rec.status}","${inT}","${outT}","${hrs}"\n`;
+    });
+  });
+  const blob = new Blob([csv],{type:'text/csv'});
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+  a.download = `attendance_${new Date().toISOString().slice(0,10)}.csv`; a.click();
+}
+window.exportAttendanceCSV = exportAttendanceCSV;
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// FEATURE 9 — DMS / INDENT LOG
+// ═══════════════════════════════════════════════════════════════════════════════
+function renderDMSLog(D) {
+  if (!window._dmsLog) window._dmsLog = [];
+  const omc = (APP.tenant?.omc || 'iocl').toLowerCase();
+  const log = window._dmsLog;
+  const todayIs = typeof window.today==='function'?window.today():new Date().toLocaleString('en-CA',{timeZone:'Asia/Kolkata'}).slice(0,10);
+
+  // unreconciled count
+  const unreconciled = log.filter(e=>!e.reconciled&&e.type==='delivery_received').length;
+
+  const statusBadge = s => {
+    const map = {pending:'var(--orange)',completed:'var(--green)',cancelled:'var(--red)',placed:'var(--accent-light)'};
+    return `<span style="padding:2px 8px;border-radius:12px;font-size:11px;font-weight:700;background:${map[s]||'var(--bg-1)'}22;color:${map[s]||'var(--text-2)'}">
+      ${(s||'—').charAt(0).toUpperCase()+(s||'').slice(1)}
+    </span>`;
+  };
+
+  const rows = log.slice().sort((a,b)=>(b.date||'')>(a.date||'')?1:-1).map(e=>`<tr>
+    <td class="mono">${e.date||'—'}</td>
+    <td><span style="padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;background:var(--bg-0);border:1px solid var(--border);color:var(--text-2)">${sanitize(e.type?.replace(/_/g,' ')||'—')}</span></td>
+    <td style="color:${getFuel(e.fuelType||'petrol').color}">${getFuel(e.fuelType||'petrol').short}</td>
+    <td class="mono r">${e.quantity?fmt(e.quantity)+' L':'—'}</td>
+    <td class="mono r">${e.rate?'₹'+e.rate.toFixed(2)+'/L':'—'}</td>
+    <td class="mono r fw-700">${e.amount?'₹'+fmt(e.amount):'—'}</td>
+    <td class="mono" style="font-size:11px">${sanitize(e.referenceNo||'—')}</td>
+    ${statusBadge(e.status)}
+    <td>${e.reconciled ? '<span style="color:var(--green);font-size:11px;font-weight:700">✓ Matched</span>' :
+      `<button class="btn btn-ghost btn-sm" onclick="dmsReconcile(${JSON.stringify(e.id)})">Match</button>`}</td>
+    <td><button class="btn btn-ghost btn-sm" style="color:var(--red)" onclick="dmsDelete(${JSON.stringify(e.id)})">✕</button></td>
+  </tr>`).join('');
+
+  return `<div class="page-hdr">
+    <h3>📦 DMS / Indent Log</h3>
+    <button class="btn btn-accent btn-sm" onclick="openDMSEntryModal()">+ Add Entry</button>
+  </div>
+
+  ${unreconciled > 0 ? `<div style="padding:12px 16px;background:rgba(249,115,22,0.07);border:1px solid rgba(249,115,22,0.3);border-radius:8px;margin-bottom:16px;font-size:13px;color:var(--orange)">
+    ⚠️ <strong>${unreconciled} delivery ${unreconciled===1?'receipt':'receipts'}</strong> not yet reconciled against fuel purchase records.
+    <button class="btn btn-ghost btn-sm" style="margin-left:8px" onclick="dmsReconcileAll()">Reconcile All</button>
+  </div>` : ''}
+
+  <div class="g g-auto-sm gap-12 mb-16">
+    ${statCard('Total Entries', log.length, 'all DMS records', '📦')}
+    ${statCard('Unreconciled', unreconciled, 'pending match', unreconciled>0?'⚠️':'✅')}
+    ${statCard('This Month', log.filter(e=>(e.date||'').startsWith(todayIs.slice(0,7))).length, 'DMS transactions', '📅')}
+    ${statCard('Total Volume', fmt(log.reduce((a,e)=>a+(e.quantity||0),0))+' L', 'all indents', '⛽')}
+  </div>
+
+  <div class="card card-pad" style="padding:0;overflow:hidden">
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Date</th><th>Type</th><th>Fuel</th><th class="r">Qty</th><th class="r">Rate</th>
+        <th class="r">Amount</th><th>Ref No.</th><th>Status</th><th>Reconciled</th><th></th></tr></thead>
+      <tbody>${rows || `<tr><td colspan="10" style="text-align:center;padding:32px;color:var(--text-3)">
+        <div style="font-size:28px;margin-bottom:8px">📦</div>
+        <div class="fw-600">No DMS entries yet</div>
+        <div style="font-size:11px;margin-top:6px">Record OMC portal transactions — indents, deliveries, price revisions</div>
+      </td></tr>`}
+      </tbody>
+    </table></div>
+  </div>`;
+}
+window.renderDMSLog = renderDMSLog;
+
+function openDMSEntryModal() {
+  const D = APP.data;
+  const todayIs = typeof window.today==='function'?window.today():new Date().toLocaleString('en-CA',{timeZone:'Asia/Kolkata'}).slice(0,10);
+  const omc = (APP.tenant?.omc||'iocl').toLowerCase();
+  const refLabel = omc==='bpcl'?'SmartDrive PO Number':omc==='hpcl'?'MyHPCL Order ID':'Indent Number';
+  openModal('📦 Add DMS / Indent Entry', `
+    <div class="g g-2 gap-12">
+      <div class="form-group"><label class="form-label">Date</label>
+        <input type="date" class="form-input" id="dms_date" value="${todayIs}" max="${todayIs}" /></div>
+      <div class="form-group"><label class="form-label">Type</label>
+        <select class="form-input" id="dms_type">
+          <option value="indent_placed">Indent Placed</option>
+          <option value="delivery_received">Delivery Received</option>
+          <option value="price_revision">Price Revision Notice</option>
+          <option value="payment_made">Payment Made</option>
+        </select></div>
+    </div>
+    <div class="g g-2 gap-12">
+      <div class="form-group"><label class="form-label">Fuel Type</label>
+        <select class="form-input" id="dms_fuel">
+          <option value="petrol">Petrol (MS)</option>
+          <option value="diesel">Diesel (HSD)</option>
+          <option value="premium_petrol">Premium (XP95)</option>
+        </select></div>
+      <div class="form-group"><label class="form-label">Quantity (L)</label>
+        <input type="number" class="form-input" id="dms_qty" step="0.1" placeholder="e.g. 10000" /></div>
+    </div>
+    <div class="g g-2 gap-12">
+      <div class="form-group"><label class="form-label">Rate (₹/L)</label>
+        <input type="number" class="form-input" id="dms_rate" step="0.01" placeholder="e.g. 87.50" /></div>
+      <div class="form-group"><label class="form-label">${refLabel}</label>
+        <input class="form-input" id="dms_ref" placeholder="Reference number" /></div>
+    </div>
+    <div class="form-group"><label class="form-label">Status</label>
+      <select class="form-input" id="dms_status">
+        <option value="placed">Placed</option>
+        <option value="pending">Pending</option>
+        <option value="completed">Completed</option>
+        <option value="cancelled">Cancelled</option>
+      </select></div>
+    <div class="form-group"><label class="form-label">Notes</label>
+      <textarea class="form-input" id="dms_notes" rows="2" placeholder="Optional notes"></textarea></div>
+  `, `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+     <button class="btn btn-accent" onclick="saveDMSEntry()">💾 Save</button>`);
+}
+window.openDMSEntryModal = openDMSEntryModal;
+
+function saveDMSEntry() {
+  const date   = document.getElementById('dms_date')?.value;
+  const type   = document.getElementById('dms_type')?.value;
+  const fuel   = document.getElementById('dms_fuel')?.value;
+  const qty    = parseFloat(document.getElementById('dms_qty')?.value)||0;
+  const rate   = parseFloat(document.getElementById('dms_rate')?.value)||0;
+  const ref    = document.getElementById('dms_ref')?.value?.trim();
+  const status = document.getElementById('dms_status')?.value;
+  const notes  = document.getElementById('dms_notes')?.value?.trim();
+  if (!date || !type) { toast('Please fill in date and type','error'); return; }
+  if (!window._dmsLog) window._dmsLog = [];
+  window._dmsLog.unshift({
+    id: Date.now(), date, type, fuelType: fuel, quantity: qty, rate, amount: qty*rate,
+    referenceNo: ref, status, notes, reconciled: false, createdAt: new Date().toISOString(),
+  });
+  if (window.db) db.setSetting('dms_log', window._dmsLog).catch(()=>{});
+  closeModal();
+  toast('✅ DMS entry saved','success');
+  renderPage();
+}
+window.saveDMSEntry = saveDMSEntry;
+
+function dmsDelete(id) {
+  if (!confirm('Delete this DMS entry?')) return;
+  window._dmsLog = (window._dmsLog||[]).filter(e=>e.id!==id);
+  if (window.db) db.setSetting('dms_log', window._dmsLog).catch(()=>{});
+  renderPage();
+}
+window.dmsDelete = dmsDelete;
+
+function dmsReconcile(id) {
+  const D = APP.data;
+  const entry = (window._dmsLog||[]).find(e=>e.id===id);
+  if (!entry) return;
+  // Find matching fuel purchase within ±3 days and ±5% quantity
+  const matchDate = new Date(entry.date);
+  const match = (D.fuelPurchases||[]).find(p => {
+    const pd = new Date(p.date||''); const diff = Math.abs(pd-matchDate)/86400000;
+    const qtyMatch = Math.abs((p.liters||0)-(entry.quantity||0)) / Math.max(1,entry.quantity||1) < 0.05;
+    const ftMatch  = (p.fuelType||'').toLowerCase() === (entry.fuelType||'').toLowerCase();
+    return diff <= 3 && qtyMatch && ftMatch;
+  });
+  if (match) {
+    entry.reconciled = true;
+    entry.matchedPurchaseId = match.id;
+    if (window.db) db.setSetting('dms_log', window._dmsLog).catch(()=>{});
+    toast(`✅ Matched to purchase on ${match.date} — ${fmt(match.liters)}L ${match.fuelType}`, 'success');
+    renderPage();
+  } else {
+    toast('No matching fuel purchase found within ±3 days and ±5% quantity', 'warning');
+  }
+}
+window.dmsReconcile = dmsReconcile;
+
+function dmsReconcileAll() {
+  (window._dmsLog||[]).filter(e=>!e.reconciled&&e.type==='delivery_received').forEach(e=>dmsReconcile(e.id));
+}
+window.dmsReconcileAll = dmsReconcileAll;
+
+// Load DMS log from DB on startup
+if (window.db && typeof window.db.getSetting === 'function') {
+  window.db.getSetting('dms_log').then(d=>{ if(Array.isArray(d)) window._dmsLog=d; }).catch(()=>{});
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// FEATURE 10 — TALLY NATIVE SYNC
+// ═══════════════════════════════════════════════════════════════════════════════
+async function syncToTally() {
+  const D = APP.data;
+  const tallyUrl = D.tallyServerUrl || 'http://localhost:9000';
+  const now4 = new Date();
+  const month = window._gstMonth || (now4.getMonth()+1);
+  const year  = window._gstYear  || now4.getFullYear();
+
+  toast('Connecting to Tally at ' + tallyUrl + '...', 'info');
+
+  // Build the XML payload (reuse existing export logic)
+  let xml;
+  try { xml = buildTallySyncXML(D, month, year); } catch(e) {
+    toast('Failed to build Tally XML: ' + e.message, 'error'); return;
+  }
+
+  try {
+    const resp = await fetch(tallyUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/xml' },
+      body: xml,
+      signal: AbortSignal.timeout(8000),
+    });
+    const text = await resp.text();
+    if (text.includes('<LINEERROR>')) {
+      const errMatch = text.match(/<LINEERROR>(.*?)<\/LINEERROR>/i);
+      toast('Tally error: ' + (errMatch?.[1] || 'Unknown'), 'error');
+    } else if (text.includes('<CREATED>') || text.includes('<ALTERED>') || resp.ok) {
+      const created = (text.match(/<CREATED>(\d+)<\/CREATED>/)?.[1])||'?';
+      toast('✅ Tally sync complete — ' + created + ' vouchers created', 'success');
+    } else {
+      toast('Tally responded but result unclear. Check Tally for imported vouchers.', 'warning');
+    }
+  } catch(e) {
+    if (e.name === 'TypeError' && e.message.includes('fetch')) {
+      toast('Cannot reach Tally at ' + tallyUrl + '. Ensure Tally is open on this machine with HTTP server enabled (F12 → Config → Advanced → Enable HTTP Server).', 'error');
+    } else {
+      toast('Tally sync failed: ' + e.message, 'error');
+    }
+  }
+}
+window.syncToTally = syncToTally;
+
+function buildTallySyncXML(D, month, year) {
+  const startDate = `${year}-${String(month).padStart(2,'0')}-01`;
+  const endDate   = new Date(year, month, 0).toISOString().slice(0,10);
+  const lubeSales = (window._lubesSales||[]).filter(s=>s.date>=startDate&&s.date<=endDate);
+  function tallyDate(iso) { return (iso||'').replace(/-/g,'').slice(0,8); }
+  function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+  const companyName = esc(D.upiName || APP.tenant?.name || 'Fuel Station');
+
+  let vouchers = '';
+  lubeSales.forEach(s => {
+    const prod = (window._lubesProducts||[]).find(p=>p.id===s.productId);
+    const gstPct = prod?.gstPct||18;
+    const taxable = +(s.amount/(1+gstPct/100)).toFixed(2);
+    const cgst    = +((s.amount-taxable)/2).toFixed(2);
+    const sgst    = cgst;
+    vouchers += `<VOUCHER VCHTYPE="Sales" ACTION="Create">
+      <DATE>${tallyDate(s.date)}</DATE>
+      <VOUCHERTYPENAME>Sales</VOUCHERTYPENAME>
+      <NARRATION>Lube sale: ${esc(s.productName||'')} x${s.qty} ${esc(s.mode||'cash')}</NARRATION>
+      <ALLLEDGERENTRIES.LIST>
+        <LEDGERNAME>${esc(s.customer||'Cash')}</LEDGERNAME>
+        <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+        <AMOUNT>-${s.amount}</AMOUNT>
+      </ALLLEDGERENTRIES.LIST>
+      <ALLLEDGERENTRIES.LIST>
+        <LEDGERNAME>${esc(s.productName||'Lube Sales')}</LEDGERNAME>
+        <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+        <AMOUNT>${taxable}</AMOUNT>
+      </ALLLEDGERENTRIES.LIST>
+      <ALLLEDGERENTRIES.LIST>
+        <LEDGERNAME>CGST @${gstPct/2}%</LEDGERNAME>
+        <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+        <AMOUNT>${cgst}</AMOUNT>
+      </ALLLEDGERENTRIES.LIST>
+      <ALLLEDGERENTRIES.LIST>
+        <LEDGERNAME>SGST @${gstPct/2}%</LEDGERNAME>
+        <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+        <AMOUNT>${sgst}</AMOUNT>
+      </ALLLEDGERENTRIES.LIST>
+    </VOUCHER>`;
+  });
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<ENVELOPE>
+  <HEADER><TALLYREQUEST>Import Data</TALLYREQUEST></HEADER>
+  <BODY>
+    <IMPORTDATA>
+      <REQUESTDESC>
+        <REPORTNAME>Vouchers</REPORTNAME>
+        <STATICVARIABLES><SVCURRENTCOMPANY>${companyName}</SVCURRENTCOMPANY></STATICVARIABLES>
+      </REQUESTDESC>
+      <REQUESTDATA>
+        <TALLYMESSAGE>${vouchers}</TALLYMESSAGE>
+      </REQUESTDATA>
+    </IMPORTDATA>
+  </BODY>
+</ENVELOPE>`;
+}
+window.buildTallySyncXML = buildTallySyncXML;
+
+async function testTallyConnection() {
+  const D = APP.data;
+  const tallyUrl = D.tallyServerUrl || 'http://localhost:9000';
+  try {
+    await fetch(tallyUrl, { method: 'GET', signal: AbortSignal.timeout(3000) });
+    toast('✅ Tally is reachable at ' + tallyUrl, 'success');
+  } catch(e) {
+    toast('❌ Cannot reach Tally at ' + tallyUrl + '. Make sure Tally is open and HTTP server is enabled.', 'error');
+  }
+}
+window.testTallyConnection = testTallyConnection;
