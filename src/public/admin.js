@@ -7748,6 +7748,41 @@ async function saveSale() {
 
 // ── TANK MANAGEMENT ──────────────────────────────────────────
 
+// OMC-AWARE TANK CAPACITIES
+// Each OMC installs specific tank sizes — only show relevant options.
+// 15K is BPCL standard (has its own dip chart). IOCL has no 15K dip chart
+// so showing it for IOCL was wrong — it fell back to the 10K chart silently.
+// Private stations show all sizes since they use non-standard configurations.
+const _OMC_TANK_CAPS = {
+  iocl:    [10000, 20000],
+  bpcl:    [15000, 20000],
+  hpcl:    [10000, 20000],
+  mrpl:    [10000, 20000],
+  private: [10000, 15000, 16000, 20000],
+};
+const _OMC_CAP_LABELS = {
+  iocl:    { 10000:'Standard', 20000:'Large' },
+  bpcl:    { 15000:'BPCL Standard', 20000:'Large' },
+  hpcl:    { 10000:'Standard', 20000:'Large' },
+  mrpl:    { 10000:'Standard', 20000:'Large' },
+  private: { 10000:'Standard', 15000:'Medium', 16000:'Custom', 20000:'Large' },
+};
+
+function getTankCapacities(extraCap) {
+  const omc = (APP?.tenant?.omc || 'iocl').toLowerCase();
+  const caps = [...(_OMC_TANK_CAPS[omc] || _OMC_TANK_CAPS.iocl)];
+  // If an existing tank has a capacity not in this OMC's list (legacy data),
+  // include it so the edit modal can still show and preserve it.
+  if (extraCap && !caps.includes(extraCap)) caps.push(extraCap);
+  return caps.sort((a, b) => a - b);
+}
+
+function getTankCapLabel(c) {
+  const omc = (APP?.tenant?.omc || 'iocl').toLowerCase();
+  return (_OMC_CAP_LABELS[omc] || _OMC_CAP_LABELS.iocl)[c] || '';
+}
+
+// Keep for any legacy references (dip chart loop etc.)
 const TANK_CAPACITIES = [10000, 15000, 16000, 20000];
 
 function openAddTankModal() {
@@ -7763,14 +7798,14 @@ function openAddTankModal() {
     </label>`
   ).join('');
 
-  const capOpts = TANK_CAPACITIES.map((c, i) => {
-    const labels = {10000:'Standard',15000:'BPCL 15K',16000:'Medium',20000:'Large'};
+  const capOpts = getTankCapacities().map((c, i) => {
+    const label = getTankCapLabel(c);
     return `<label style="flex:1;cursor:pointer">
       <input type="radio" name="newTankCapR" value="${c}" ${i===0?'checked':''} style="display:none">
       <div class="tank-cap-opt" id="capOpt_${c}" style="border:2px solid ${i===0?'var(--accent)':'var(--border)'};background:${i===0?'rgba(212,148,15,0.1)':'var(--bg-0)'};border-radius:10px;padding:14px 8px;text-align:center;transition:all 0.15s" onclick="selectTankCap(${c})">
         <div style="font-size:18px;font-weight:900;color:${i===0?'var(--accent-light)':'var(--text-1)'};" id="capOptVal_${c}">${(c/1000).toFixed(0)}K</div>
         <div style="font-size:10px;font-weight:700;color:var(--text-2);margin-top:2px">${c.toLocaleString('en-IN')} L</div>
-        <div style="font-size:9px;color:var(--text-3);margin-top:1px">${labels[c]||''}</div>
+        <div style="font-size:9px;color:var(--text-3);margin-top:1px">${label}</div>
       </div>
     </label>`;
   }).join('');
@@ -7796,7 +7831,7 @@ function openAddTankModal() {
 }
 
 function selectTankCap(selected) {
-  TANK_CAPACITIES.forEach(c => {
+  getTankCapacities().forEach(c => {
     const el = document.getElementById('capOpt_' + c);
     const val = document.getElementById('capOptVal_' + c);
     if (!el) return;
@@ -7875,15 +7910,15 @@ function openEditTankModal(tankId) {
     </label>`
   ).join('');
 
-  const capOpts = TANK_CAPACITIES.map(c => {
-    const labels = {10000:'Standard',15000:'BPCL 15K',16000:'Medium',20000:'Large'};
+  const capOpts = getTankCapacities(tank.capacity).map(c => {
+    const label = getTankCapLabel(c);
     const isSel = c === tank.capacity;
     return `<label style="flex:1;cursor:pointer">
       <input type="radio" name="editTankCapR" value="${c}" ${isSel?'checked':''} style="display:none">
       <div id="eCapOpt_${c}" style="border:2px solid ${isSel?'var(--accent)':'var(--border)'};background:${isSel?'rgba(212,148,15,0.1)':'var(--bg-0)'};border-radius:10px;padding:14px 8px;text-align:center;transition:all 0.15s;cursor:pointer" onclick="selectEditTankCap(${c})">
         <div style="font-size:18px;font-weight:900;color:${isSel?'var(--accent-light)':'var(--text-1)'};" id="eCapVal_${c}">${(c/1000).toFixed(0)}K</div>
         <div style="font-size:10px;font-weight:700;color:var(--text-2);margin-top:2px">${c.toLocaleString('en-IN')} L</div>
-        <div style="font-size:9px;color:var(--text-3)">${labels[c]||''}</div>
+        <div style="font-size:9px;color:var(--text-3)">${label}</div>
       </div>
     </label>`;
   }).join('');
@@ -7914,7 +7949,7 @@ function openEditTankModal(tankId) {
 }
 
 function selectEditTankCap(selected) {
-  TANK_CAPACITIES.forEach(c => {
+  getTankCapacities(selected).forEach(c => {
     const el = document.getElementById('eCapOpt_' + c);
     const val = document.getElementById('eCapVal_' + c);
     if (!el) return;
