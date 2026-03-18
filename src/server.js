@@ -2487,6 +2487,15 @@ Pack decoding: "300x40ML-POU"=packQty:300,packSize:"40ml",packType:"Pouch",isCar
   });
 
   app.use((err, req, res, next) => {
+    // FIX: PayloadTooLargeError thrown by express.json() when body exceeds limit.
+    // Without this check Express returns 500 — correct status is 413.
+    if (err.type === 'entity.too.large' || err.status === 413 || err.statusCode === 413) {
+      return res.status(413).json({ error: 'Request payload too large. Maximum size is 2MB.' });
+    }
+    // FIX: SyntaxError from malformed JSON body — return 400 not 500
+    if (err instanceof SyntaxError && err.status === 400 && 'body' in err) {
+      return res.status(400).json({ error: 'Invalid JSON in request body.' });
+    }
     console.error('[Error]', err.message);
     res.status(500).json({ error: 'Internal server error' });
   });
@@ -2494,6 +2503,22 @@ Pack decoding: "300x40ML-POU"=packQty:300,packSize:"40ml",packType:"Pouch",isCar
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`[FuelBunk Pro] Running on port ${PORT} with PostgreSQL`);
   });
+
+  // PERF FIX: Keep-alive self-ping — prevents Railway free-tier cold starts.
+  // Pings /api/health every 10 minutes so the instance never goes to sleep.
+  // Only runs in production; skipped in test/dev to avoid noise.
+  if (process.env.NODE_ENV === 'production' || process.env.KEEP_ALIVE === 'true') {
+    const keepAliveUrl = `http://localhost:${PORT}/api/health`;
+    setInterval(async () => {
+      try {
+        const http = require('http');
+        http.get(keepAliveUrl, (res) => {
+          res.resume(); // drain response
+        }).on('error', () => {}); // silent fail — server may be restarting
+      } catch {}
+    }, 10 * 60 * 1000); // every 10 minutes
+    console.log('[KeepAlive] Self-ping enabled — pinging every 10 minutes');
+  }
 
   // ═══════════════════════════════════════════════════════════════════════════
   // PRODUCTION MAINTENANCE JOBS - Optimized for 1000 concurrent users
