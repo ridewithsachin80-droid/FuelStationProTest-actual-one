@@ -641,9 +641,12 @@ function renderPumps(D) {
     });
   }).join('');
 
-  return `
-    <div class="page-hdr"><h3>⛽ Pumps & Meters</h3><button class="btn btn-accent btn-sm" onclick="openAddPumpModal()">+ Add Pump</button></div>
-    ${pumpCards.trim() ? `<div class="g g-auto gap-16 mb-24">${pumpCards}</div>` : `
+  const _pumpsTab = window._pumpsTab || 'pumps';
+
+  // ── Compute tab content as variable (avoids nested template literal issues) ──
+  const _pumpsTabContent = _pumpsTab === 'meterlog'
+    ? renderNozzleMeterPage(D)
+    : `${pumpCards.trim() ? `<div class="g g-auto gap-16 mb-24">${pumpCards}</div>` : `
       <div style="text-align:center;padding:48px 20px;color:var(--text-3)">
         <div style="font-size:48px;margin-bottom:12px;opacity:0.4">⛽</div>
         <div class="fw-700" style="font-size:16px;color:var(--text-2);margin-bottom:6px">No pumps added yet</div>
@@ -653,68 +656,31 @@ function renderPumps(D) {
     <div class="card">
       <div class="card-head"><h4>📋 Pump Reconciliation</h4><button class="btn btn-ghost btn-sm" onclick="exportPumpCSV()">↓ Export</button></div>
       <div class="card-body"><div class="tbl-wrap"><table><thead><tr><th>Pump</th><th>Fuel</th><th class="r">Opening</th><th class="r">Current</th><th class="r">Sold (L)</th><th class="r">Revenue</th></tr></thead><tbody>${reconRows}</tbody></table></div></div>
+    </div>`;
+
+  const _pumpsHeaderRight = _pumpsTab === 'pumps'
+    ? `<button class="btn btn-accent btn-sm" onclick="openAddPumpModal()">+ Add Pump</button>`
+    : `<div style="display:flex;gap:8px">
+        <input type="date" class="form-input" style="width:160px;padding:6px 12px;font-size:13px"
+          value="${window._nmPageDate||(typeof window.today==='function'?window.today():new Date().toLocaleString('en-CA',{timeZone:'Asia/Kolkata'}).slice(0,10))}"
+          max="${typeof window.today==='function'?window.today():new Date().toLocaleString('en-CA',{timeZone:'Asia/Kolkata'}).slice(0,10)}"
+          onchange="window._nmPageDate=this.value;renderPage()" />
+        <button class="btn btn-ghost btn-sm" onclick="generateNozzleMeterPDF()">📄 PDF</button>
+      </div>`;
+
+  return `
+    <div class="page-hdr">
+      <h3>⛽ Pumps & Meters</h3>
+      ${_pumpsHeaderRight}
     </div>
 
-    ${(() => {
-      // ── Nozzle Meter Log ─────────────────────────────────────────────────
-      const log = window._nozzleMeterLog || [];
-      const today = (()=>{const _d=new Date();return _d.getFullYear()+'-'+String(_d.getMonth()+1).padStart(2,'0')+'-'+String(_d.getDate()).padStart(2,'0');})();
-      const logDate = window._nmlDate || today;
-      const logRows = log.filter(e => e.date === logDate);
+    <div style="display:flex;gap:6px;margin-bottom:20px">
+      <button onclick="window._pumpsTab='pumps';renderPage()" style="padding:8px 20px;border-radius:8px;border:1px solid var(--border);background:${_pumpsTab==='pumps'?'var(--accent-light)':'var(--bg-1)'};color:${_pumpsTab==='pumps'?'#000':'var(--text-2)'};font-weight:700;cursor:pointer;font-size:12px">⛽ Pumps</button>
+      <button onclick="window._pumpsTab='meterlog';renderPage()" style="padding:8px 20px;border-radius:8px;border:1px solid var(--border);background:${_pumpsTab==='meterlog'?'var(--accent-light)':'var(--bg-1)'};color:${_pumpsTab==='meterlog'?'#000':'var(--text-2)'};font-weight:700;cursor:pointer;font-size:12px">📟 Meter Log</button>
+    </div>
 
-      const totalVariance = logRows.reduce((a, e) => a + Math.abs(e.variance||0), 0);
-      const flaggedCount  = logRows.filter(e => e.flagged).length;
-
-      const nozzleSelOpts = D.pumps.flatMap(p => {
-        const labels = p.nozzleLabels || (p.nozzles===1?['A']:p.nozzles===2?['A','B']:['A','B','C'].slice(0,p.nozzles));
-        return labels.map(n => `<option value="${n}" data-pump="${p.id}">${p.name} · N${n}</option>`);
-      }).join('');
-
-      const logTableRows = logRows.length > 0
-        ? logRows.map(e => {
-            const fi = getFuel(e.fuelType);
-            const varColor = e.flagged ? 'var(--red)' : Math.abs(e.variance||0) > 0 ? 'var(--orange)' : 'var(--green)';
-            const varBg    = e.flagged ? 'rgba(239,68,68,0.07)' : '';
-            const srcBadge = e.source === 'employee' ? badge('Auto','badge-blue') : badge('Manual','badge-accent');
-            return `<tr style="background:${varBg}">
-              <td class="fw-600">${e.date}</td>
-              <td style="font-size:11px">${sanitize(e.shift||'—')}</td>
-              <td style="font-size:11px">${sanitize(e.employee||'—')}</td>
-              <td class="fw-700">${sanitize(e.pumpName||'')} <span style="font-size:10px;color:${fi.color};font-weight:700">N${e.nozzle} · ${fi.short}</span></td>
-              <td class="r mono">${fmt(e.openReading||0)}</td>
-              <td class="r mono">${fmt(e.closeReading||0)}</td>
-              <td class="r mono fw-700" style="color:var(--accent-light)">${fmt(e.meterSold||0)}</td>
-              <td class="r mono" style="color:var(--text-2)">${fmt(e.systemSold||0)}</td>
-              <td class="r mono fw-800" style="color:${varColor}">${e.variance > 0 ? '+' : ''}${fmt(e.variance||0)} L ${e.flagged ? '🚨' : ''}</td>
-              <td>${srcBadge}</td>
-            </tr>`;
-          }).join('')
-        : `<tr><td colspan="10" style="text-align:center;color:var(--text-3);padding:20px">No meter readings for ${logDate}</td></tr>`;
-
-      return `<div class="card mt-16">
-        <div class="card-head">
-          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-            <h4>📟 Nozzle Meter Log</h4>
-            ${flaggedCount > 0 ? `<span style="font-size:11px;font-weight:700;color:var(--red);background:rgba(239,68,68,0.1);padding:2px 8px;border-radius:20px">🚨 ${flaggedCount} variance${flaggedCount>1?'s':''} flagged</span>` : ''}
-            <input type="date" value="${logDate}" max="${today}" onchange="window._nmlDate=this.value;renderPage()"
-              style="font-size:12px;background:var(--bg-0);border:1px solid var(--border);border-radius:6px;padding:3px 8px;color:var(--text-1);cursor:pointer" />
-          </div>
-          <button class="btn btn-accent btn-sm" onclick="openNozzleMeterModal(${D.pumps[0]?.id||1},'A')">+ Add Reading</button>
-        </div>
-        ${logRows.length > 0 ? `
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;padding:12px 16px;border-bottom:1px solid var(--border-light)">
-          <div class="dbox text-center" style="padding:10px"><div class="mono fw-800" style="color:var(--accent-light)">${logRows.length}</div><div style="font-size:10px;color:var(--text-3)">Nozzle Readings</div></div>
-          <div class="dbox text-center" style="padding:10px"><div class="mono fw-800" style="color:var(--green)">${fmt(logRows.reduce((a,e)=>a+(e.meterSold||0),0))} L</div><div style="font-size:10px;color:var(--text-3)">Meter Total</div></div>
-          <div class="dbox text-center" style="padding:10px"><div class="mono fw-800" style="color:var(--text-2)">${fmt(logRows.reduce((a,e)=>a+(e.systemSold||0),0))} L</div><div style="font-size:10px;color:var(--text-3)">System Total</div></div>
-          <div class="dbox text-center" style="padding:10px"><div class="mono fw-800" style="color:${totalVariance>=0.5?'var(--red)':'var(--green)'}">${totalVariance>=0.5?'🚨 ':'✅ '}${fmt(totalVariance)} L</div><div style="font-size:10px;color:var(--text-3)">Total Variance</div></div>
-          <div class="dbox text-center" style="padding:10px"><div class="mono fw-800" style="color:${flaggedCount>0?'var(--red)':'var(--green)'}">${flaggedCount}</div><div style="font-size:10px;color:var(--text-3)">Flagged</div></div>
-        </div>` : ''}
-        <div class="card-body"><div class="tbl-wrap"><table>
-          <thead><tr><th>Date</th><th>Shift</th><th>Employee</th><th>Pump · Nozzle</th><th class="r">Open</th><th class="r">Close</th><th class="r">Meter L</th><th class="r">System L</th><th class="r">Variance</th><th>Source</th></tr></thead>
-          <tbody>${logTableRows}</tbody>
-        </table></div></div>
-      </div>`;
-    })()}`;
+    ${_pumpsTabContent}
+  `;
 }
 
 // ── SALES ────────────────────────────────────────────────────
@@ -2063,8 +2029,8 @@ function renderSettings(D) {
           </div>
         `).join('')}
       </div>
-    </div>
-  `;
+    </div>`;
+
 }
 
 // Expose to global
@@ -2665,6 +2631,7 @@ function renderAnalytics(D) {
   const tabs = [
     { id: 'vehicle',   icon: '🚗', label: 'Vehicle Report' },
     { id: 'density',   icon: '⚗️', label: 'Density Variance' },
+    { id: 'pilferage', icon: '🔍', label: 'Pilferage' },
     { id: 'bankrecon', icon: '🏦', label: 'Bank Reconciliation' },
     { id: 'monthly',   icon: '📅', label: 'Monthly Trends' },
     { id: 'fuelpnl',   icon: '⛽', label: 'Fuel P&L' },
@@ -2870,6 +2837,9 @@ function renderAnalytics(D) {
         <div style="font-size:32px;margin-bottom:12px">🛢️</div>
         <div class="fw-600">No fuel purchases recorded yet</div>
       </div>`}`;
+
+  } else if (_analyticsTab === 'pilferage') {
+    body = renderPilferage(D).replace(/<div class="page-hdr">.*?<\/div>\s*/s, '');
 
   } else if (_analyticsTab === 'bankrecon') {
     // ── Bank Reconciliation ────────────────────────────────────────────────
@@ -7281,8 +7251,6 @@ const PAGES = [
   { id: 'compare', label: 'Compare Stations', icon: '🏢', group: 'reports', superAdminOnly: true },
   { id: 'billing', label: 'Subscriptions', icon: '💳', group: 'reports', superAdminOnly: true },
   { id: 'insights', label: 'AI Insights', icon: '🤖', group: 'reports' },
-  { id: 'nozzle',    label: 'Nozzle Meters',    icon: '📟', group: 'main' },
-  { id: 'pilferage', label: 'Pilferage',         icon: '🔍', group: 'main' },
   { id: 'dms',       label: 'DMS / Indent',      icon: '📦', group: 'finance' },
   { id: 'balsheet',  label: 'Balance Sheet',     icon: '🏦', group: 'finance' },
   { id: 'settings',  label: 'Settings',          icon: '⚙️', group: 'reports' },
@@ -7461,8 +7429,7 @@ function renderPage() {
       case 'insights': html = renderInsights(D); break;
       case 'employee': html = renderEmployeePortal(); break;
       case 'settings': html = renderSettings(D); break;
-      case 'nozzle':   html = renderNozzleMeterPage(D); break;
-      case 'pilferage':html = renderPilferage(D); break;
+      case 'nozzle':   window._pumpsTab='meterlog'; html = renderPumps(D); break;
       case 'dms':      html = renderDMSLog(D); break;
       case 'balsheet': html = renderBalanceSheet(D); break;
       default: html = renderDashboard(D);
