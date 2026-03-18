@@ -6335,6 +6335,8 @@ const ROLE_BLOCKED_ACTIONS = {
 };
 
 function rbac_role() {
+  // Super admin always gets full Owner-level RBAC
+  if (APP.isSuperAdmin || APP.role === 'superadmin') return 'Owner';
   return APP.adminUser?.role || 'Owner';
 }
 
@@ -6345,10 +6347,12 @@ function rbac_can(action) {
 
 function rbac_pages() {
   const role = rbac_role();
-  // Case-insensitive match — so 'owner', 'OWNER', 'Owner', 'Admin' etc. all resolve correctly
-  const key = Object.keys(ROLE_PAGES).find(k => k.toLowerCase() === (role||'').toLowerCase()) || role;
+  // Case-insensitive match — so 'owner', 'OWNER', 'Owner', 'Admin' all resolve correctly
+  const key = Object.keys(ROLE_PAGES).find(k => k.toLowerCase() === (role||'').toLowerCase());
+  // Unknown role (key not found) → full access, never lock out
+  if (!key) return PAGES.map(p => p.id);
   const allowed = ROLE_PAGES[key];
-  // null = all pages (Owner/Manager). undefined = unknown/custom role → safe fallback = all pages.
+  // null = all pages (Owner/Manager/Admin). Array = restricted list (Accountant/Cashier).
   return (allowed === null || allowed === undefined) ? PAGES.map(p => p.id) : allowed;
 }
 
@@ -7262,6 +7266,7 @@ const PAGES = [
   { id: 'compare', label: 'Compare Stations', icon: '🏢', group: 'reports', superAdminOnly: true },
   { id: 'billing', label: 'Subscriptions', icon: '💳', group: 'reports', superAdminOnly: true },
   { id: 'insights', label: 'AI Insights', icon: '🤖', group: 'reports' },
+  { id: 'balsheet',  label: 'Balance Sheet',      icon: '🏦', group: 'reports', navHidden: true },
   { id: 'dms',       label: 'DMS / Indent',      icon: '📦', group: 'finance' },
   { id: 'settings',  label: 'Settings',          icon: '⚙️', group: 'reports' },
 ];
@@ -7279,7 +7284,10 @@ function updateStationBreadcrumb() {
 
 function navigate(pageId) {
   // RBAC: block pages the current role can't see
-  if (APP.loggedIn && APP.role === 'admin' && !rbac_canPage(pageId)) {
+  // FIX: If pageId is not in PAGES at all (sub-page like 'balsheet'), never block it —
+  // sub-pages are only reachable via explicit button clicks, not the nav menu.
+  const isKnownPage = PAGES.some(p => p.id === pageId);
+  if (APP.loggedIn && APP.role === 'admin' && isKnownPage && !rbac_canPage(pageId)) {
     // If triggered by URL hash on load, redirect silently to dashboard
     // instead of showing an error toast (confuses users on reload)
     if (APP.page === pageId || !APP.page) {
@@ -7313,7 +7321,7 @@ function buildNav() {
   let lastGroup = '';
   const allowedPages = (APP.loggedIn && APP.role === 'admin') ? rbac_pages() : PAGES.map(p=>p.id);
   const isSuperAdminUser = APP.isSuperAdmin || APP.role === 'superadmin';
-  PAGES.filter(p => allowedPages.includes(p.id) && (!p.superAdminOnly || isSuperAdminUser)).forEach(p => {
+  PAGES.filter(p => !p.navHidden && allowedPages.includes(p.id) && (!p.superAdminOnly || isSuperAdminUser)).forEach(p => {
     if (p.group !== lastGroup) {
       html += `<div class="nav-group-label">${groups[p.group]}</div>`;
       lastGroup = p.group;
