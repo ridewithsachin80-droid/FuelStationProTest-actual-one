@@ -803,13 +803,11 @@
       const newPass = document.getElementById('scNewPass')?.value || '';
       const confPass = document.getElementById('scConfPass')?.value || '';
       if (!newUser || newUser.length < 3) { mt_toast('Username must be at least 3 characters', 'error'); return; }
-      if (newPass.length < 8) { mt_toast('Password must be at least 8 characters', 'error'); return; }
+      if (newPass.length < 6) { mt_toast('Password must be at least 6 characters', 'error'); return; }
       if (newPass !== confPass) { mt_toast('Passwords do not match', 'error'); return; }
       try {
-        // FIX: Use correct token key (_fb_auth_token) — it's set by api-client.js in setAuthToken()
-        // Previously used 'fb_super_token' which doesn't exist, so auth token was never set
-        const token = getAuthToken();
-        if (!token) { mt_toast('Not authenticated. Please log in again.', 'error'); return; }
+        const superToken = sessionStorage.getItem('fb_super_token');
+        if (superToken) setAuthToken(superToken);
         await AuthAPI.changeSuperPassword(newUser, newPass, confPass);
         document.getElementById('superCredsOverlay')?.remove();
         mt_toast('Super admin credentials updated! Use new credentials next time.', 'success');

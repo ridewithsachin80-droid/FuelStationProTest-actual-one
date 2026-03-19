@@ -225,25 +225,11 @@ function authRoutes(db) {
     }
     try {
       const superHash = await hashPassword(newPassword);
-      console.log('[Auth] Updating super admin:', { newUsername, hashedLength: superHash.length });
-      
-      // FIX: Use pool.query instead of db.prepare().run() which may have async/await issues
-      const { pool } = require('./schema');
-      const result = await pool.query(
-        'UPDATE super_admin SET username = $1, pass_hash = $2, updated_at = NOW() WHERE id = 1',
-        [newUsername, superHash]
-      );
-      
-      console.log('[Auth] Super admin update result:', { rowCount: result.rowCount, command: result.command });
-      
-      if (result.rowCount === 0) {
-        console.warn('[Auth] WARNING: UPDATE affected 0 rows - super_admin row may not exist!');
-        return res.status(400).json({ error: 'Failed to update super admin - row not found' });
-      }
-      
+      await db.prepare(
+        'UPDATE super_admin SET username = $1, pass_hash = $2, updated_at = NOW() WHERE id = 1'
+      ).run(newUsername, superHash);
       res.json({ success: true });
     } catch (e) {
-      console.error('[Auth] Error updating super admin:', e.message);
       res.status(500).json({ error: e.message });
     }
   });
@@ -256,18 +242,9 @@ function authRoutes(db) {
     }
     try {
       const newHash = await hashPassword(newPassword);
-      // FIX: Use pool.query for consistency and to verify update affected rows
-      const { pool } = require('./schema');
-      const result = await pool.query(
-        'UPDATE admin_users SET pass_hash = $1 WHERE id = $2 AND tenant_id = $3',
-        [newHash, req.userId, req.tenantId]
-      );
-      
-      if (result.rowCount === 0) {
-        console.warn('[Auth] Admin password update affected 0 rows for user:', req.userId);
-        return res.status(400).json({ error: 'Failed to update password - user not found' });
-      }
-      
+      await db.prepare(
+        'UPDATE admin_users SET pass_hash = $1 WHERE id = $2 AND tenant_id = $3'
+      ).run(newHash, req.userId, req.tenantId);
       res.json({ success: true });
     } catch (e) {
       res.status(500).json({ error: e.message });

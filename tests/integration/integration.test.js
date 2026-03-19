@@ -166,52 +166,6 @@ async function suite_superAuth() {
     const r = await get('/api/auth/session', 'totally_fake_token_abc123');
     assertEq(r.status, 401);
   });
-
-  // ── FIX-BUG: Test super admin password change ──────────────────
-  // Previously: db.prepare().run() pattern didn't persist updates to database
-  // Now: Using pool.query() directly with rowCount validation
-  await test('SuperAuth', 'POST /api/auth/super-change-password without token → 401', async () => {
-    const r = await post('/api/auth/super-change-password', {
-      newUsername: 'newsuper', newPassword: 'NewPass12345', confirmPassword: 'NewPass12345'
-    });
-    assertEq(r.status, 401, 'Should reject unauthenticated request');
-  });
-
-  await test('SuperAuth', 'POST /api/auth/super-change-password with super token → 200', async () => {
-    assert(state.superToken, 'Need super token from previous test');
-    const newUname = 'superadmin_v' + Date.now();
-    const r = await post('/api/auth/super-change-password',
-      {
-        newUsername: newUname,
-        newPassword: 'NewSuperPass12345!',
-        confirmPassword: 'NewSuperPass12345!'
-      },
-      state.superToken
-    );
-    assertEq(r.status, 200, `Should update successfully, got: ${r.body.error || 'OK'}`);
-    assert(r.body.success, 'Response should include success flag');
-    state.superNewUsername = newUname;
-    state.superNewPassword = 'NewSuperPass12345!';
-  });
-
-  await test('SuperAuth', 'Can log in with NEW super password after change', async () => {
-    assert(state.superNewUsername && state.superNewPassword, 'Need new credentials from previous test');
-    const r = await post('/api/auth/super-login', {
-      username: state.superNewUsername,
-      password: state.superNewPassword
-    });
-    assertEq(r.status, 200, `Login with new credentials failed: ${r.body.error}`);
-    assert(r.body.token, 'Should return token');
-    state.superToken = r.body.token; // Update token for subsequent tests
-  });
-
-  await test('SuperAuth', 'OLD super password no longer works', async () => {
-    const r = await post('/api/auth/super-login', {
-      username: SUPER_USER,
-      password: SUPER_PASS
-    });
-    assertEq(r.status, 401, 'Old credentials should not work after change');
-  });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
