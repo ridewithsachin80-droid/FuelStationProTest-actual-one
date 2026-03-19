@@ -1880,11 +1880,6 @@ function renderSettings(D) {
     </div>
 
 
-    <!-- Switch Station -->
-    <div class="card card-pad mt-16" style="text-align:center">
-      <div style="font-size:11px;color:var(--text-3);margin-bottom:12px">You are managing: <strong style="color:var(--accent-light)">${sanitize(_t.name||'Demo')}</strong></div>
-      <button class="btn btn-ghost btn-block" onclick="mt_switchStation()">🏪 Switch to a Different Station</button>
-    </div>
 
     <!-- User Management (Role-Based Access) Card -->
     <div class="g g-2 gap-16 mt-16">
