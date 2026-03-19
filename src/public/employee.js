@@ -3292,8 +3292,12 @@ function showLoginScreen() {
   _cacheTenantId();
 
   // Pre-load data in background while user types credentials
-  if (!window._preloadPromise) {
-    window._preloadPromise = loadData().catch(() => {});
+  // Guard: only preload when APP is initialized AND a tenant is already selected
+  // (avoids crash when showLoginScreen is called before APP is defined)
+  if (typeof APP !== 'undefined' && APP && APP.tenant) {
+    if (!window._preloadPromise) {
+      window._preloadPromise = loadData().catch(() => {});
+    }
   }
 
   // Hide app shell (guard against null — super admin may be on selector, not app)

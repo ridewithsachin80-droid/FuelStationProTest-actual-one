@@ -45,10 +45,11 @@
       // Super admin path — show full selector with all stations + management tools
       if (typeof _origShowSelector === 'function') return _origShowSelector();
     }
-    // Normal path — show landing page via showLoginScreen (APP.tenant is null)
-    // showLoginScreen detects APP.tenant === null and renders the landing page
+    // Normal path — defer via setTimeout so initApp finishes setting up APP first
+    // Without setTimeout: initApp calls mt_showSelector at line 110 BEFORE APP is
+    // fully initialized, causing showLoginScreen → loadData → APP.data → crash
     if (typeof showLoginScreen === 'function') {
-      showLoginScreen();
+      setTimeout(function() { showLoginScreen(); }, 0);
     } else if (typeof _origShowSelector === 'function') {
       return _origShowSelector(); // fallback if employee.js not loaded yet
     }
