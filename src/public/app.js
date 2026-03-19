@@ -4,7 +4,7 @@
 // ── PWA INSTALL ──────────────────────────────────────────────
 window.addEventListener('beforeinstallprompt', e => {
   e.preventDefault();
-  APP.deferredPrompt = e;
+  if (typeof APP !== 'undefined') APP.deferredPrompt = e;
   // Only show if not already installed
   if (window.matchMedia('(display-mode: standalone)').matches) return;
   const banner = document.getElementById('installBanner');
@@ -13,19 +13,19 @@ window.addEventListener('beforeinstallprompt', e => {
 
 // Detect installed (standalone mode) — hide banner
 window.addEventListener('appinstalled', () => {
-  APP.deferredPrompt = null;
+  if (typeof APP !== 'undefined') APP.deferredPrompt = null;
   const banner = document.getElementById('installBanner');
   if (banner) banner.classList.remove('show');
   toast('FuelBunk Pro installed! 🎉', 'success');
 });
 
 function installPWA() {
-  if (APP.deferredPrompt) {
+  if (typeof APP !== 'undefined' && APP.deferredPrompt) {
     // Android / Chrome
-    APP.deferredPrompt.prompt();
+    if (typeof APP !== 'undefined' && APP.deferredPrompt) APP.deferredPrompt.prompt();
     APP.deferredPrompt.userChoice.then(choice => {
       if (choice.outcome === 'accepted') toast('Installing FuelBunk Pro…', 'success');
-      APP.deferredPrompt = null;
+      if (typeof APP !== 'undefined') APP.deferredPrompt = null;
       document.getElementById('installBanner').classList.remove('show');
     });
   } else {

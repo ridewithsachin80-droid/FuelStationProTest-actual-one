@@ -109,15 +109,14 @@ function auditLog(action, details) {
   const entry = {
     id: Date.now() + '_' + Math.random().toString(36).substr(2, 6),
     timestamp: new Date().toISOString(),
-    user: APP.role === 'admin'
+    user: (typeof APP !== 'undefined' && APP && APP.role === 'admin')
       ? (APP.adminUser?.name || 'Admin')
       : (empState?.user?.name || 'Employee'),
-    role: APP.role || 'unknown',
+    role: (typeof APP !== 'undefined' && APP ? APP.role : null) || 'unknown',
     action: action,
     details: details || {},
   };
-  if (!APP.auditLog) APP.auditLog = [];
-  APP.auditLog.unshift(entry);
+  if (typeof APP !== 'undefined' && APP) { if (!APP.auditLog) APP.auditLog = []; APP.auditLog.unshift(entry); }
   // Non-blocking DB write with timeout
   if (db && db.db) {
     Promise.race([

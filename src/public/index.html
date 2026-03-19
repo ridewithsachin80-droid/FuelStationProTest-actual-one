@@ -142,7 +142,7 @@
 
   // Register service worker v12 — works on any HTTPS or localhost origin
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/sw.js?v=35.0', { scope: '/' })  // FIX F-08: version matches sw.js
+    navigator.serviceWorker.register('/sw.js?v=37.0', { scope: '/' })  // FIX F-08: version matches sw.js
       .then(function(reg) {
         reg.update(); // check for updates on every load
 
@@ -958,15 +958,33 @@ try {
 } catch(e) {}
 </script>
 
-<!-- FuelBunk Pro — Backend Integration (SQLite REST API) -->
-<script src="/api-client.js?v=35"></script>
+<!-- ── APP Global Object ── Must be defined before any other scripts ─────── -->
+<!-- APP is the central state object used throughout all JS modules.         -->
+<script>
+window.APP = window.APP || {
+  loggedIn: false,
+  role: null,
+  adminUser: null,
+  tenant: null,
+  data: null,
+  page: 'dashboard',
+  salesFilter: 'all',
+  salesDate: '',
+  isSuperAdmin: false,
+  deferredPrompt: null,
+  auditLog: [],
+};
+</script>
 
-<script src="/multitenant.js?v=35"></script>
-<script src="/utils.js?v=35"></script>
-<script src="/admin.js?v=35"></script>
-<script src="/employee.js?v=35"></script>
-<script src="/app.js?v=35"></script>
-<script src="/bridge.js?v=35"></script>
+<!-- FuelBunk Pro — Backend Integration (SQLite REST API) -->
+<script src="/api-client.js?v=37"></script>
+
+<script src="/multitenant.js?v=37"></script>
+<script src="/utils.js?v=37"></script>
+<script src="/admin.js?v=37"></script>
+<script src="/employee.js?v=37"></script>
+<script src="/app.js?v=37"></script>
+<script src="/bridge.js?v=37"></script>
 <!-- FIX BUG-05: autosave.js loaded last — after utils.js so toast() and other helpers exist -->
 <script src="/autosave.js"></script>
 </body>

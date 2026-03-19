@@ -72,6 +72,10 @@ function mt_doSwitchStation() {
 
 // EMP_PUMPS — built dynamically from admin pump data (includes per-nozzle fuel types)
 function getEmpPumps() {
+  if (typeof APP === 'undefined' || !APP || !APP.data) return [
+    { id: 1, name: 'PUMP 01', fuelType: 'petrol', nozzles: ['A','B'], nozzleFuels: {A:'petrol',B:'petrol'} },
+    { id: 2, name: 'PUMP 02', fuelType: 'petrol', nozzles: ['A','B'], nozzleFuels: {A:'petrol',B:'petrol'} },
+  ];
   const adminPumps = APP.data?.pumps || [];
   if (!adminPumps.length) {
     // Fallback for fresh installs
@@ -98,8 +102,8 @@ const EMP_FUEL = {
   petrol: 'PETROL (MS)', diesel: 'DIESEL (HSD)',
   premium_petrol: 'XP95 PREMIUM', premium: 'XP95 PREMIUM'
 };
-const EMP_PRICES_MAP = () => APP.data?.prices || { petrol: 102.86, diesel: 88.62, premium_petrol: 112.50 };
-const EMP_PRICES = new Proxy({}, { get: (_, k) => (APP.data?.prices || {})[k] || 0 });
+const EMP_PRICES_MAP = () => (typeof APP !== 'undefined' && APP && APP.data ? APP.data.prices : null) || { petrol: 102.86, diesel: 88.62, premium_petrol: 112.50 };
+const EMP_PRICES = new Proxy({}, { get: (_, k) => ((typeof APP !== 'undefined' && APP && APP.data ? APP.data.prices : null) || {})[k] || 0 });
 
 // ── DYNAMIC EMP_LIST — synced with IndexedDB employees ──────
 // BUG-14 FIX: Removed hardcoded SHA-256 hashes for demo PINs 1001–1007.
@@ -144,6 +148,7 @@ function _genId() {
 
 function getEmpList() {
   _cacheTenantId(); // ensure tenant ID is cached for localStorage scoping
+  if (typeof APP === 'undefined' || !APP || !APP.data) return []; // APP not ready yet
   const emps = APP.data?.employees;
   if (emps && emps.length > 0) {
     const withPin = emps.map(e => ({
@@ -3315,10 +3320,12 @@ function showLoginScreen() {
   el.style.display = '';
 
   // Build options using string concat (safe from ordering issues)
+  // Guard: EMP_LIST getter calls APP.data — only safe when APP is initialized
   var empOpts = '';
-  var hasEmployees = EMP_LIST.length > 0;
-  for (var i = 0; i < EMP_LIST.length; i++) {
-    empOpts += '<option value="' + EMP_LIST[i].id + '">' + sanitize(EMP_LIST[i].name) + ' — ' + sanitize(EMP_LIST[i].role) + '</option>';
+  var _safeEmpList = (typeof APP !== 'undefined' && APP && APP.data) ? EMP_LIST : [];
+  var hasEmployees = _safeEmpList.length > 0;
+  for (var i = 0; i < _safeEmpList.length; i++) {
+    empOpts += '<option value="' + _safeEmpList[i].id + '">' + sanitize(_safeEmpList[i].name) + ' — ' + sanitize(_safeEmpList[i].role) + '</option>';
   }
   if (!hasEmployees) {
     empOpts = '<option value="" disabled selected>No employees with PIN configured</option>';
