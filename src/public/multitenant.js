@@ -999,12 +999,17 @@ async function mt_loadBillingData(filter) {
   }
 
   // Row 1: Status filters | Row 2: Plan filters | MRR metric
-  var statRow = '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:8px">'
-    + statBtn('all',     '🏪', 'All Stations',    total,        'var(--text-0)', false)
-    + statBtn('active',  '✅', 'Active',           active,       '#22c55e',       false)
-    + statBtn('trial',   '⏱️', 'Trial',            trial,        '#60a5fa',       false)
-    + statBtn('expired', '⚠️', 'Expired',          expired,      '#ef4444',       false)
-    + statBtn('soon',    '🔔', 'Expiring ≤30 Days',expiringSoon, '#f97316',       true)
+  // Unified 3-column grid: 6 equal buttons (2 rows × 3 cols)
+  var statRow = '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:10px">'
+    + statBtn('all',           '🏪', 'All Stations',    total,        'var(--text-0)', false)
+    + statBtn('active',        '✅', 'Active',           active,       '#22c55e',       false)
+    + statBtn('trial',         '⏱️', 'Trial',            trial,        '#60a5fa',       false)
+    + statBtn('expired',       '⚠️', 'Expired',          expired,      '#ef4444',       false)
+    + statBtn('soon',          '🔔', 'Expiring ≤30d',    expiringSoon, '#f97316',       true)
+    + '<div style="background:rgba(34,197,94,0.06);border:1.5px solid rgba(34,197,94,0.22);border-radius:8px;padding:10px;text-align:center;cursor:default">'
+    + '<div style="font-size:18px;font-weight:800;color:#22c55e">₹'+mrr.toLocaleString('en-IN')+'</div>'
+    + '<div style="font-size:11px;color:var(--text-3);margin-top:2px">💰 MRR</div>'
+    + '</div>'
     + '</div>'
     + '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:12px">'
     + statBtn('plan_monthly',    '📅', 'Monthly',    '', '#9498a5', false)
@@ -1076,14 +1081,14 @@ async function mt_loadBillingData(filter) {
     + ' style="padding-left:14px;font-size:13px" />'
     + '</div>';
   el.innerHTML = statRow + searchBar + filterBar + cards;
-  if (window._billSF) {
+  if (window._billSF || window._billSearch) {
     setTimeout(function() {
       var si = document.getElementById('billSearchInput');
       if (!si) return;
       si.focus();
       var p = window._billCur !== undefined ? window._billCur : (window._billSearch||'').length;
       try { si.setSelectionRange(p, p); } catch(e) {}
-    }, 0);
+    }, 16);
   }
 }
 

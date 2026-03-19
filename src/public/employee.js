@@ -3403,7 +3403,10 @@ function showLoginScreen() {
       '<button class="btn btn-block" style="background:var(--green);color:#fff;padding:14px;font-size:14px;margin-top:6px' + (hasEmployees ? '' : ';opacity:0.6;cursor:not-allowed') + '" onclick="doEmpLogin()"' + (hasEmployees ? '' : ' disabled') + '>\uD83E\uDDD1\u200D\uD83D\uDD27 Login</button>' +
       (hasEmployees ? '' : '<div style="font-size:11px;color:var(--red);margin-top:8px">No employees with PIN set. Ask admin to set PINs in Staff &amp; Allocation.</div>') +
     '</div>' +
-    '<div class="login-footer">FuelBunk Pro v3.0 &copy; 2026</div>' +
+    '<div class="login-footer" style="display:flex;align-items:center;justify-content:space-between;margin-top:20px">' +
+      '<button onclick="(function(){if(typeof APP!==\'undefined\'){APP.tenant=null;}showLoginScreen();})()" style="background:none;border:none;color:var(--text-3);font-size:10px;cursor:pointer;font-family:var(--font)">&#8592; Back to menu</button>' +
+      '<span>FuelBunk Pro v3.0 &copy; 2026</span>' +
+    '</div>' +
     '</div></div>';
 
   // Fetch employee list + subscription status from server in background
