@@ -10,7 +10,7 @@
  *   - Push notifications: Fully wired — requires VAPID subscription from server
  */
 
-const CACHE_VERSION = 'v41';
+const CACHE_VERSION = 'v42';
 const CACHE_NAME    = `fuelbunk-${CACHE_VERSION}`;
 const SHELL_CACHE   = `fuelbunk-shell-${CACHE_VERSION}`;
 const API_CACHE     = `fuelbunk-api-${CACHE_VERSION}`;
@@ -24,14 +24,14 @@ const API_CACHE     = `fuelbunk-api-${CACHE_VERSION}`;
 // handler below will cache it on first successful network fetch instead.
 const SHELL_ASSETS = [
   '/',
-  '/multitenant.js?v=41',
-  '/utils.js?v=41',
-  '/admin.js?v=41',
-  '/employee.js?v=41',
-  '/app.js?v=41',
-  '/api-client.js?v=41',
-  '/bridge.js?v=41',
-  '/autosave.js?v=41',
+  '/multitenant.js?v=42',
+  '/utils.js?v=42',
+  '/admin.js?v=42',
+  '/employee.js?v=42',
+  '/app.js?v=42',
+  '/api-client.js?v=42',
+  '/bridge.js?v=42',
+  '/autosave.js?v=42',
   '/manifest.json',
   '/icon-192.png',
   '/icon-512.png',

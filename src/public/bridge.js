@@ -149,11 +149,15 @@
     sessionStorage.removeItem('fb_super_token');
     sessionStorage.removeItem('fb_super_session');
     sessionStorage.removeItem('fb_session');
+    // Clear sa_entry cookie so mt_showSelector doesn't re-trigger the selector
+    document.cookie = 'sa_entry=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/; SameSite=Strict';
     clearAuth();
-    // Clear APP state so showLoginScreen shows landing page
     if (typeof APP !== 'undefined') { APP.tenant = null; APP.loggedIn = false; APP.role = null; APP.adminUser = null; }
+    // Remove selector overlay from DOM so showLoginScreen renders cleanly
+    var sel = document.getElementById('stationSelectorOverlay') || document.querySelector('.selector-overlay') || document.querySelector('[id*="selector"]');
+    if (sel) sel.remove();
     if (typeof showLoginScreen === 'function') showLoginScreen();
-    else if (typeof mt_showSelector === 'function') mt_showSelector();
+    else window.location.reload();
   };
 
   // Override mt_isSuperLoggedIn — check sessionStorage only (clears on tab close)
@@ -696,10 +700,13 @@
       sessionStorage.removeItem('fb_super_token');
       sessionStorage.removeItem('fb_super_session');
       sessionStorage.removeItem('fb_session');
+      document.cookie = 'sa_entry=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/; SameSite=Strict';
       clearAuth();
       if (typeof APP !== 'undefined') { APP.tenant = null; APP.loggedIn = false; APP.role = null; APP.adminUser = null; }
+      // Remove all overlays so login screen renders on clean DOM
+      document.querySelectorAll('[id*="Overlay"],[id*="overlay"],[id*="selector"]').forEach(function(el){ el.remove(); });
       if (typeof showLoginScreen === 'function') showLoginScreen();
-      else if (typeof mt_showSelector === 'function') mt_showSelector();
+      else window.location.reload();
     };
 
     // ── Delete station (requires super token) ─────────────────────────────
