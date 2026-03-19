@@ -1086,3 +1086,844 @@ async function mt_loadBillingData(filter) {
     }, 0);
   }
 }
+
+async function mt_subSettingsFromBilling(tenantId, stationName) {
+  try {
+    var token = typeof getAuthToken === 'function' ? getAuthToken() : '';
+    var resp  = await fetch('/api/subscriptions/' + encodeURIComponent(tenantId), { headers: { 'Authorization': 'Bearer ' + token } });
+    var sub   = await resp.json();
+
+    // Parse per-plan prices stored in notes field
+    var sp = {};
+    try { var m2 = (sub.notes||'').match(/Prices: ({.*})/); if (m2) sp = JSON.parse(m2[1]); } catch(e2) {}
+
+    var graceDays  = sub.grace_days || 3;
+    var activePlan = sub.plan || 'trial';
+    // Trial toggle: ON if current plan is trial-only OR if trial_days > 0 on a paid plan
+    var trialOn    = activePlan === 'trial' || (sub.trial_days > 0 && activePlan !== 'trial');
+
+    var PLANS = [
+      {id:'monthly',    label:'Monthly',     dur:'1 month',    months:1},
+      {id:'quarterly',  label:'Quarterly',   dur:'3 months',   months:3},
+      {id:'halfyearly', label:'Half-Yearly', dur:'6 months',   months:6},
+      {id:'yearly',     label:'Yearly',      dur:'12 months',  months:12},
+      {id:'trial',      label:'Trial Only',  dur:'no billing', months:0},
+    ];
+
+    function fmtDate(iso) {
+      if (!iso) return 'No end date';
+      return new Date(iso).toLocaleDateString('en-IN', {day:'numeric', month:'short', year:'numeric'});
+    }
+
+    // Build plan cards (excluding Trial Only — it moves to its own row)
+    var paidPlans = PLANS.filter(function(p){ return p.id !== 'trial'; });
+    var planCards = paidPlans.map(function(p) {
+      var active = activePlan === p.id;
+      return '<div id="ss_card_'+p.id+'" data-plan="'+p.id+'" onclick="mt_ssSelectPlan(this.dataset.plan)" style="display:flex;flex-direction:column;background:var(--bg-2);border:2px solid '+(active?'var(--accent)':'var(--border)')+';border-radius:8px;padding:10px;cursor:pointer;transition:border 0.15s">'
+        + '<div style="display:flex;align-items:center;gap:8px">'
+          + '<div id="ss_dot_'+p.id+'" style="width:16px;height:16px;border-radius:50%;background:'+(active?'var(--accent)':'transparent')+';border:2px solid '+(active?'var(--accent)':'var(--text-3)')+';flex-shrink:0"></div>'
+          + '<div><div style="font-size:12px;font-weight:700;color:var(--text-0)">'+p.label+'</div><div style="font-size:10px;color:var(--text-3)">'+p.dur+'</div></div>'
+        + '</div>'
+        + '<div style="display:flex;align-items:center;gap:4px;margin-top:6px">'
+          + '<span style="color:var(--text-3);font-size:12px">\u20b9</span>'
+          + '<input id="ss_price_'+p.id+'" type="number" value="'+(sp[p.id]||0)+'" min="0" placeholder="0" onclick="event.stopPropagation()" style="font-size:13px;font-weight:700;padding:5px 8px;background:var(--bg-0);border:1px solid var(--border);border-radius:6px;color:var(--text-1);width:100%" />'
+        + '</div>'
+      + '</div>';
+    }).join('');
+
+    // Trial Only standalone card
+    var trialOnlyActive = activePlan === 'trial';
+    var trialOnlyCard = '<div id="ss_card_trial" data-plan="trial" onclick="mt_ssSelectPlan(this.dataset.plan)" style="display:flex;align-items:center;gap:8px;background:var(--bg-2);border:2px solid '+(trialOnlyActive?'var(--accent)':'var(--border)')+';border-radius:8px;padding:10px;cursor:pointer;transition:border 0.15s">'
+      + '<div id="ss_dot_trial" style="width:16px;height:16px;border-radius:50%;background:'+(trialOnlyActive?'var(--accent)':'transparent')+';border:2px solid '+(trialOnlyActive?'var(--accent)':'var(--text-3)')+';flex-shrink:0"></div>'
+      + '<div><div style="font-size:12px;font-weight:700;color:var(--text-0)">Trial Only</div><div style="font-size:10px;color:var(--text-3)">no billing</div></div>'
+    + '</div>';
+
+    // Trial-days toggle card
+    var trialDays    = sub.trial_days || 30;
+    var trialCardOn  = trialOn && activePlan !== 'trial'; // toggle ON only for paid-plan combos
+    var trialToggleCard = '<div id="ss_trial_card" onclick="mt_ssToggleTrial()" style="display:flex;align-items:center;justify-content:space-between;background:var(--bg-2);border:2px solid '+(trialCardOn?'var(--accent)':'var(--border)')+';border-radius:8px;padding:10px 12px;cursor:pointer;transition:border 0.15s;margin-top:8px">'
+      + '<div style="display:flex;align-items:center;gap:10px">'
+        + '<div id="ss_trial_dot" style="width:16px;height:16px;border-radius:50%;background:'+(trialCardOn?'var(--accent)':'transparent')+';border:2px solid '+(trialCardOn?'var(--accent)':'var(--text-3)')+';flex-shrink:0"></div>'
+        + '<div>'
+          + '<div style="font-size:12px;font-weight:700;color:var(--text-0)">\ud83c\udf81 Add Trial Period</div>'
+          + '<div style="font-size:10px;color:var(--text-3)">Free days before billing starts</div>'
+        + '</div>'
+      + '</div>'
+      + '<div id="ss_trial_toggle_lbl" style="font-size:10px;font-weight:700;padding:3px 10px;border-radius:20px;background:'+(trialCardOn?'rgba(212,148,15,0.15)':'var(--bg-0)')+';color:'+(trialCardOn?'var(--accent-light)':'var(--text-3)')+';">'+(trialCardOn?'ON':'OFF')+'</div>'
+    + '</div>'
+    + '<div id="ss_trial_input_wrap" style="margin-top:8px;display:'+(trialCardOn?'flex':'none')+';align-items:center;gap:8px;padding:10px 12px;background:var(--bg-0);border:1px solid var(--border);border-radius:8px">'
+      + '<button onclick="event.stopPropagation();mt_ssTrialAdj(-5)" style="width:32px;height:32px;border-radius:6px;border:1px solid var(--border);background:var(--bg-2);color:var(--text-1);font-size:16px;font-weight:700;cursor:pointer;flex-shrink:0">-</button>'
+      + '<button onclick="event.stopPropagation();mt_ssTrialAdj(-1)" style="width:32px;height:32px;border-radius:6px;border:1px solid var(--border);background:var(--bg-2);color:var(--text-1);font-size:16px;font-weight:700;cursor:pointer;flex-shrink:0">\u2212</button>'
+      + '<div style="flex:1;text-align:center">'
+        + '<input id="ss_trial" type="number" value="'+trialDays+'" min="1" max="365" oninput="mt_ssUpdateEndDate()" style="width:80px;padding:6px;background:transparent;border:none;color:var(--accent-light);font-size:20px;font-weight:800;font-family:monospace;text-align:center;outline:none" />'
+        + '<div style="font-size:10px;color:var(--text-3);margin-top:2px">trial days</div>'
+      + '</div>'
+      + '<button onclick="event.stopPropagation();mt_ssTrialAdj(1)" style="width:32px;height:32px;border-radius:6px;border:1px solid var(--border);background:var(--bg-2);color:var(--text-1);font-size:16px;font-weight:700;cursor:pointer;flex-shrink:0">+</button>'
+      + '<button onclick="event.stopPropagation();mt_ssTrialAdj(5)" style="width:32px;height:32px;border-radius:6px;border:1px solid var(--border);background:var(--bg-2);color:var(--text-1);font-size:16px;font-weight:700;cursor:pointer;flex-shrink:0">+5</button>'
+    + '</div>';
+
+    // Compute initial end date
+    function calcInitEnd(planId, gd, td, trialEnabled) {
+      var p = PLANS.find(function(x){ return x.id === planId; });
+      if (!p || p.months === 0) {
+        // Trial Only
+        var t = new Date(); t.setDate(t.getDate() + (td || 30));
+        return t.toISOString().slice(0,10);
+      }
+      var d = new Date();
+      if (trialEnabled && td > 0) d.setDate(d.getDate() + td); // trial period first
+      d.setMonth(d.getMonth() + p.months);
+      d.setDate(d.getDate() + (parseInt(gd)||0));
+      return d.toISOString().slice(0,10);
+    }
+    var endDate = calcInitEnd(activePlan, graceDays, trialDays, trialCardOn);
+
+    function endLabel(planId, trialEnabled, td, endIso) {
+      var p = PLANS.find(function(x){ return x.id === planId; });
+      if (!p || p.months === 0) {
+        return '\ud83d\udcc5 Trial ends: <span style="color:var(--accent-light);font-weight:700">'+fmtDate(endIso)+'</span>'
+          + ' <span style="color:var(--text-3);font-size:11px">('+td+' days from today)</span>';
+      }
+      if (trialEnabled && td > 0) {
+        return '\ud83c\udf81 <span style="color:var(--accent-light);font-weight:700">'+td+' trial days</span>'
+          + ' \u2192 then '
+          + '<span style="color:var(--text-0);font-weight:700">'+(p.label)+'</span>'
+          + ' until <span style="color:var(--accent-light);font-weight:700">'+fmtDate(endIso)+'</span>';
+      }
+      return '\ud83d\udcc5 Ends: <span style="color:var(--accent-light);font-weight:700">'+fmtDate(endIso)+'</span>';
+    }
+
+    var existing = document.getElementById('settingsOverlay');
+    if (existing) existing.remove();
+    var ov = document.createElement('div');
+    ov.id = 'settingsOverlay';
+    ov.style.cssText = 'position:fixed;inset:0;background:var(--bg-0);z-index:10025;overflow-y:auto';
+    ov.innerHTML = '<div style="max-width:500px;margin:0 auto;padding:16px">'
+      // ── Sticky header
+      + '<div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;position:sticky;top:0;background:var(--bg-0);padding:8px 0;border-bottom:1px solid var(--border-light);z-index:1">'
+        + '<button onclick="mt_ssClose()" style="background:var(--bg-2);border:1px solid var(--border);color:var(--text-2);border-radius:8px;padding:6px 12px;cursor:pointer;font-size:13px;font-weight:600">\u2190 Back</button>'
+        + '<h2 style="font-size:16px;font-weight:800;color:var(--text-0)">\u2699\uFE0F Settings \u2014 '+stationName+'</h2>'
+      + '</div>'
+      // ── Status / Grace / WhatsApp
+      + '<div style="background:var(--bg-2);border-radius:8px;padding:12px;margin-bottom:12px">'
+        + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">'
+          + '<div><label style="font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase">Status</label>'
+            + '<select id="ss_status" style="width:100%;margin-top:4px;padding:8px;background:var(--bg-0);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px">'
+            + ['trial','active','suspended'].map(function(s){ return '<option value="'+s+'" '+(sub.status===s?'selected':'')+'>'+ {trial:'Trial',active:'Active',suspended:'Suspended'}[s]+'</option>'; }).join('')
+            + '</select></div>'
+          + '<div><label style="font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase">Grace Days</label>'
+            + '<input id="ss_grace" type="number" value="'+graceDays+'" min="0" max="30" oninput="mt_ssUpdateEndDate()" style="width:100%;margin-top:4px;padding:8px;background:var(--bg-0);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px" /></div>'
+        + '</div>'
+        + '<div><label style="font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase">Owner WhatsApp</label>'
+          + '<input id="ss_phone" type="tel" value="'+(sub.owner_phone||'')+'" placeholder="+91XXXXXXXXXX" style="width:100%;margin-top:4px;padding:8px;background:var(--bg-0);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px" /></div>'
+      + '</div>'
+      // ── Plan selection
+      + '<div style="background:var(--bg-2);border-radius:8px;padding:12px;margin-bottom:12px">'
+        + '<div style="font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase;margin-bottom:10px">Select Plan &amp; Set Price</div>'
+        + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">'+planCards+'</div>'
+        + trialOnlyCard
+        // ── Trial Only days input (shown when Trial Only is selected)
+        + '<div id="ss_trial_only_wrap" style="display:'+(activePlan==='trial'?'flex':'none')+';align-items:center;gap:8px;margin-top:8px;padding:10px 12px;background:var(--bg-0);border:1px solid var(--accent);border-radius:8px">'
+          + '<span style="font-size:11px;font-weight:700;color:var(--text-3);white-space:nowrap">Trial Days:</span>'
+          + '<button onclick="event.stopPropagation();mt_ssTrialAdj(-5)" style="width:32px;height:32px;border-radius:6px;border:1px solid var(--border);background:var(--bg-2);color:var(--text-1);font-size:13px;font-weight:700;cursor:pointer;flex-shrink:0">-5</button>'
+          + '<button onclick="event.stopPropagation();mt_ssTrialAdj(-1)" style="width:32px;height:32px;border-radius:6px;border:1px solid var(--border);background:var(--bg-2);color:var(--text-1);font-size:18px;font-weight:700;cursor:pointer;flex-shrink:0">−</button>'
+          + '<input id="ss_trial" type="number" value="'+trialDays+'" min="1" max="365" oninput="mt_ssUpdateEndDate()" style="flex:1;min-width:0;padding:6px;background:transparent;border:none;color:var(--accent-light);font-size:20px;font-weight:800;font-family:monospace;text-align:center;outline:none" />'
+          + '<button onclick="event.stopPropagation();mt_ssTrialAdj(1)" style="width:32px;height:32px;border-radius:6px;border:1px solid var(--border);background:var(--bg-2);color:var(--text-1);font-size:18px;font-weight:700;cursor:pointer;flex-shrink:0">+</button>'
+          + '<button onclick="event.stopPropagation();mt_ssTrialAdj(5)" style="width:32px;height:32px;border-radius:6px;border:1px solid var(--border);background:var(--bg-2);color:var(--text-1);font-size:13px;font-weight:700;cursor:pointer;flex-shrink:0">+5</button>'
+          + '<span style="font-size:10px;color:var(--text-3);white-space:nowrap">days</span>'
+        + '</div>'
+        + '<input type="hidden" id="ss_plan" value="'+activePlan+'" />'
+        // ── Trial period toggle (only shown for paid plans)
+        + '<div id="ss_trial_section" style="display:'+(activePlan==='trial'?'none':'block')+'">'
+          + trialToggleCard
+        + '</div>'
+        // ── End date display
+        + '<div id="ss_end_display" style="margin-top:10px;padding:10px;background:var(--bg-0);border:1px solid var(--border);border-radius:6px;font-size:12px">'
+          + endLabel(activePlan, trialCardOn, trialDays, endDate)
+          + '<input type="hidden" id="ss_subend" value="'+endDate+'" />'
+        + '</div>'
+      + '</div>'
+      // ── Actions
+      + '<div style="display:flex;gap:8px">'
+        + '<button onclick="mt_ssClose()" style="flex:1;background:var(--bg-2);border:1px solid var(--border);color:var(--text-2);border-radius:8px;padding:12px;font-size:13px;font-weight:700;cursor:pointer">Cancel</button>'
+        + '<button data-tid="'+tenantId+'" onclick="mt_ssDoSave(this.dataset.tid)" style="flex:2;background:var(--accent);border:none;color:#000;border-radius:8px;padding:12px;font-size:14px;font-weight:700;cursor:pointer">\ud83d\udcbe Save Settings</button>'
+      + '</div>'
+    + '</div>';
+    document.body.appendChild(ov);
+  } catch(e) { mt_toast('Error: ' + e.message, 'error'); }
+}
+
+function mt_ssClose(){ var o = document.getElementById('settingsOverlay'); if (o) o.remove(); }
+
+// ── Toggle trial period card ON/OFF ─────────────────────────────────────────
+function mt_ssToggleTrial() {
+  var card    = document.getElementById('ss_trial_card');
+  var dot     = document.getElementById('ss_trial_dot');
+  var lbl     = document.getElementById('ss_trial_toggle_lbl');
+  var wrap    = document.getElementById('ss_trial_input_wrap');
+  if (!card) return;
+  var isOn = card.getAttribute('data-trial-on') === '1';
+  var nowOn = !isOn;
+  card.setAttribute('data-trial-on', nowOn ? '1' : '0');
+  card.style.border           = nowOn ? '2px solid var(--accent)' : '2px solid var(--border)';
+  dot.style.background        = nowOn ? 'var(--accent)' : 'transparent';
+  dot.style.border            = nowOn ? '2px solid var(--accent)' : '2px solid var(--text-3)';
+  lbl.textContent             = nowOn ? 'ON' : 'OFF';
+  lbl.style.background        = nowOn ? 'rgba(212,148,15,0.15)' : 'var(--bg-0)';
+  lbl.style.color             = nowOn ? 'var(--accent-light)' : 'var(--text-3)';
+  wrap.style.display          = nowOn ? 'flex' : 'none';
+  mt_ssUpdateEndDate();
+}
+
+// Initialise the data-trial-on attribute after DOM is ready
+(function _initTrialCard() {
+  var el = document.getElementById('ss_trial_card');
+  if (!el) return;
+  // Read current state from border colour
+  var isOn = el.style.border && el.style.border.includes('var(--accent)');
+  el.setAttribute('data-trial-on', isOn ? '1' : '0');
+})();
+
+// ── +/- buttons for trial days ─────────────────────────────────────────────
+function mt_ssTrialAdj(delta) {
+  var inp = document.getElementById('ss_trial');
+  if (!inp) return;
+  var v = (parseInt(inp.value) || 1) + delta;
+  inp.value = Math.max(1, Math.min(365, v));
+  mt_ssUpdateEndDate();
+}
+
+// ── Select plan card ────────────────────────────────────────────────────────
+function mt_ssSelectPlan(planId) {
+  var plans = ['monthly','quarterly','halfyearly','yearly','trial'];
+  plans.forEach(function(p) {
+    var card = document.getElementById('ss_card_'+p);
+    var dot  = document.getElementById('ss_dot_'+p);
+    if (!card || !dot) return;
+    var a = p === planId;
+    card.style.border    = a ? '2px solid var(--accent)' : '2px solid var(--border)';
+    dot.style.background = a ? 'var(--accent)' : 'transparent';
+    dot.style.border     = a ? '2px solid var(--accent)' : '2px solid var(--text-3)';
+  });
+  var h = document.getElementById('ss_plan');
+  if (h) h.value = planId;
+  // Show/hide trial toggle section (hide for Trial Only plan)
+  var trialSection = document.getElementById('ss_trial_section');
+  if (trialSection) trialSection.style.display = planId === 'trial' ? 'none' : 'block';
+  // Show/hide the Trial Only days input
+  var trialOnlyWrap = document.getElementById('ss_trial_only_wrap');
+  if (trialOnlyWrap) trialOnlyWrap.style.display = planId === 'trial' ? 'flex' : 'none';
+  // When switching to Trial Only, turn off the paid-plan trial toggle
+  if (planId === 'trial') {
+    var card = document.getElementById('ss_trial_card');
+    if (card) card.setAttribute('data-trial-on', '0');
+  }
+  mt_ssUpdateEndDate();
+}
+
+// ── Recalculate and display end date ───────────────────────────────────────
+function mt_ssUpdateEndDate() {
+  var planId    = document.getElementById('ss_plan')?.value || 'trial';
+  var grace     = parseInt(document.getElementById('ss_grace')?.value) || 0;
+  var trialCard = document.getElementById('ss_trial_card');
+  var trialOn   = trialCard && trialCard.getAttribute('data-trial-on') === '1';
+  var trialDays = parseInt(document.getElementById('ss_trial')?.value) || 30;
+  var hidden    = document.getElementById('ss_subend');
+  var display   = document.getElementById('ss_end_display');
+  if (!hidden || !display) return;
+
+  var MONTHS = {monthly:1, quarterly:3, halfyearly:6, yearly:12, trial:0};
+  var months  = MONTHS[planId] || 0;
+  var LABELS  = {monthly:'Monthly', quarterly:'Quarterly', halfyearly:'Half-Yearly', yearly:'Yearly'};
+
+  function fmtD(d) { return d.toLocaleDateString('en-IN', {day:'numeric', month:'short', year:'numeric'}); }
+
+  if (!months) {
+    // Trial Only plan
+    var td = new Date(); td.setDate(td.getDate() + trialDays);
+    var tIso = td.toISOString().slice(0,10);
+    hidden.value = tIso;
+    display.innerHTML = '\ud83d\udcc5 Trial ends: <span style="color:var(--accent-light);font-weight:700">' + fmtD(td) + '</span>'
+      + ' <span style="color:var(--text-3);font-size:11px">(' + trialDays + ' days from today)</span>'
+      + '<input type="hidden" id="ss_subend" value="' + tIso + '" />';
+    return;
+  }
+
+  // Paid plan
+  var d = new Date();
+  if (trialOn && trialDays > 0) d.setDate(d.getDate() + trialDays); // trial window first
+  d.setMonth(d.getMonth() + months);
+  d.setDate(d.getDate() + grace);
+  var iso = d.toISOString().slice(0,10);
+  hidden.value = iso;
+
+  var endStr  = fmtD(d);
+  var planLbl = LABELS[planId] || planId;
+
+  if (trialOn && trialDays > 0) {
+    display.innerHTML = '\ud83c\udf81 <span style="color:var(--accent-light);font-weight:700">' + trialDays + ' trial days</span>'
+      + ' \u2192 then <span style="color:var(--text-0);font-weight:700">' + planLbl + '</span>'
+      + ' until <span style="color:var(--accent-light);font-weight:700">' + endStr + '</span>'
+      + '<input type="hidden" id="ss_subend" value="' + iso + '" />';
+  } else {
+    display.innerHTML = '\ud83d\udcc5 Ends: <span style="color:var(--accent-light);font-weight:700">' + endStr + '</span>'
+      + '<input type="hidden" id="ss_subend" value="' + iso + '" />';
+  }
+}
+
+// ── Save settings ──────────────────────────────────────────────────────────
+async function mt_ssDoSave(tenantId) {
+  var status    = document.getElementById('ss_status')?.value || 'trial';
+  var plan      = document.getElementById('ss_plan')?.value || 'trial';
+  var trialCard = document.getElementById('ss_trial_card');
+  var trialOn   = trialCard && trialCard.getAttribute('data-trial-on') === '1';
+  var trial     = trialOn ? (parseInt(document.getElementById('ss_trial')?.value) || 0) : 0;
+  // For Trial Only plan, always save trial days from input
+  if (plan === 'trial') trial = parseInt(document.getElementById('ss_trial')?.value) || 30;
+  var grace  = parseInt(document.getElementById('ss_grace')?.value) || 3;
+  var phone  = document.getElementById('ss_phone')?.value?.trim() || '';
+  var subEnd = document.getElementById('ss_subend')?.value || null;
+  var prices = {};
+  ['monthly','quarterly','halfyearly','yearly'].forEach(function(p) {
+    var el = document.getElementById('ss_price_'+p);
+    if (el) prices[p] = parseFloat(el.value) || 0;
+  });
+  if (plan !== 'trial' && subEnd) status = 'active';
+  try {
+    var tok = typeof getAuthToken === 'function' ? getAuthToken() : '';
+    var r = await fetch('/api/subscriptions/'+encodeURIComponent(tenantId), {
+      method:'PUT',
+      headers:{'Content-Type':'application/json', 'Authorization':'Bearer '+tok},
+      body: JSON.stringify({
+        status, plan,
+        trial_days: trial,
+        price_monthly: prices.monthly || 0,
+        grace_days: grace,
+        sub_end: subEnd || null,
+        owner_phone: phone,
+        notes: 'Prices: ' + JSON.stringify(prices)
+      })
+    });
+    if (!r.ok) { var e2 = await r.json(); mt_toast(e2.error || 'Save failed', 'error'); return; }
+    mt_toast('\u2705 Settings saved!', 'success');
+    document.getElementById('settingsOverlay').remove();
+    _billingCache = null;
+    await mt_loadBillingData();
+  } catch(e) { mt_toast('Error: ' + e.message, 'error'); }
+}
+
+
+
+
+function mt_confirmDialog(title, bodyHtml, confirmLabel) {
+  return new Promise(function(resolve) {
+    // Remove any stale dialog left over from a previous call that never resolved
+    document.querySelectorAll('[data-mtconfirm]').forEach(function(el) { el.remove(); });
+
+    var overlay = document.createElement('div');
+    overlay.setAttribute('data-mtconfirm', '1');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:10020;display:flex;align-items:center;justify-content:center;padding:20px';
+
+    // FIX: Removed duplicate overlay.innerHTML assignment (first line immediately overwrote itself).
+    overlay.innerHTML = '<div style="background:var(--bg-1);border:1px solid var(--border);border-radius:12px;padding:20px;width:100%;max-width:420px;max-height:80vh;overflow-y:auto">'
+      + '<div style="font-size:15px;font-weight:800;color:var(--text-0);margin-bottom:16px">'+title+'</div>'
+      + bodyHtml
+      + '<div style="display:flex;gap:8px;margin-top:16px">'
+      + '<button onclick="this.closest(\'[data-mtconfirm]\').remove();window._mtConfirmResolve(false)" style="flex:1;background:var(--bg-2);border:1px solid var(--border);color:var(--text-2);border-radius:6px;padding:10px;font-size:13px;font-weight:700;cursor:pointer">Cancel</button>'
+      + '<button onclick="var _ov=this.closest(\'[data-mtconfirm]\');window._mtConfirmResolve(_ov||true)" style="flex:1;background:var(--accent);border:none;color:#000;border-radius:6px;padding:10px;font-size:13px;font-weight:700;cursor:pointer">'+confirmLabel+'</button>'
+      + '</div></div>';
+
+    window._mtConfirmResolve = resolve;
+
+    // FIX: Missing document.body.appendChild — the dialog was built in memory but never
+    // inserted into the DOM. mt_recordPaymentFromBilling awaits this Promise, which hung
+    // forever because the buttons were never visible. This is why pressing "Record Payment"
+    // did absolutely nothing — the modal existed, it just wasn't on the page.
+    document.body.appendChild(overlay);
+  });
+}
+
+async function mt_openCompareStations() {
+  // Show loading overlay immediately
+  const overlay = document.createElement('div');
+  overlay.id = 'compareOverlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);backdrop-filter:blur(6px);z-index:10010;display:flex;flex-direction:column;overflow-y:auto;padding:20px';
+  overlay.innerHTML = `
+    <div style="max-width:900px;margin:0 auto;width:100%">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
+        <div style="font-size:18px;font-weight:800;color:#fff">🏢 Compare Stations</div>
+        <button onclick="document.getElementById('compareOverlay').remove()" style="background:var(--bg-2);border:1px solid var(--border);color:var(--text-2);border-radius:8px;padding:6px 14px;cursor:pointer;font-size:12px;font-weight:600">✕ Close</button>
+      </div>
+      <div id="compareContent" style="text-align:center;padding:60px 20px;color:var(--text-3)">
+        <div style="font-size:32px;margin-bottom:12px">🏢</div>
+        <div style="font-weight:600;margin-bottom:4px">Loading station data…</div>
+        <div style="font-size:12px">Fetching from server</div>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  try {
+    const data = await apiFetch('/data/compare/summary');
+    const { stations = [], benchmark = {} } = data;
+    const r = n => '₹' + (n||0).toLocaleString('en-IN', {maximumFractionDigits:0});
+    const pct = n => Math.min(100, Math.max(0, Math.round(n||0)));
+
+    if (!stations.length) {
+      document.getElementById('compareContent').innerHTML = `<div style="font-size:32px;margin-bottom:12px">🏢</div><div style="font-weight:600;color:var(--text-2)">No station data available yet</div>`;
+      return;
+    }
+
+    const fuelLabel = ft => ({ petrol:'Petrol', diesel:'Diesel', premium_petrol:'Premium', premium:'Premium' }[ft] || ft);
+      const fuelColor = ft => ({ petrol:'#ef4444', diesel:'#f97316', premium_petrol:'#a855f7', premium:'#a855f7' }[ft] || '#4ade80');
+
+      const cards = stations.map(s => {
+        const tankBars = (s.tanks||[]).map((t, i) => {
+          const p = pct((t.current / Math.max(t.capacity,1)) * 100);
+          const c = p<20 ? '#ef4444' : p<40 ? '#f59e0b' : '#4ade80';
+          const fc = fuelColor(t.fuelType);
+          const tankName = t.name || `Tank ${i+1}`;
+          const fl = fuelLabel(t.fuelType);
+          return `<div style="margin-bottom:10px">
+            <div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;margin-bottom:4px">
+              <span style="color:#fff;font-weight:700">${tankName} <span style="color:${fc};font-size:10px;font-weight:600">— ${fl}</span></span>
+              <span style="color:${c};font-weight:800">${p}%</span>
+            </div>
+            <div style="height:6px;background:#1e1e1e;border-radius:3px;margin-bottom:4px">
+              <div style="height:100%;width:${p}%;background:${c};border-radius:3px"></div>
+            </div>
+            <div style="display:flex;justify-content:space-between;font-size:10px;color:#555">
+              <span>${t.current.toLocaleString('en-IN',{maximumFractionDigits:0})} L available</span>
+              <span>/ ${t.capacity.toLocaleString('en-IN',{maximumFractionDigits:0})} L capacity</span>
+            </div></div>`;
+        }).join('');
+
+      const revVsAvg = benchmark.avgRevenue > 0
+        ? ((s.today.revenue - benchmark.avgRevenue) / benchmark.avgRevenue * 100).toFixed(1)
+        : 0;
+      const revColor = revVsAvg >= 0 ? '#4ade80' : '#ef4444';
+      const revSign = revVsAvg >= 0 ? '+' : '';
+
+      return `<div style="background:#111;border:1px solid #1e1e1e;border-radius:12px;padding:16px;margin-bottom:12px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+          <div>
+            <div style="font-size:15px;font-weight:900;color:#f5b93e">${s.name}</div>
+            <div style="font-size:11px;color:#666;margin-top:2px">${s.location||''} · ${s.employees||0} staff</div>
+          </div>
+          <div style="text-align:right">
+            <div style="font-size:18px;font-weight:800;color:#fff">${r(s.today.revenue)}</div>
+            <div style="font-size:10px;color:${revColor};font-weight:700">${revSign}${revVsAvg}% vs avg</div>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">
+          <div style="background:#161616;border-radius:8px;padding:8px 10px">
+            <div style="font-size:9px;color:#555;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:3px">Volume Today</div>
+            <div style="font-size:14px;font-weight:700;color:#fff">${(s.today.liters||0).toLocaleString()} L</div>
+          </div>
+          <div style="background:#161616;border-radius:8px;padding:8px 10px">
+            <div style="font-size:9px;color:#555;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:3px">Transactions</div>
+            <div style="font-size:14px;font-weight:700;color:#fff">${s.today.txns||0}</div>
+          </div>
+        </div>
+        ${tankBars ? `<div style="background:#161616;border-radius:8px;padding:10px"><div style="font-size:9px;color:#555;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">Tank Levels</div>${tankBars}</div>` : ''}
+      </div>`;
+    }).join('');
+
+    const totalRev = stations.reduce((a,s) => a + (s.today.revenue||0), 0);
+    const totalLit = stations.reduce((a,s) => a + (s.today.liters||0), 0);
+
+    document.getElementById('compareContent').innerHTML = `
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px">
+        <div style="background:#111;border:1px solid #1e1e1e;border-radius:10px;padding:12px 16px">
+          <div style="font-size:20px;font-weight:800;color:#f5b93e">${stations.length}</div>
+          <div style="font-size:9px;color:#555;text-transform:uppercase;letter-spacing:0.5px;margin-top:2px">Stations</div>
+        </div>
+        <div style="background:#111;border:1px solid #1e1e1e;border-radius:10px;padding:12px 16px">
+          <div style="font-size:20px;font-weight:800;color:#4ade80">${r(totalRev)}</div>
+          <div style="font-size:9px;color:#555;text-transform:uppercase;letter-spacing:0.5px;margin-top:2px">Combined Revenue Today</div>
+        </div>
+        <div style="background:#111;border:1px solid #1e1e1e;border-radius:10px;padding:12px 16px">
+          <div style="font-size:20px;font-weight:800;color:#fff">${totalLit.toLocaleString()} L</div>
+          <div style="font-size:9px;color:#555;text-transform:uppercase;letter-spacing:0.5px;margin-top:2px">Combined Volume Today</div>
+        </div>
+      </div>
+      ${cards}`;
+  } catch(e) {
+    document.getElementById('compareContent').innerHTML = `
+      <div style="font-size:32px;margin-bottom:12px">⚠️</div>
+      <div style="font-weight:600;color:#ef4444;margin-bottom:8px">Could not load station data</div>
+      <div style="font-size:12px;color:#666">${e.message}</div>
+      <div style="font-size:11px;color:#555;margin-top:8px">Please logout and login again as Super Admin to refresh your session.</div>`;
+  }
+}
+
+function mt_superLogout() {
+  mt_clearSuperSession();
+  mt_showSelector();
+}
+
+// ── Super Admin: Toggle Station Active/Inactive ──
+function mt_toggleStation(id) {
+  const tenants = mt_getTenants();
+  const idx = tenants.findIndex(t => t.id === id);
+  if (idx === -1) return;
+  const wasActive = tenants[idx].active !== false;
+  tenants[idx].active = !wasActive;
+  mt_saveTenants(tenants);
+  mt_toast(`Station ${wasActive ? 'deactivated' : 'activated'} successfully`, wasActive ? 'error' : 'success');
+  mt_showSelector();
+}
+
+// ── Super Admin: View All Station Data ──
+async function mt_viewStationData(id, period) {
+  const tenants = mt_getTenants();
+  const t = tenants.find(x => x.id === id);
+  if (!t) return;
+  period = period || 'today';
+
+  // Show or update overlay
+  let overlay = document.getElementById('stationDataOverlay');
+  const isNew = !overlay;
+  if (isNew) {
+    overlay = document.createElement('div');
+    overlay.id = 'stationDataOverlay';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.8);backdrop-filter:blur(6px);z-index:10001;display:flex;align-items:flex-start;justify-content:center;padding:16px;overflow-y:auto';
+    document.body.appendChild(overlay);
+  }
+
+  const isActive = t.active !== false;
+  overlay.innerHTML = `
+    <div style="background:var(--bg-1);border-radius:16px;border:1px solid var(--border);width:100%;max-width:680px;margin-top:20px">
+      <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
+        <div style="display:flex;align-items:center;gap:12px">
+          <div style="width:42px;height:42px;border-radius:10px;background:linear-gradient(135deg,${t.color||'var(--accent)'},${t.colorLight||'var(--accent-light)'});display:grid;place-items:center;font-size:18px">${t.icon||'⛽'}</div>
+          <div>
+            <div style="font-size:15px;font-weight:800;color:var(--accent-light)">${t.name}</div>
+            <div style="font-size:11px;color:var(--text-3)">${t.location||''} · ${t.ownerName||''}</div>
+          </div>
+          <span style="font-size:10px;font-weight:700;padding:3px 8px;border-radius:4px;${isActive?'background:rgba(74,222,128,0.1);border:1px solid rgba(74,222,128,0.2);color:#4ade80':'background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.2);color:#ef4444'}">●${isActive?' ACTIVE':' INACTIVE'}</span>
+        </div>
+        <button onclick="document.getElementById('stationDataOverlay').remove()" style="background:var(--bg-2);border:1px solid var(--border);color:var(--text-2);border-radius:8px;padding:6px 14px;cursor:pointer;font-size:12px;font-weight:600">✕ Close</button>
+      </div>
+
+      <!-- Period tabs -->
+      <div style="display:flex;gap:0;border-bottom:1px solid var(--border)">
+        ${['today','week','month','year'].map(p => `
+          <button onclick="mt_viewStationData('${id}','${p}')" style="flex:1;padding:10px 6px;font-size:12px;font-weight:700;cursor:pointer;border:none;border-bottom:2px solid ${p===period?'var(--accent)':'transparent'};background:transparent;color:${p===period?'var(--accent-light)':'var(--text-3)'}">${p.charAt(0).toUpperCase()+p.slice(1)}</button>
+        `).join('')}
+      </div>
+
+      <div id="stationDataContent" style="padding:16px 20px">
+        <div style="text-align:center;padding:40px;color:var(--text-3)"><div style="font-size:24px;margin-bottom:8px">⏳</div>Loading...</div>
+      </div>
+    </div>`;
+
+  // Calculate date range
+  const istNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+  const todayStr = istNow.toISOString().slice(0,10);
+  let fromDate = todayStr, toDate = todayStr;
+  if (period === 'week') {
+    const d = new Date(istNow); d.setDate(d.getDate() - 6);
+    fromDate = d.toISOString().slice(0,10);
+  } else if (period === 'month') {
+    fromDate = todayStr.slice(0,7) + '-01';
+  } else if (period === 'year') {
+    fromDate = todayStr.slice(0,4) + '-01-01';
+  }
+
+  try {
+    // Fetch sales data for this tenant via compare/summary or per-station API
+    // Use the public endpoints which don't need station auth
+    const [salesRes, tanksRes, empsRes] = await Promise.allSettled([
+      apiFetch(`/public/sales-summary/${id}?from=${fromDate}&to=${toDate}`).catch(() => null),
+      apiFetch(`/public/tanks/${id}`).catch(() => ({tanks:[]})),
+      apiFetch(`/public/employees/${id}`).catch(() => []),
+    ]);
+
+    // Fallback: use compare/summary data for revenue if per-station not available
+    let revenue = 0, liters = 0, txns = 0, tanks = [], employees = 0;
+    const salesData = salesRes.value;
+    if (salesData && salesData.revenue != null) {
+      revenue = salesData.revenue || 0;
+      liters = salesData.liters || 0;
+      txns = salesData.txns || 0;
+    }
+    const tankData = tanksRes.value;
+    if (tankData && tankData.tanks) tanks = tankData.tanks;
+    else if (Array.isArray(tankData)) tanks = tankData;
+    const empData = empsRes.value;
+    employees = Array.isArray(empData) ? empData.length : (empData?.count || 0);
+
+    const r = n => '₹' + (n||0).toLocaleString('en-IN', {maximumFractionDigits:0});
+    const periodLabel = {today:'Today',week:'Last 7 Days',month:'This Month',year:'This Year'}[period];
+
+    const tankBars = tanks.map(tk => {
+      const p = Math.min(100, Math.round((tk.current_level||tk.current||0) / Math.max(tk.capacity||1,1) * 100));
+      const c = p<20?'#ef4444':p<40?'#f59e0b':'#4ade80';
+      return `<div style="margin-bottom:8px">
+        <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px">
+          <span style="color:var(--text-2);font-weight:600">${tk.fuel_type||tk.fuelType||''}</span>
+          <span style="color:${c};font-weight:700">${p}% · ${(tk.current_level||tk.current||0).toLocaleString()} L</span>
+        </div>
+        <div style="height:6px;background:#1e1e1e;border-radius:3px">
+          <div style="height:100%;width:${p}%;background:${c};border-radius:3px"></div>
+        </div></div>`;
+    }).join('');
+
+    document.getElementById('stationDataContent').innerHTML = `
+      <div style="font-size:11px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:12px">${periodLabel}</div>
+      <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:16px">
+        <div style="background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:12px">
+          <div style="font-size:9px;color:var(--text-3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Revenue</div>
+          <div style="font-size:20px;font-weight:800;color:#f5b93e">${r(revenue)}</div>
+        </div>
+        <div style="background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:12px">
+          <div style="font-size:9px;color:var(--text-3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Volume Sold</div>
+          <div style="font-size:20px;font-weight:800;color:#fff">${(liters||0).toLocaleString()} L</div>
+        </div>
+        <div style="background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:12px">
+          <div style="font-size:9px;color:var(--text-3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Transactions</div>
+          <div style="font-size:20px;font-weight:800;color:#fff">${txns||0}</div>
+        </div>
+        <div style="background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:12px">
+          <div style="font-size:9px;color:var(--text-3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Staff</div>
+          <div style="font-size:20px;font-weight:800;color:#fff">${employees}</div>
+        </div>
+      </div>
+      ${tanks.length ? `<div style="background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:12px"><div style="font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px">🛢️ Tank Levels</div>${tankBars}</div>` : ''}
+    `;
+  } catch(e) {
+    document.getElementById('stationDataContent').innerHTML = `
+      <div style="text-align:center;padding:30px;color:#ef4444">
+        <div style="font-size:24px;margin-bottom:8px">⚠️</div>
+        <div style="font-weight:600;margin-bottom:4px">Could not load data</div>
+        <div style="font-size:12px;color:var(--text-3)">${e.message}</div>
+      </div>`;
+  }
+}
+
+// ── Tenant Settings (change admin password etc.) ──
+function mt_getTenantAdminUsers(tenantId) {
+  const t = mt_getTenants().find(x => x.id === tenantId);
+  return t?.adminUsers || [];
+}
+
+// ═══════════════════════════════════════════════════════════
+// END MULTI-TENANT LAYER
+// ═══════════════════════════════════════════════════════════
+
+const DB_NAME = 'FuelBunkPro'; // Will be overridden per-tenant below
+const DB_VERSION = 4;
+
+class FuelDB_IDB {
+  constructor(dbName) {
+    this.db = null;
+    this.ready = this.init(dbName);
+  }
+
+  init(dbName) {
+    this._dbName = dbName || DB_NAME;
+    return new Promise((resolve, reject) => {
+      let resolved = false;
+      const req = indexedDB.open(this._dbName, DB_VERSION);
+      req.onupgradeneeded = (e) => {
+        const db = e.target.result;
+        const stores = [
+          { name: 'sales', keyPath: 'id', autoIncrement: true, indexes: ['date', 'fuelType', 'mode', 'shift'] },
+          { name: 'tanks', keyPath: 'id' },
+          { name: 'pumps', keyPath: 'id' },
+          { name: 'dipReadings', keyPath: 'id', autoIncrement: true, indexes: ['date', 'tankId'] },
+          { name: 'expenses', keyPath: 'id', autoIncrement: true, indexes: ['date', 'category'] },
+          { name: 'fuelPurchases', keyPath: 'id', autoIncrement: true, indexes: ['date', 'fuelType'] },
+          { name: 'creditCustomers', keyPath: 'id', autoIncrement: true },
+          { name: 'creditTransactions', keyPath: 'id', autoIncrement: true, indexes: ['customerId', 'date'] },
+          { name: 'employees', keyPath: 'id', autoIncrement: true },
+          { name: 'shifts', keyPath: 'id' },
+          { name: 'settings', keyPath: 'key' },
+          { name: 'pendingSync', keyPath: 'id', autoIncrement: true },
+          { name: 'auditLog', keyPath: 'id', indexes: ['timestamp', 'user', 'action'] },
+        ];
+        stores.forEach(s => {
+          if (!db.objectStoreNames.contains(s.name)) {
+            const store = db.createObjectStore(s.name, { keyPath: s.keyPath, autoIncrement: s.autoIncrement || false });
+            (s.indexes || []).forEach(idx => store.createIndex(idx, idx, { unique: false }));
+          }
+        });
+      };
+      req.onblocked = () => {
+        console.warn('IndexedDB upgrade blocked — closing old connections');
+        if (!resolved) { resolved = true; resolve(); }
+      };
+      req.onsuccess = (e) => { this.db = e.target.result; if (!resolved) { resolved = true; resolve(); } };
+      req.onerror = (e) => { if (!resolved) { resolved = true; reject(e.target.error); } };
+      // Safety timeout — don't let DB init hang the whole app
+      setTimeout(() => { if (!resolved) { resolved = true; console.warn('IndexedDB init timed out'); resolve(); } }, 3000);
+    });
+  }
+
+  async tx(storeName, mode = 'readonly') {
+    await this.ready;
+    return this.db.transaction(storeName, mode).objectStore(storeName);
+  }
+
+  // Generic CRUD
+  async getAll(storeName) {
+    const store = await this.tx(storeName);
+    return new Promise((res, rej) => {
+      const req = store.getAll();
+      req.onsuccess = () => res(req.result);
+      req.onerror = () => rej(req.error);
+    });
+  }
+
+  async get(storeName, key) {
+    const store = await this.tx(storeName);
+    return new Promise((res, rej) => {
+      const req = store.get(key);
+      req.onsuccess = () => res(req.result);
+      req.onerror = () => rej(req.error);
+    });
+  }
+
+  async put(storeName, data) {
+    const store = await this.tx(storeName, 'readwrite');
+    return new Promise((res, rej) => {
+      const req = store.put(data);
+      req.onsuccess = () => res(req.result);
+      req.onerror = () => rej(req.error);
+    });
+  }
+
+  async add(storeName, data) {
+    const store = await this.tx(storeName, 'readwrite');
+    return new Promise((res, rej) => {
+      const req = store.add(data);
+      req.onsuccess = () => res(req.result);
+      req.onerror = () => rej(req.error);
+    });
+  }
+
+  async delete(storeName, key) {
+    const store = await this.tx(storeName, 'readwrite');
+    return new Promise((res, rej) => {
+      const req = store.delete(key);
+      req.onsuccess = () => res();
+      req.onerror = () => rej(req.error);
+    });
+  }
+
+  async clear(storeName) {
+    const store = await this.tx(storeName, 'readwrite');
+    return new Promise((res, rej) => {
+      const req = store.clear();
+      req.onsuccess = () => res();
+      req.onerror = () => rej(req.error);
+    });
+  }
+
+  async count(storeName) {
+    const store = await this.tx(storeName);
+    return new Promise((res, rej) => {
+      const req = store.count();
+      req.onsuccess = () => res(req.result);
+      req.onerror = () => rej(req.error);
+    });
+  }
+
+  // Query by index
+  async getByIndex(storeName, indexName, value) {
+    const store = await this.tx(storeName);
+    const index = store.index(indexName);
+    return new Promise((res, rej) => {
+      const req = index.getAll(value);
+      req.onsuccess = () => res(req.result);
+      req.onerror = () => rej(req.error);
+    });
+  }
+
+  // Bulk insert
+  async bulkPut(storeName, items) {
+    await this.ready;
+    return new Promise((res, rej) => {
+      const transaction = this.db.transaction(storeName, 'readwrite');
+      const store = transaction.objectStore(storeName);
+      items.forEach(item => store.put(item));
+      transaction.oncomplete = () => res();
+      transaction.onerror = () => rej(transaction.error);
+    });
+  }
+
+  // Settings helpers
+  async getSetting(key, defaultVal = null) {
+    const row = await this.get('settings', key);
+    return row ? row.value : defaultVal;
+  }
+
+  async setSetting(key, value) {
+    return this.put('settings', { key, value });
+  }
+}
+
+// Singleton — tenant-namespaced
+const _activeTenant = (function() {
+  try { return JSON.parse(localStorage.getItem('fb_active_tenant') || 'null'); } catch { return null; }
+})();
+const _tenantDbName = _activeTenant ? ('FuelBunkPro_' + _activeTenant.id) : 'FuelBunkPro_demo';
+try { window.db = new FuelDB_IDB(_tenantDbName); } catch(e) { console.warn('FuelDB init error:', e); window.db = null; }
+
+// ═══════════════════════════════════════════════════════════
+// FUELBUNK PRO — Utilities
+// ═══════════════════════════════════════════════════════════
+
+// ── APP state + SEED (moved here so it loads first, before admin.js) ──
+// ═══════════════════════════════════════════════════════════
+// FUELBUNK PRO — Main Application
+// ═══════════════════════════════════════════════════════════
+
+const APP = {
+  page: 'dashboard',
+  salesFilter: 'all',
+  sidebarOpen: true,
+  data: null,
+  deferredPrompt: null,
+  loggedIn: false,
+  role: null, // 'admin' or 'employee'
+  adminUser: null,
+  auditLog: [],
+  salesAllTime: false,
+};
+
+// ── SEED DATA ────────────────────────────────────────────────
+const SEED = {
+  tanks: [],
+  pumps: [],
+  shifts: [],
+  employees: [],
+  sales: [],
+  creditCustomers: [],
+  expenses: [],
+  fuelPurchases: [],
+  dipReadings: [],
+  prices: { petrol: 102.86, diesel: 88.62, premium_petrol: 112.50 },
+  purchasePrices: { petrol: 96.50, diesel: 82.30, premium_petrol: 105.80 },
+  fuelTaxRates: [
+    { fuelType: 'petrol',         taxName: 'ZLST', rate: 29.84 },
+    { fuelType: 'diesel',         taxName: 'ZLST', rate: 21.17 },
+    { fuelType: 'premium_petrol', taxName: 'ZLST', rate: 18.00 },
+  ],
+  weekly: [
+    { day: 'Mon', petrol: 0, diesel: 0, premium: 0, revenue: 0 },
+    { day: 'Tue', petrol: 0, diesel: 0, premium: 0, revenue: 0 },
+    { day: 'Wed', petrol: 0, diesel: 0, premium: 0, revenue: 0 },
+    { day: 'Thu', petrol: 0, diesel: 0, premium: 0, revenue: 0 },
+    { day: 'Fri', petrol: 0, diesel: 0, premium: 0, revenue: 0 },
+    { day: 'Sat', petrol: 0, diesel: 0, premium: 0, revenue: 0 },
+    { day: 'Sun', petrol: 0, diesel: 0, premium: 0, revenue: 0 },
+  ],
+  upiVPA: '',
+  upiName: '',
+};
+
+// ── ALLOCATION SYSTEM ────────────────────────────────────────
+const EMP_COLORS = ['#22c55e','#3b82f6','#a855f7','#f97316','#06b6d4','#eab308','#ec4899','#14b8a6','#f43f5e','#8b5cf6'];
+function empInitials(name) { return (name||'').split(' ').map(w=>w[0]).join('').toUpperCase(); }
+function empColor(emp) { return emp.color || EMP_COLORS[(emp.id || 0) % EMP_COLORS.length]; }
