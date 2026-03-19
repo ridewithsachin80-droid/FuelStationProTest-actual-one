@@ -1932,3 +1932,229 @@ const SEED = {
 const EMP_COLORS = ['#22c55e','#3b82f6','#a855f7','#f97316','#06b6d4','#eab308','#ec4899','#14b8a6','#f43f5e','#8b5cf6'];
 function empInitials(name) { return (name||'').split(' ').map(w=>w[0]).join('').toUpperCase(); }
 function empColor(emp) { return emp.color || EMP_COLORS[(emp.id || 0) % EMP_COLORS.length]; }
+
+
+function mt_exportReportsExcel() {
+  var subs = _billingCache || [];
+  if (!subs.length) { if (typeof mt_toast==='function') mt_toast('No data to export', 'error'); return; }
+  var planLabels = {trial:'Trial',monthly:'Monthly',quarterly:'Quarterly',halfyearly:'Half-Yearly',yearly:'Yearly'};
+  var dateStr = new Date().toISOString().slice(0,10);
+
+  var active = subs.filter(function(s){return s.effective_status==='active';});
+  var mrr    = active.reduce(function(a,s){return a+(parseFloat(s.price_monthly)||0);},0);
+  var total  = subs.reduce(function(a,s){return a+(parseFloat(s.total_paid)||0);},0);
+
+  var token = typeof getAuthToken === 'function' ? getAuthToken() : '';
+  var payFetches = subs.map(function(s) {
+    return fetch('/api/subscriptions/' + encodeURIComponent(s.tenant_id) + '/payments',
+      { headers: { 'Authorization': 'Bearer ' + token } })
+      .then(function(r){ return r.ok ? r.json() : []; })
+      .then(function(rows){ return rows.map(function(p){ return Object.assign({},p,{station_name:s.station_name}); }); })
+      .catch(function(){ return []; });
+  });
+
+  Promise.all(payFetches).then(function(results) {
+    var allPayments = [];
+    results.forEach(function(r){ allPayments = allPayments.concat(r); });
+    allPayments.sort(function(a,b){ return (b.payment_date||'').localeCompare(a.payment_date||''); });
+
+    function rowToCSV(row) {
+      return row.map(function(cell) {
+        var s = String(cell === null || cell === undefined ? '' : cell);
+        if (s.includes(',') || s.includes('"') || s.includes('\n')) s = '"' + s.replace(/"/g, '""') + '"';
+        return s;
+      }).join(',');
+    }
+
+    var lines = [];
+    // Sheet 1 header
+    lines.push('=== STATION HEALTH MATRIX ===');
+    lines.push(rowToCSV(['Station', 'Location', 'Owner', 'Status', 'Plan', 'Days Left', 'Monthly Rate (INR)', 'Total Collected (INR)', 'Last Payment']));
+    subs.forEach(function(s) {
+      var dl = s.days_left !== null ? s.days_left : (s.trial_days_left || 0);
+      lines.push(rowToCSV([
+        s.station_name||'', s.location||'', s.owner_name||'',
+        s.effective_status||'', planLabels[s.plan]||s.plan||'',
+        dl, s.price_monthly||0, parseFloat(s.total_paid)||0,
+        s.last_payment ? s.last_payment.slice(0,10) : '',
+      ]));
+    });
+    lines.push('');
+    lines.push(rowToCSV(['SUMMARY','']));
+    lines.push(rowToCSV(['Total Stations', subs.length]));
+    lines.push(rowToCSV(['Active', active.length]));
+    lines.push(rowToCSV(['Trial', subs.filter(function(s){return s.effective_status==='trial';}).length]));
+    lines.push(rowToCSV(['Expired', subs.filter(function(s){return s.effective_status==='expired'||s.effective_status==='grace';}).length]));
+    lines.push(rowToCSV(['MRR (INR)', mrr]));
+    lines.push(rowToCSV(['ARR (INR)', mrr * 12]));
+    lines.push(rowToCSV(['Total Collected (INR)', total]));
+
+    // Sheet 2 payments
+    lines.push('');
+    lines.push('=== PAYMENT HISTORY ===');
+    lines.push(rowToCSV(['Date', 'Station', 'Plan', 'Amount (INR)', 'Mode', 'Reference', 'Months', 'Period Start', 'Period End']));
+    allPayments.forEach(function(p) {
+      lines.push(rowToCSV([
+        (p.payment_date||'').slice(0,10), p.station_name||'',
+        planLabels[p.plan]||p.plan||'', parseFloat(p.amount)||0,
+        (p.payment_mode||'').toUpperCase(), p.reference||'',
+        p.months||1, (p.period_start||'').slice(0,10), (p.period_end||'').slice(0,10),
+      ]));
+    });
+
+    var csv = '\uFEFF' + lines.join('\r\n'); // BOM for Excel UTF-8
+    var blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url; a.download = 'FuelBunkPro_BillingReport_' + dateStr + '.csv';
+    document.body.appendChild(a); a.click();
+    setTimeout(function(){ URL.revokeObjectURL(url); a.remove(); }, 1000);
+    if (typeof mt_toast === 'function') mt_toast('\u2705 Excel / CSV downloaded', 'success');
+  }).catch(function(e) {
+    if (typeof mt_toast === 'function') mt_toast('Export failed: ' + e.message, 'error');
+  });
+}
+
+async function mt_exportReportsPDF() {
+  var subs = _billingCache || [];
+  if (!subs.length) { if (typeof mt_toast==='function') mt_toast('No data to export', 'error'); return; }
+  if (typeof mt_toast==='function') mt_toast('\u23f3 Preparing PDF…', 'info');
+
+  var planLabels = {trial:'Trial',monthly:'Monthly',quarterly:'Quarterly',halfyearly:'Half-Yearly',yearly:'Yearly'};
+  var dateStr = new Date().toLocaleDateString('en-IN', {day:'numeric',month:'long',year:'numeric'});
+  var token = typeof getAuthToken === 'function' ? getAuthToken() : '';
+
+  var allPayments = [];
+  try {
+    var results = await Promise.all(subs.map(function(s) {
+      return fetch('/api/subscriptions/' + encodeURIComponent(s.tenant_id) + '/payments',
+        { headers: { 'Authorization': 'Bearer ' + token } })
+        .then(function(r){ return r.ok ? r.json() : []; })
+        .then(function(rows){ return rows.map(function(p){ return Object.assign({},p,{station_name:s.station_name}); }); })
+        .catch(function(){ return []; });
+    }));
+    results.forEach(function(r){ allPayments = allPayments.concat(r); });
+    allPayments.sort(function(a,b){ return (b.payment_date||'').localeCompare(a.payment_date||''); });
+  } catch(e) {}
+
+  var active    = subs.filter(function(s){return s.effective_status==='active';});
+  var trial     = subs.filter(function(s){return s.effective_status==='trial';});
+  var expired   = subs.filter(function(s){return s.effective_status==='expired'||s.effective_status==='grace';});
+  var mrr       = active.reduce(function(a,s){return a+(parseFloat(s.price_monthly)||0);},0);
+  var totalColl = subs.reduce(function(a,s){return a+(parseFloat(s.total_paid)||0);},0);
+  var expiring30 = subs.filter(function(s){var dl=s.days_left!==null?s.days_left:(s.trial_days_left||0);return dl>=0&&dl<=30&&s.effective_status!=='expired';});
+
+  function cur(n){ return '\u20b9' + (n||0).toLocaleString('en-IN',{maximumFractionDigits:0}); }
+  function sc(s){ return {active:'#16a34a',trial:'#2563eb',grace:'#d97706',expired:'#dc2626',suspended:'#6b7280'}[s]||'#6b7280'; }
+
+  var healthRows = subs.map(function(s) {
+    var dl = s.days_left!==null ? s.days_left : (s.trial_days_left||0);
+    var dlc = dl<=7?'#dc2626':dl<=30?'#d97706':'#374151';
+    return '<tr><td>' + (s.station_name||'') + '</td>'
+      + '<td><span style="background:'+sc(s.effective_status)+'22;color:'+sc(s.effective_status)+';padding:2px 8px;border-radius:20px;font-size:10px;font-weight:700">' + (s.effective_status||'') + '</span></td>'
+      + '<td>' + (planLabels[s.plan]||s.plan||'') + '</td>'
+      + '<td style="text-align:center;font-weight:700;color:'+dlc+'">' + (dl!==null?dl+'d':'') + '</td>'
+      + '<td style="text-align:right;font-family:monospace">' + cur(s.price_monthly||0) + '/mo</td>'
+      + '<td style="text-align:right;font-family:monospace;color:#b45309">' + cur(s.total_paid||0) + '</td></tr>';
+  }).join('');
+
+  var payRows = allPayments.slice(0,30).map(function(p) {
+    var mc = {upi:'#2563eb',cash:'#16a34a',bank:'#7c3aed',cheque:'#d97706'}[p.payment_mode]||'#6b7280';
+    return '<tr><td style="font-size:11px">' + (p.payment_date||'').slice(0,10) + '</td>'
+      + '<td style="font-weight:600">' + (p.station_name||'') + '</td>'
+      + '<td>' + (planLabels[p.plan]||p.plan||'') + '</td>'
+      + '<td style="text-align:right;font-weight:700;color:#16a34a;font-family:monospace">' + cur(p.amount) + '</td>'
+      + '<td style="text-align:center"><span style="background:'+mc+'22;color:'+mc+';padding:1px 7px;border-radius:20px;font-size:10px;font-weight:700">'+(p.payment_mode||'').toUpperCase()+'</span></td>'
+      + '<td style="font-size:11px;color:#6b7280">' + (p.reference||'\u2014') + '</td></tr>';
+  }).join('');
+
+  var html = '<!DOCTYPE html><html><head><meta charset="UTF-8">'
+    + '<title>FuelBunk Pro \u2014 Billing Report</title>'
+    + '<style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#111;margin:0;padding:28px;font-size:13px}'
+    + 'h1{font-size:22px;font-weight:800;margin:0}h2{font-size:13px;font-weight:700;margin:22px 0 8px;color:#374151;border-bottom:2px solid #f3f4f6;padding-bottom:5px}'
+    + '.meta{font-size:11px;color:#9ca3af;margin-bottom:18px}'
+    + '.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:20px}'
+    + '.kpi{background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:12px}'
+    + '.kpi-l{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#9ca3af}'
+    + '.kpi-v{font-size:20px;font-weight:800;margin:4px 0}.kpi-s{font-size:11px;color:#6b7280}'
+    + 'table{width:100%;border-collapse:collapse;margin-bottom:18px;font-size:12px}'
+    + 'th{background:#f3f4f6;padding:7px 9px;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.7px;color:#6b7280;text-align:left;border-bottom:2px solid #e5e7eb}'
+    + 'th.r{text-align:right}th.c{text-align:center}'
+    + 'td{padding:7px 9px;border-bottom:1px solid #f3f4f6}'
+    + 'tr:nth-child(even) td{background:#fafafa}'
+    + '.footer{margin-top:20px;padding-top:10px;border-top:1px solid #e5e7eb;font-size:10px;color:#9ca3af;display:flex;justify-content:space-between}'
+    + '@media print{.no-print{display:none}@page{margin:1.5cm;size:A4}}'
+    + '</style></head><body>'
+    + '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:4px">'
+      + '<div><h1>\u26fd FuelBunk Pro</h1><div class="meta">Subscriptions & Billing Report &nbsp;\u00b7&nbsp; ' + dateStr + '</div></div>'
+      + '<button class="no-print" onclick="window.print()" style="background:#d4940f;color:#000;border:none;border-radius:8px;padding:10px 20px;font-size:13px;font-weight:700;cursor:pointer">\ud83d\udda8 Print / Save as PDF</button>'
+    + '</div>'
+    + '<div class="kpis">'
+      + '<div class="kpi"><div class="kpi-l">MRR</div><div class="kpi-v" style="color:#16a34a">' + cur(mrr) + '</div><div class="kpi-s">ARR: ' + cur(mrr*12) + '</div></div>'
+      + '<div class="kpi"><div class="kpi-l">Total Collected</div><div class="kpi-v" style="color:#b45309">' + cur(totalColl) + '</div><div class="kpi-s">' + allPayments.length + ' payments</div></div>'
+      + '<div class="kpi"><div class="kpi-l">Stations</div><div class="kpi-v">' + subs.length + '</div><div class="kpi-s">Active: ' + active.length + ' &nbsp;\u00b7&nbsp; Trial: ' + trial.length + ' &nbsp;\u00b7&nbsp; Expired: ' + expired.length + '</div></div>'
+      + '<div class="kpi"><div class="kpi-l">Due \u226430 days</div><div class="kpi-v" style="color:' + (expiring30.length?'#d97706':'#16a34a') + '">' + expiring30.length + '</div><div class="kpi-s">renewals expiring soon</div></div>'
+    + '</div>'
+    + '<h2>\ud83c\udfe2 Station Health Matrix</h2>'
+    + '<table><thead><tr><th>Station</th><th>Status</th><th>Plan</th><th class="c">Days Left</th><th class="r">Rate</th><th class="r">Collected</th></tr></thead>'
+    + '<tbody>' + healthRows + '</tbody></table>'
+    + '<h2>\ud83d\udcb5 Payment History' + (allPayments.length > 30 ? ' (latest 30 of ' + allPayments.length + ')' : '') + '</h2>'
+    + (payRows
+      ? '<table><thead><tr><th>Date</th><th>Station</th><th>Plan</th><th class="r">Amount</th><th class="c">Mode</th><th>Reference</th></tr></thead><tbody>' + payRows + '</tbody></table>'
+      : '<p style="color:#9ca3af">No payments recorded yet.</p>')
+    + '<div class="footer"><span>FuelBunk Pro \u2014 Confidential</span><span>Printed: ' + new Date().toLocaleString('en-IN') + '</span></div>'
+    + '</body></html>';
+
+  var win = window.open('', '_blank', 'width=1050,height=780');
+  if (!win) { if(typeof mt_toast==='function') mt_toast('\u26a0\ufe0f Allow pop-ups to export PDF', 'error'); return; }
+  win.document.write(html);
+  win.document.close();
+  win.focus();
+  win.onload = function() { setTimeout(function(){ win.print(); }, 500); };
+  if (typeof mt_toast === 'function') mt_toast('\u2705 PDF ready \u2014 choose "Save as PDF" in print dialog', 'success');
+}
+
+async function mt_recordPaymentFromBilling(tenantId, stationName, defaultPrice) {
+  // Pull saved plan prices from billing cache
+  var subData = (_billingCache||[]).find(function(s){return s.tenant_id===tenantId;}) || {};
+  var sp = {}; try { var _m=(subData.notes||'').match(/Prices: ({.*})/); if(_m) sp=JSON.parse(_m[1]); } catch(e2){}
+  var PP = {monthly:sp.monthly||subData.price_monthly||0, quarterly:sp.quarterly||0, halfyearly:sp.halfyearly||0, yearly:sp.yearly||0};
+  var curPlan = subData.plan||'quarterly';
+  if (curPlan==='trial') curPlan='monthly';
+  var initAmt = PP[curPlan] || defaultPrice || 0;
+
+  var plans = [['monthly','Monthly (1 mo)'],['quarterly','Quarterly (3 mo)'],['halfyearly','Half-Yearly (6 mo)'],['yearly','Yearly (12 mo)']];
+  var planOpts = plans.map(function(pv){
+    return '<option value="'+pv[0]+'" '+(curPlan===pv[0]?'selected':'')+'>'+pv[1]+'</option>';
+  }).join('');
+  var ppJson = JSON.stringify(PP);
+  var html = '<div style="padding:4px 0">'    + '<div style="margin-bottom:12px"><label style="font-size:11px;font-weight:700;color:var(--text-3);text-transform:uppercase">Plan</label>'    + '<select id="rp2_plan" onchange="(function(sel){var pp='+ppJson+';var a=document.getElementById(\'rp2_amount\');if(a&&pp[sel.value])a.value=pp[sel.value];})(this)" style="width:100%;margin-top:4px;padding:8px;background:var(--bg-2);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px">'+planOpts+'</select></div>'    + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">'    + '<div><label style="font-size:11px;font-weight:700;color:var(--text-3);text-transform:uppercase">Amount (₹)</label><input id="rp2_amount" type="number" value="'+Math.round(initAmt)+'" style="width:100%;margin-top:4px;padding:8px;background:var(--bg-2);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px" /></div>'    + '<div><label style="font-size:11px;font-weight:700;color:var(--text-3);text-transform:uppercase">Mode</label><select id="rp2_mode" style="width:100%;margin-top:4px;padding:8px;background:var(--bg-2);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px"><option value="cash">Cash</option><option value="upi">UPI</option><option value="bank">Bank Transfer</option><option value="cheque">Cheque</option></select></div>'    + '</div>'    + '<div style="margin-bottom:12px"><label style="font-size:11px;font-weight:700;color:var(--text-3);text-transform:uppercase">Reference / UTR</label><input id="rp2_ref" placeholder="UPI ref, UTR, cheque no..." style="width:100%;margin-top:4px;padding:8px;background:var(--bg-2);border:1px solid var(--border);border-radius:6px;color:var(--text-1);font-size:13px" /></div>'    + '</div>';
+
+  const _dialogEl = await mt_confirmDialog('\ud83d\udcb0 Record Payment \u2014 ' + stationName, html, 'Record Payment');
+  if (!_dialogEl) return; // cancelled
+  // FIX: Read ALL values while the overlay is still attached to the DOM.
+  // The confirm button now passes the overlay element to the resolver so we
+  // can safely query its fields here. Previously .remove() ran synchronously
+  // before the await resumed — getElementById returned null — amount was 0.
+  const _q = function(id) { return _dialogEl && _dialogEl.querySelector ? _dialogEl.querySelector('#'+id) : document.getElementById(id); };
+  const plan   = _q('rp2_plan')?.value  || 'monthly';
+  const amount = parseFloat(_q('rp2_amount')?.value) || 0;
+  const mode   = _q('rp2_mode')?.value  || 'cash';
+  const ref    = (_q('rp2_ref')?.value  || '').trim();
+  if (_dialogEl && _dialogEl.remove) _dialogEl.remove(); // safe to remove now
+  const months = {monthly:1,quarterly:3,halfyearly:6,yearly:12}[plan] || 1;
+  if (!amount) { mt_toast('Enter a valid amount', 'error'); return; }
+  try {
+    const token = typeof getAuthToken === 'function' ? getAuthToken() : '';
+    const resp = await fetch('/api/subscriptions/' + encodeURIComponent(tenantId) + '/payments', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+      body: JSON.stringify({ plan, amount, payment_mode: mode, reference: ref, months })
+    });
+    if (!resp.ok) { const r = await resp.json(); mt_toast(r.error || 'Failed', 'error'); return; }
+    mt_toast('\u2705 Payment recorded \u2014 subscription extended!', 'success');
+    _billingCache=null; await mt_loadBillingData();
+    // Second reload after 1.5s to catch Railway DB propagation delay
+    setTimeout(function(){_billingCache=null; mt_loadBillingData();}, 1500);
+  } catch(e) { mt_toast('Error: ' + e.message, 'error'); }
+}
