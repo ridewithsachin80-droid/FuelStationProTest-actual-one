@@ -188,7 +188,7 @@
     const omc      = (document.querySelector('input[name="tOmc"]:checked')?.value || 'iocl');
     const id       = document.getElementById('tId')?.value;
     const adminUser= document.getElementById('tAdminUser')?.value?.trim() || 'admin';
-    const adminPass= document.getElementById('tAdminPass')?.value || 'admin123';
+    const adminPass= document.getElementById('tAdminPass')?.value || '';
     const ownerPhone= (document.getElementById('tOwnerPhone')?.value || '').replace(/\D/g,'').replace(/^(91|0)/,'').trim();
     const ownerEmail= (document.getElementById('tOwnerEmail')?.value || '').trim().toLowerCase();
 
@@ -784,7 +784,7 @@
       const omc       = (document.querySelector('input[name="tOmc"]:checked')?.value || 'iocl');
       const id        = document.getElementById('tId')?.value;
       const adminUser = document.getElementById('tAdminUser')?.value?.trim() || 'admin';
-      const adminPass = document.getElementById('tAdminPass')?.value || 'admin123';
+      const adminPass = document.getElementById('tAdminPass')?.value || '';
       const ownerPhone= (document.getElementById('tOwnerPhone')?.value || '').replace(/\D/g,'').replace(/^(91|0)/,'').trim();
       const ownerEmail= (document.getElementById('tOwnerEmail')?.value || '').trim().toLowerCase();
       if (!name || name.length < 2) { if (typeof mt_toast === 'function') mt_toast('Enter a station name', 'error'); return; }

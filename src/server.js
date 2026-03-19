@@ -13,7 +13,8 @@ const authRoutes = require('./auth');
 const dataRoutes = require('./data');
 
 // ── Cleanup route secret — set CLEANUP_SECRET env var in Railway to override ──
-const CLEANUP_SECRET = process.env.CLEANUP_SECRET || 'fuelbunk2026';
+// CLEANUP_SECRET must be set in Railway env vars. No default — routes disabled if not configured.
+const CLEANUP_SECRET = process.env.CLEANUP_SECRET || null;
 
 // ── ENHANCED FEATURES ──────────────────────────────────────────────
 const { startMonitoring, getActiveAlerts, acknowledgeAlert, getAlertStats } = require('./alerts');
@@ -250,18 +251,18 @@ async function startServer() {
   });
 
   // ── QA Test Dashboard — served from same origin (avoids CORS) ──────────
-  // Access: /qa-test?secret=fuelbunk2026
+  // Access: /qa-test?secret=YOUR_CLEANUP_SECRET
   // Served from same origin so fetch() calls to /api/* work without CORS issues.
   app.get('/qa-test', (req, res) => {
-    if (req.query.secret !== CLEANUP_SECRET) {
-      return res.status(403).send('<h2>403 — Add ?secret=fuelbunk2026 to access QA dashboard</h2>');
+    if (!CLEANUP_SECRET || req.query.secret !== CLEANUP_SECRET) {
+      return res.status(403).send('<h2>403 — QA dashboard disabled. Set CLEANUP_SECRET in Railway.</h2>');
     }
     res.sendFile(path.join(__dirname, 'public', 'qa-test.html'));
   });
   // ── END QA TEST DASHBOARD ────────────────────────────────────────────────
 
   // ── MANUAL TANK SYNC: Admin can force-sync tank levels from today's sales ─────
-  // GET /api/cleanup/sync-tanks?secret=fuelbunk2026&tenantId=stn_xxx
+  // GET /api/cleanup/sync-tanks?secret=YOUR_CLEANUP_SECRET&tenantId=stn_xxx
   // This is a one-time fix for when tank-deduct calls failed silently
   app.get('/api/cleanup/sync-tanks', async (req, res) => {
     if (req.query.secret !== CLEANUP_SECRET) return res.status(403).json({ error: 'Forbidden' });
@@ -360,7 +361,7 @@ async function startServer() {
   });
 
   // ── ONE-TIME CLEANUP: Unlock super admin (clear login_attempts lockout) ──
-  // Visit /api/cleanup/unlock-admin?secret=fuelbunk2026 to clear lockout instantly.
+  // Visit /api/cleanup/unlock-admin?secret=YOUR_CLEANUP_SECRET to clear lockout instantly.
   app.get('/api/cleanup/unlock-admin', async (req, res) => {
     if (req.query.secret !== CLEANUP_SECRET) {
       return res.status(403).json({ error: 'Invalid secret' });
@@ -386,7 +387,7 @@ async function startServer() {
     }
   });
   // ── END UNLOCK ────────────────────────────────────────────────────────────
-  // Visit /api/cleanup/dedup-expenses?secret=fuelbunk2026 once to fix duplicates.
+  // Visit /api/cleanup/dedup-expenses?secret=YOUR_CLEANUP_SECRET once to fix duplicates.
   // This endpoint is safe to call multiple times — it is idempotent.
   app.get('/api/cleanup/dedup-expenses', async (req, res) => {
     if (req.query.secret !== CLEANUP_SECRET) {

@@ -200,7 +200,6 @@ async function initApp() {
         const snap = loadDataSnapshot();
         if (snap) {
           APP.data = snap;
-          console.log('[Offline] Restored data from snapshot');
           // FIX F-04: Show stale warning if snapshot is older than 24h
           if (window._snapshotIsStale && window._snapshotAgeHours) {
             if (typeof toast === 'function') toast('📴 Offline — showing data from ' + window._snapshotAgeHours + 'h ago. Prices may be outdated.', 'warning');

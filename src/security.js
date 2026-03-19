@@ -70,6 +70,21 @@ function authMiddleware(db) {
       '/api/auth/reset-password-otp',
       '/api/health',
     ];
+
+    // OTP endpoints get tighter rate limiting: 5 requests per 15 minutes per IP
+    const otpPaths = ['/api/auth/forgot-password', '/api/auth/verify-otp', '/api/auth/reset-password-otp'];
+    if (otpPaths.includes(req.path)) {
+      const otpKey = 'otp:' + req.ip;
+      const otpRecord = _bruteForceStore.get(otpKey) || { count: 0, ts: Date.now() };
+      if (Date.now() - otpRecord.ts > 15 * 60 * 1000) {
+        otpRecord.count = 0; otpRecord.ts = Date.now();
+      }
+      otpRecord.count++;
+      _bruteForceStore.set(otpKey, otpRecord);
+      if (otpRecord.count > 5) {
+        return res.status(429).json({ error: 'Too many OTP requests. Please wait 15 minutes.' });
+      }
+    }
     if (publicPaths.some(p => fullPath.startsWith(p))) return next();
     if (fullPath === '/api/tenants' && req.method === 'GET') return next();
     if (fullPath.startsWith('/api/tenants/list')) return next();

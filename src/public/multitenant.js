@@ -342,10 +342,10 @@ function mt_showTenantForm(existing) {
             </div>
             <div class="form-row">
               <div class="form-group mb-0"><label class="form-label">Admin Username</label>
-                <input class="form-input" id="tAdminUser" placeholder="admin" value="admin" />
+                <input class="form-input" id="tAdminUser" placeholder="e.g. mirji_owner" />
               </div>
               <div class="form-group mb-0"><label class="form-label">Admin Password</label>
-                <input class="form-input" id="tAdminPass" type="password" placeholder="admin123" value="admin123" />
+                <input class="form-input" id="tAdminPass" type="password" placeholder="Min 8 characters" />
               </div>
             </div>
           </div>
@@ -373,7 +373,7 @@ async function mt_saveTenant(isEdit) {
   const icon     = document.getElementById('tIcon')?.value || '⛽';
   const omc      = (document.querySelector('input[name="tOmc"]:checked')?.value || 'iocl');
   const adminUser= document.getElementById('tAdminUser')?.value?.trim() || 'admin';
-  const adminPass= document.getElementById('tAdminPass')?.value || 'admin123';
+  const adminPass= document.getElementById('tAdminPass')?.value || '';
   const ownerPhone = (document.getElementById('tOwnerPhone')?.value || '').replace(/\D/g,'').replace(/^(91|0)/,'').trim();
   const ownerEmail = (document.getElementById('tOwnerEmail')?.value || '').trim().toLowerCase();
   if (!isEdit && !ownerPhone && !ownerEmail) {

@@ -2854,9 +2854,6 @@ async function _emp_submit_inner() {
   });
 
   // DEBUG: Log what meter readings produced
-  console.log('[TankDeduct] tankDeductionsTotalByFuel=', JSON.stringify(tankDeductionsTotalByFuel));
-  console.log('[TankDeduct] openReadings=', JSON.stringify(empState.openReadings), 'closeReadings=', JSON.stringify(empState.closeReadings));
-  console.log('[TankDeduct] sales count=', empState.sales.length, 'sales=', JSON.stringify(empState.sales.slice(0,3).map(s=>({pump:s.pump,ft:s.fuelType,l:s.liters}))));
 
   // Deduct each fuel type from its tank once (combined across all pumps)
   const tankWritePromises = [];
@@ -2878,7 +2875,6 @@ async function _emp_submit_inner() {
   // ── Always use public endpoint so tank deduction reaches DB even without auth ──
   try {
     const tenantTank = (typeof mt_getActiveTenant === 'function') ? mt_getActiveTenant() : null;
-    console.log('[TankDeduct] deductions=', JSON.stringify(tankDeductionsTotalByFuel), 'tenantId=', tenantTank?.id);
     if (tenantTank && tenantTank.id && Object.keys(tankDeductionsTotalByFuel).length > 0) {
       const deductResp = await fetch('/api/public/tank-deduct/' + encodeURIComponent(tenantTank.id), {
         method: 'POST', headers: {'Content-Type':'application/json'},
@@ -2886,7 +2882,6 @@ async function _emp_submit_inner() {
       }).catch(e => { console.error('[TankDeduct] FETCH FAILED:', e.message); return null; });
       if (deductResp) {
         const deductData = await deductResp.json().catch(() => ({}));
-        console.log('[TankDeduct] Response:', deductResp.status, JSON.stringify(deductData));
         if (!deductResp.ok) console.error('[TankDeduct] SERVER ERROR:', deductData.error);
       }
     } else {
@@ -2904,7 +2899,6 @@ async function _emp_submit_inner() {
 
   // Broadcast to admin tab
   try { var bc2=new BroadcastChannel('fuelbunk_sync'); bc2.postMessage({type:'EMP_SUBMITTED',deductions:tankDeductionsTotalByFuel,employee:empState.user?empState.user.name:''}); bc2.close(); } catch(e) {}
-  console.log('[FuelBunk] Deductions:', JSON.stringify(tankDeductionsTotalByFuel), '| Results:', deductLog.join(', '));
 
   // ── Compute mismatch balances and record against employee ──
   const empUser = empState.user;
@@ -2994,7 +2988,6 @@ async function _emp_submit_inner() {
     APP.data.tanks = freshTanks.length ? freshTanks.map(_normTank) : APP.data.tanks;
     APP.data.pumps = freshPumps.length ? freshPumps.map(_normPump) : APP.data.pumps;
     if (freshSales.length) APP.data.sales = freshSales.sort((a,b) => b.id - a.id);
-    console.log('[FuelBunk] Post-submit tanks:', APP.data.tanks.map(t => t.fuelType + ':' + t.current + 'L').join(', '));
   } catch(e) { console.warn('Post-submit DB refresh failed:', e); }
 
   empState.page = 'complete'; renderPage();
@@ -3808,17 +3801,13 @@ async function doEmpLogin() {
   var restored = false;
   try {
     var raw = localStorage.getItem(_tenantKey('fb_emp_session'));
-    console.log('[doEmpLogin] fb_emp_session exists:', !!raw);
     if (raw) {
       var saved = verifyData(raw);
-      console.log('[doEmpLogin] session valid:', !!saved, saved ? 'active='+saved.active+' empId='+saved?.user?.id+' sales='+saved?.sales?.length+' opens='+Object.keys(saved?.openReadings||{}).length : '');
       if (saved && saved.user && saved.user.id === emp.id && saved.active) {
         // Same employee, session still active — restore it
         empState = { ...empState, ...saved };
         restored = true;
-        console.log('[doEmpLogin] RESTORED session: sales='+empState.sales.length+' opens='+Object.keys(empState.openReadings).length+' closes='+Object.keys(empState.closeReadings).length+' page='+empState.page);
       } else {
-        console.log('[doEmpLogin] session NOT restored - id match:', saved?.user?.id === emp.id, 'active:', saved?.active);
       }
     }
   } catch(e) { console.error('[doEmpLogin] restore error:', e); }
@@ -3897,9 +3886,7 @@ async function doEmpLogin() {
               });
             }
           }
-          console.log('[doEmpLogin] Pre-filled openings from server:', JSON.stringify(freshOpenings));
         } else {
-          console.log('[doEmpLogin] No nozzleReadings found in server pumps:', JSON.stringify(serverPumps.map(p => ({ id: p.id, nr: p.nozzleReadings, no: p.nozzleOpen }))));
         }
       }
       // Load allocations so emp_myPumps filters correctly — server only, no localStorage
@@ -4004,7 +3991,6 @@ function appLogout() {
   if (APP.role === 'employee') {
     if (empState.active && empState.user) {
       emp_saveSession();
-      console.log('[appLogout] saved session: sales='+empState.sales.length+' opens='+Object.keys(empState.openReadings).length+' closes='+Object.keys(empState.closeReadings).length);
     }
     empState.active = false;
     empState.page = 'login';
@@ -4888,7 +4874,6 @@ async function loadData() {
       );
       const missingPurchases = APP.data.fuelPurchases.filter(p => !existingPurchaseExpIds.has(String(p.id)));
       if (missingPurchases.length > 0) {
-        console.log('[Backfill] Creating expense entries for', missingPurchases.length, 'purchase(s) missing from expenses table');
         const newExpenses = missingPurchases.map(p => {
           const fi = getFuel(p.fuelType) || { short: p.fuelType };
           return {

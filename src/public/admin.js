@@ -95,7 +95,6 @@ window._renderAllocConflictBanner = function(D2, allocObj) {
       });
     });
 
-    console.log('[ConflictBanner] scanned', allKeys.length, 'keys, found', allConflicts.length, 'conflicts');
     if (allConflicts.length === 0) return '';
 
     var rows = allConflicts.map(function(c) {
@@ -153,7 +152,6 @@ function _normalizeShiftTimes(shifts) {
       if (!s.end)   s.end   = def.end;
       // Persist fix to DB so it never happens again
       if (typeof db !== 'undefined') db.put('shifts', s).catch(() => {});
-      console.log('[FuelBunk] Auto-fixed shift times for:', s.name, s.start, '-', s.end);
     }
   });
 }
@@ -3767,7 +3765,6 @@ async function wa_send(toNum, message, alertType) {
   const phone = wa_normalise(toNum || wa_phone());
   if (!phone || phone.length < 10) {
     wa_log(alertType || 'manual', message, 'no_phone');
-    console.log('[WA] No phone configured — message logged only');
     return { mode: 'log', reason: 'no phone' };
   }
 
