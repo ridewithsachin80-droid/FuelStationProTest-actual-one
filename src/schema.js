@@ -627,19 +627,11 @@ async function initDatabase() {
       console.log(`║  Password : ${initPass.padEnd(40)}║`);
       console.log('╚══════════════════════════════════════════════════════╝');
     }
-  } else if (process.env.SUPER_ADMIN_USERNAME && process.env.SUPER_ADMIN_INIT_PASS) {
-    // Row exists — if env vars are explicitly set, sync them to the DB
-    // This ensures Railway env var changes always take effect on redeploy
-    const envUser = process.env.SUPER_ADMIN_USERNAME;
-    const envPass = process.env.SUPER_ADMIN_INIT_PASS;
-    const currentRow = existing.rows[0];
-    const usernameChanged = currentRow.username !== envUser;
-    // Always re-hash and update when env vars are present, so credentials stay in sync
-    const syncHash = await hashPassword(envPass);
-    await pool.query(
-      'UPDATE super_admin SET username = $1, pass_hash = $2, updated_at = NOW() WHERE id = 1',
-      [envUser, syncHash]
-    );
+  } else if (process.env.SUPER_ADMIN_INIT_PASS) {
+  // Only sync from env if the row still has the initial auto-generated hash
+  // i.e. never overwrite a password that was changed via the app
+  console.log('[Schema] Skipping env sync — credentials managed via app');
+}
     if (usernameChanged) {
       console.log(`[Schema] Super admin username updated to: ${envUser}`);
     }
