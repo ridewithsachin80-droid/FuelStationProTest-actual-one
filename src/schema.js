@@ -626,26 +626,10 @@ async function initDatabase() {
       console.log(`║  Username : ${(process.env.SUPER_ADMIN_USERNAME || 'superadmin').padEnd(40)}║`);
       console.log(`║  Password : ${initPass.padEnd(40)}║`);
       console.log('╚══════════════════════════════════════════════════════╝');
-    }
-  } else if (process.env.SUPER_ADMIN_INIT_PASS) {
-  // Only sync from env if the row still has the initial auto-generated hash
-  // i.e. never overwrite a password that was changed via the app
-  console.log('[Schema] Skipping env sync — credentials managed via app');
-}
-    if (usernameChanged) {
-      console.log(`[Schema] Super admin username updated to: ${envUser}`);
-    }
-    console.log('[Schema] Super admin credentials synced from environment variables');
+    }} else {
+    // Row exists — credentials managed via app, do not overwrite
+    console.log('[Schema] Super admin row exists — skipping env sync');
   }
-
-  console.log('[Schema] Database schema initialized successfully');
-
-  // ── Non-breaking column additions for existing deployments ─────────────────
-  // These ADD COLUMN IF NOT EXISTS statements are safe to run repeatedly.
-  const safeAlters = [
-    // ── PUMPS TABLE MIGRATIONS ─────────────────────────────────────────────
-    // current_reading and reading_updated_at were used in the reading endpoint
-    // but never added to the CREATE TABLE. Add them safely now.
     "ALTER TABLE pumps ADD COLUMN IF NOT EXISTS current_reading REAL DEFAULT 0",
     "ALTER TABLE pumps ADD COLUMN IF NOT EXISTS reading_updated_at TEXT DEFAULT ''",
     "ALTER TABLE pumps ADD COLUMN IF NOT EXISTS open_reading REAL DEFAULT 0",
