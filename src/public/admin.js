@@ -7748,6 +7748,41 @@ async function saveSale() {
 
 // ── TANK MANAGEMENT ──────────────────────────────────────────
 
+// OMC-AWARE TANK CAPACITIES
+// Each OMC installs specific tank sizes — only show relevant options.
+// 15K is BPCL standard (has its own dip chart). IOCL has no 15K dip chart
+// so showing it for IOCL was wrong — it fell back to the 10K chart silently.
+// Private stations show all sizes since they use non-standard configurations.
+const _OMC_TANK_CAPS = {
+  iocl:    [10000, 20000],
+  bpcl:    [15000, 20000],
+  hpcl:    [10000, 20000],
+  mrpl:    [10000, 20000],
+  private: [10000, 15000, 16000, 20000],
+};
+const _OMC_CAP_LABELS = {
+  iocl:    { 10000:'Standard', 20000:'Large' },
+  bpcl:    { 15000:'BPCL Standard', 20000:'Large' },
+  hpcl:    { 10000:'Standard', 20000:'Large' },
+  mrpl:    { 10000:'Standard', 20000:'Large' },
+  private: { 10000:'Standard', 15000:'Medium', 16000:'Custom', 20000:'Large' },
+};
+
+function getTankCapacities(extraCap) {
+  const omc = (APP?.tenant?.omc || 'iocl').toLowerCase();
+  const caps = [...(_OMC_TANK_CAPS[omc] || _OMC_TANK_CAPS.iocl)];
+  // If an existing tank has a capacity not in this OMC's list (legacy data),
+  // include it so the edit modal can still show and preserve it.
+  if (extraCap && !caps.includes(extraCap)) caps.push(extraCap);
+  return caps.sort((a, b) => a - b);
+}
+
+function getTankCapLabel(c) {
+  const omc = (APP?.tenant?.omc || 'iocl').toLowerCase();
+  return (_OMC_CAP_LABELS[omc] || _OMC_CAP_LABELS.iocl)[c] || '';
+}
+
+// Keep for any legacy references (dip chart loop etc.)
 const TANK_CAPACITIES = [10000, 15000, 16000, 20000];
 
 function openAddTankModal() {
@@ -7763,14 +7798,14 @@ function openAddTankModal() {
     </label>`
   ).join('');
 
-  const capOpts = TANK_CAPACITIES.map((c, i) => {
-    const labels = {10000:'Standard',15000:'BPCL 15K',16000:'Medium',20000:'Large'};
+  const capOpts = getTankCapacities().map((c, i) => {
+    const label = getTankCapLabel(c);
     return `<label style="flex:1;cursor:pointer">
       <input type="radio" name="newTankCapR" value="${c}" ${i===0?'checked':''} style="display:none">
       <div class="tank-cap-opt" id="capOpt_${c}" style="border:2px solid ${i===0?'var(--accent)':'var(--border)'};background:${i===0?'rgba(212,148,15,0.1)':'var(--bg-0)'};border-radius:10px;padding:14px 8px;text-align:center;transition:all 0.15s" onclick="selectTankCap(${c})">
         <div style="font-size:18px;font-weight:900;color:${i===0?'var(--accent-light)':'var(--text-1)'};" id="capOptVal_${c}">${(c/1000).toFixed(0)}K</div>
         <div style="font-size:10px;font-weight:700;color:var(--text-2);margin-top:2px">${c.toLocaleString('en-IN')} L</div>
-        <div style="font-size:9px;color:var(--text-3);margin-top:1px">${labels[c]||''}</div>
+        <div style="font-size:9px;color:var(--text-3);margin-top:1px">${label}</div>
       </div>
     </label>`;
   }).join('');
@@ -7796,7 +7831,7 @@ function openAddTankModal() {
 }
 
 function selectTankCap(selected) {
-  TANK_CAPACITIES.forEach(c => {
+  getTankCapacities().forEach(c => {
     const el = document.getElementById('capOpt_' + c);
     const val = document.getElementById('capOptVal_' + c);
     if (!el) return;
@@ -7875,15 +7910,15 @@ function openEditTankModal(tankId) {
     </label>`
   ).join('');
 
-  const capOpts = TANK_CAPACITIES.map(c => {
-    const labels = {10000:'Standard',15000:'BPCL 15K',16000:'Medium',20000:'Large'};
+  const capOpts = getTankCapacities(tank.capacity).map(c => {
+    const label = getTankCapLabel(c);
     const isSel = c === tank.capacity;
     return `<label style="flex:1;cursor:pointer">
       <input type="radio" name="editTankCapR" value="${c}" ${isSel?'checked':''} style="display:none">
       <div id="eCapOpt_${c}" style="border:2px solid ${isSel?'var(--accent)':'var(--border)'};background:${isSel?'rgba(212,148,15,0.1)':'var(--bg-0)'};border-radius:10px;padding:14px 8px;text-align:center;transition:all 0.15s;cursor:pointer" onclick="selectEditTankCap(${c})">
         <div style="font-size:18px;font-weight:900;color:${isSel?'var(--accent-light)':'var(--text-1)'};" id="eCapVal_${c}">${(c/1000).toFixed(0)}K</div>
         <div style="font-size:10px;font-weight:700;color:var(--text-2);margin-top:2px">${c.toLocaleString('en-IN')} L</div>
-        <div style="font-size:9px;color:var(--text-3)">${labels[c]||''}</div>
+        <div style="font-size:9px;color:var(--text-3)">${label}</div>
       </div>
     </label>`;
   }).join('');
@@ -7914,7 +7949,7 @@ function openEditTankModal(tankId) {
 }
 
 function selectEditTankCap(selected) {
-  TANK_CAPACITIES.forEach(c => {
+  getTankCapacities(selected).forEach(c => {
     const el = document.getElementById('eCapOpt_' + c);
     const val = document.getElementById('eCapVal_' + c);
     if (!el) return;
@@ -9379,19 +9414,22 @@ function openReadingModal(pumpId) {
     const ft   = _nozzleFuelType(pump, n);
     const fuel = getFuel(ft);
     const cur  = _nozzleReading(pump, n);
-    const tank = APP.data.tanks.find(t => Number(t.fuelType === ft ? t.fuelType : null) || t.fuelType === ft);
+    const openVal = (pump.nozzleOpen || {})[n];
+    const tank = APP.data.tanks.find(t => t.fuelType === ft);
     const tankStock = tank ? `<span style="font-size:10px;color:var(--text-3)"> · Tank: <strong style="color:var(--text-1)">${fmt(tank.current)}L</strong></span>` : '';
+    const openBadge = openVal !== undefined
+      ? `<span style="font-size:10px;color:var(--text-3)"> · Open: <strong style="color:var(--accent-light)">${fmt(openVal)}</strong></span>`
+      : '';
 
     return `<div style="background:var(--bg-0);border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:10px">
-      <!-- Nozzle header -->
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
         <div style="display:flex;align-items:center;gap:8px">
           <div style="width:32px;height:32px;border-radius:50%;background:${fuel.color}22;border:2px solid ${fuel.color};display:grid;place-items:center;font-weight:900;font-size:12px;color:${fuel.color}">N${n}</div>
           <div>
             <div style="font-size:12px;font-weight:700;color:var(--text-0)">Nozzle ${n}</div>
-            <div style="display:flex;align-items:center;gap:4px">
+            <div style="display:flex;align-items:center;gap:4px;flex-wrap:wrap">
               <span style="font-size:10px;font-weight:700;color:${fuel.color};background:${fuel.color}18;padding:1px 6px;border-radius:3px">${fuel.short}</span>
-              ${tankStock}
+              ${tankStock}${openBadge}
             </div>
           </div>
         </div>
@@ -9400,23 +9438,85 @@ function openReadingModal(pumpId) {
           <div style="font-size:16px;font-weight:800;color:var(--text-0);font-family:var(--mono)">${fmt(cur)}</div>
         </div>
       </div>
-      <!-- New reading input -->
       <input class="form-input" type="number" step="0.1" id="nozzleReading_${n}"
         placeholder="New meter reading" value=""
         oninput="updateNozzlePreview(${pumpId},'${n}')"
         style="font-size:18px;font-weight:700;text-align:center;margin-bottom:6px" />
-      <!-- Live deduct preview -->
       <div id="nozzlePreview_${n}" style="display:none;font-size:11px;padding:6px 10px;border-radius:6px;font-weight:600"></div>
     </div>`;
   }).join('');
 
+  // ── Reading type toggle — Opening sets baseline only, Closing deducts tank ──
+  const toggleHtml = `
+    <div style="display:flex;gap:0;border:1.5px solid var(--border);border-radius:10px;overflow:hidden;margin-bottom:14px">
+      <button id="rdgTypeOpening" onclick="setReadingType('opening',${pumpId})"
+        style="flex:1;padding:10px 8px;font-size:12px;font-weight:700;border:none;cursor:pointer;
+               background:var(--accent);color:#fff;transition:all 0.15s">
+        📋 Opening Reading
+      </button>
+      <button id="rdgTypeClosing" onclick="setReadingType('closing',${pumpId})"
+        style="flex:1;padding:10px 8px;font-size:12px;font-weight:700;border:none;cursor:pointer;
+               background:var(--bg-0);color:var(--text-2);transition:all 0.15s">
+        🔒 Closing Reading
+      </button>
+    </div>
+    <div id="rdgTypeDesc" style="font-size:11px;margin-bottom:14px;padding:8px 12px;border-radius:7px;
+         background:rgba(212,148,15,0.08);border:1px solid rgba(212,148,15,0.2);color:var(--text-2)">
+      📋 <strong style="color:var(--accent-light)">Opening mode:</strong>
+      Sets the starting baseline for this shift. <strong>No fuel will be deducted from the tank.</strong>
+    </div>`;
+
   openModal(`⛽ Update ${pump.name} — Per Nozzle`,
-    `<div style="font-size:11px;color:var(--text-3);margin-bottom:14px">Enter the new meter reading for each nozzle. Sold liters will be deducted from the corresponding fuel tank automatically.</div>
-     ${nozzleRows}`,
+    `${toggleHtml}${nozzleRows}`,
     `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-accent" onclick="saveReading(${pumpId})">💾 Save All & Sync Tanks</button>`
+     <button class="btn btn-accent" id="rdgSaveBtn" onclick="saveReading(${pumpId})">📋 Save Opening</button>`
   );
 }
+
+function setReadingType(type, pumpId) {
+  const isOpening = type === 'opening';
+  const btnOpen   = document.getElementById('rdgTypeOpening');
+  const btnClose  = document.getElementById('rdgTypeClosing');
+  const desc      = document.getElementById('rdgTypeDesc');
+  const saveBtn   = document.getElementById('rdgSaveBtn');
+
+  if (btnOpen) {
+    btnOpen.style.background = isOpening ? 'var(--accent)' : 'var(--bg-0)';
+    btnOpen.style.color      = isOpening ? '#fff' : 'var(--text-2)';
+  }
+  if (btnClose) {
+    btnClose.style.background = !isOpening ? '#EF4444' : 'var(--bg-0)';
+    btnClose.style.color      = !isOpening ? '#fff' : 'var(--text-2)';
+  }
+  if (desc) {
+    if (isOpening) {
+      desc.style.background = 'rgba(212,148,15,0.08)';
+      desc.style.borderColor = 'rgba(212,148,15,0.2)';
+      desc.innerHTML = '📋 <strong style="color:var(--accent-light)">Opening mode:</strong> Sets the starting baseline for this shift. <strong>No fuel will be deducted from the tank.</strong>';
+    } else {
+      desc.style.background = 'rgba(239,68,68,0.06)';
+      desc.style.borderColor = 'rgba(239,68,68,0.2)';
+      desc.innerHTML = '🔒 <strong style="color:var(--red)">Closing mode:</strong> Calculates litres sold (closing − opening) and <strong>deducts from tank automatically.</strong>';
+    }
+  }
+  if (saveBtn) {
+    saveBtn.textContent = isOpening ? '📋 Save Opening' : '💾 Save & Sync Tanks';
+    saveBtn.style.background = isOpening ? '' : '';
+  }
+  // Store type on a hidden field so saveReading can read it
+  let hidden = document.getElementById('rdgTypeHidden');
+  if (!hidden) {
+    hidden = document.createElement('input');
+    hidden.type = 'hidden';
+    hidden.id   = 'rdgTypeHidden';
+    document.body.appendChild(hidden);
+  }
+  hidden.value = type;
+  // Refresh previews for all nozzles
+  const pump = APP.data.pumps.find(p => String(p.id) === String(pumpId));
+  if (pump) _nozzleLabels(pump).forEach(n => updateNozzlePreview(pumpId, n));
+}
+window.setReadingType = setReadingType;
 
 function updateNozzlePreview(pumpId, nozzle) {
   const pump = APP.data.pumps.find(p => String(p.id) === String(pumpId));
@@ -9427,11 +9527,26 @@ function updateNozzlePreview(pumpId, nozzle) {
   if (!preview) return;
 
   if (isNaN(newVal)) { preview.style.display = 'none'; return; }
-  const sold = newVal - cur;
+
+  // Check which mode the toggle is in (default: opening)
+  const rdgType = document.getElementById('rdgTypeHidden')?.value || 'opening';
+  const isOpening = rdgType === 'opening';
+
   const ft   = _nozzleFuelType(pump, nozzle);
   const fuel = getFuel(ft);
   const tank = APP.data.tanks.find(t => t.fuelType === ft);
 
+  if (isOpening) {
+    // Opening mode — no deduction, just show baseline confirmation
+    preview.style.display = '';
+    preview.style.background = 'rgba(212,148,15,0.08)';
+    preview.style.color = 'var(--accent-light)';
+    preview.innerHTML = `📋 Opening baseline set to <strong>${fmt(newVal)}</strong> — no tank deduction`;
+    return;
+  }
+
+  // Closing mode — existing deduction logic
+  const sold = newVal - cur;
   if (sold < 0) {
     preview.style.display = '';
     preview.style.background = 'rgba(239,68,68,0.08)';
@@ -9454,51 +9569,67 @@ function saveReading(pumpId) {
   const pump = APP.data.pumps.find(p => String(p.id) === String(pumpId));
   if (!pump) { toast('Pump not found — please refresh and try again', 'error'); return; }
   const labels = _nozzleLabels(pump);
+
+  // ── Determine mode from toggle (default: opening for safety) ──
+  const rdgType   = document.getElementById('rdgTypeHidden')?.value || 'opening';
+  const isOpening = rdgType === 'opening';
+
   const nozzleReadings = pump.nozzleReadings ? { ...pump.nozzleReadings } : {};
+  const nozzleOpen     = pump.nozzleOpen     ? { ...pump.nozzleOpen }     : {};
 
   let totalSold = 0;
-  const deductions = {}; // fuelType -> liters
+  const deductions = {}; // fuelType -> liters (closing mode only)
   const auditLines = [];
 
   for (const n of labels) {
-    const inputEl = document.getElementById(`nozzleReading_${n}`);
-    const rawVal  = inputEl?.value;
-    if (!rawVal && rawVal !== '0') continue; // skip blanks — nozzle not updated this time
+    const inputEl  = document.getElementById(`nozzleReading_${n}`);
+    const rawVal   = inputEl?.value;
+    if (!rawVal && rawVal !== '0') continue; // skip blanks
 
     const newReading = parseFloat(rawVal);
     const oldReading = _nozzleReading(pump, n);
     const ft         = _nozzleFuelType(pump, n);
 
     if (isNaN(newReading) || newReading < 0) { toast(`Nozzle ${n}: Invalid reading`, 'error'); return; }
-    if (newReading < oldReading)             { toast(`Nozzle ${n}: Cannot be less than current (${fmt(oldReading)})`, 'error'); return; }
-    if (newReading - oldReading > 10000)     { toast(`Nozzle ${n}: Jump >10000L — verify reading`, 'error'); return; }
 
-    const sold = newReading - oldReading;
-    nozzleReadings[n] = newReading;
-    if (sold > 0) deductions[ft] = (deductions[ft] || 0) + sold;
-    totalSold += sold;
-    auditLines.push(`N${n}(${ft}): ${fmt(oldReading)}→${fmt(newReading)} sold ${fmt(sold)}L`);
-  }
-
-  if (!Object.keys(deductions).length && !auditLines.length) {
-    toast('No readings entered', 'info'); return;
-  }
-
-  // Update pump — store per-nozzle readings + update cumulative currentReading
-  // Save nozzleOpen (opening reading) if not yet set — used for sold calculation
-  if (!pump.nozzleOpen) pump.nozzleOpen = {};
-  labels.forEach(n => {
-    if (pump.nozzleOpen[n] === undefined && nozzleReadings[n] !== undefined) {
-      // First time setting this nozzle — use previous reading as open
-      pump.nozzleOpen[n] = pump.nozzleReadings?.[n] ?? 0;
+    if (isOpening) {
+      // Opening: store as baseline, no deduction, no "must be greater" check
+      nozzleOpen[n]     = newReading;
+      nozzleReadings[n] = newReading;
+      auditLines.push(`N${n}(${ft}): opening set to ${fmt(newReading)}`);
+    } else {
+      // Closing: calculate sold, deduct tank
+      if (newReading < oldReading) { toast(`Nozzle ${n}: Closing reading cannot be less than current (${fmt(oldReading)})`, 'error'); return; }
+      if (newReading - oldReading > 10000) { toast(`Nozzle ${n}: Jump >10000L — please verify reading`, 'error'); return; }
+      const sold = newReading - oldReading;
+      nozzleReadings[n] = newReading;
+      if (sold > 0) deductions[ft] = (deductions[ft] || 0) + sold;
+      totalSold += sold;
+      auditLines.push(`N${n}(${ft}): ${fmt(oldReading)}→${fmt(newReading)} sold ${fmt(sold)}L`);
     }
-  });
-  pump.nozzleReadings  = nozzleReadings;
-  pump.currentReading  = Object.values(nozzleReadings).reduce((a, v) => a + v, 0);
-  pump.openReading     = Object.values(pump.nozzleOpen || {}).reduce((a, v) => a + (parseFloat(v)||0), 0);
+  }
+
+  if (!auditLines.length) { toast('No readings entered', 'info'); return; }
+
+  // Update pump object
+  pump.nozzleReadings = nozzleReadings;
+  pump.nozzleOpen     = nozzleOpen;
+  pump.currentReading = Object.values(nozzleReadings).reduce((a, v) => a + (parseFloat(v)||0), 0);
+  pump.openReading    = Object.values(nozzleOpen).reduce((a, v) => a + (parseFloat(v)||0), 0);
   db.put('pumps', _pumpForPut(pump)).catch(() => {});
 
-  // Deduct from each fuel tank
+  // Clean up hidden type field
+  const hf = document.getElementById('rdgTypeHidden'); if (hf) hf.remove();
+
+  if (isOpening) {
+    auditLog('reading_opening', { pump: pump.name, pumpId, detail: auditLines.join('; ') });
+    closeModal();
+    toast(`✅ ${pump.name} — Opening readings saved. Tank stock unchanged.`, 'success');
+    renderPage();
+    return;
+  }
+
+  // Closing mode: deduct from each fuel tank
   const msgs = [];
   for (const [ft, liters] of Object.entries(deductions)) {
     const tank = APP.data.tanks.find(t => t.fuelType === ft);
@@ -9512,9 +9643,9 @@ function saveReading(pumpId) {
     }
   }
 
-  auditLog('reading_update', { pump: pump.name, pumpId, detail: auditLines.join('; '), totalSold });
+  auditLog('reading_closing', { pump: pump.name, pumpId, detail: auditLines.join('; '), totalSold });
   closeModal();
-  toast(`✅ ${pump.name} updated — ${msgs.join(' · ')}`, 'success');
+  toast(`✅ ${pump.name} updated — ${msgs.length ? msgs.join(' · ') : 'no sales recorded'}`, 'success');
   renderPage();
 }
 
