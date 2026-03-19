@@ -3455,7 +3455,6 @@ function landingShowLogin(type) {
     setTimeout(function() { var u = document.getElementById('superUser'); if (u) u.focus(); }, 100);
     return;
   }
-  }
   if (type === 'employee') {
     // Employee: show original selector so they can pick their station
     var origSel = (typeof window._origShowSelectorForLanding === 'function')
