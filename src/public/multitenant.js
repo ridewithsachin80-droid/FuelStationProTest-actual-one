@@ -998,13 +998,24 @@ async function mt_loadBillingData(filter) {
       + '</button>';
   }
 
-  var statRow = '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:16px">'
-    + statBtn('all',     '🏪', 'All Stations',    total,                                'var(--text-0)', false)
-    + statBtn('active',  '✅', 'Active',           active,                               '#22c55e',       false)
-    + statBtn('trial',   '⏱️', 'Trial',            trial,                                '#60a5fa',       false)
-    + statBtn('expired', '⚠️', 'Expired',          expired,                              '#ef4444',       false)
-    + statBtn('soon',    '🔔', 'Expiring ≤30 Days',expiringSoon,                         '#f97316',       true)
-    + statBtn('mrr',     '💰', 'MRR',              '₹'+mrr.toLocaleString('en-IN'),      '#22c55e',       false)
+  // Row 1: Status filters | Row 2: Plan filters | MRR metric
+  var statRow = '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:8px">'
+    + statBtn('all',     '🏪', 'All Stations',    total,        'var(--text-0)', false)
+    + statBtn('active',  '✅', 'Active',           active,       '#22c55e',       false)
+    + statBtn('trial',   '⏱️', 'Trial',            trial,        '#60a5fa',       false)
+    + statBtn('expired', '⚠️', 'Expired',          expired,      '#ef4444',       false)
+    + statBtn('soon',    '🔔', 'Expiring ≤30 Days',expiringSoon, '#f97316',       true)
+    + '</div>'
+    + '<div style="display:flex;align-items:center;gap:6px;margin-bottom:12px;padding:8px 10px;background:var(--bg-2);border:1px solid var(--border);border-radius:8px">'
+    + '<div style="font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:0.4px;white-space:nowrap;margin-right:2px">Plan:</div>'
+    + statBtn('plan_monthly',    '📅', 'Monthly',    '', '#9498a5', false)
+    + statBtn('plan_quarterly',  '📦', 'Quarterly',  '', '#9498a5', false)
+    + statBtn('plan_halfyearly', '📆', 'Half-Yearly','', '#9498a5', false)
+    + statBtn('plan_yearly',     '🗓️', 'Yearly',     '', '#9498a5', false)
+    + '<div style="margin-left:auto;flex-shrink:0;background:rgba(34,197,94,0.06);border:1px solid rgba(34,197,94,0.2);border-radius:6px;padding:6px 12px;text-align:center">'
+    + '<div style="font-size:14px;font-weight:800;color:#22c55e">₹'+mrr.toLocaleString('en-IN')+'</div>'
+    + '<div style="font-size:9px;color:var(--text-3);margin-top:1px;text-transform:uppercase;letter-spacing:0.5px">MRR</div>'
+    + '</div>'
     + '</div>';
 
   // Apply filter
@@ -1013,13 +1024,17 @@ async function mt_loadBillingData(filter) {
   if (_billingFilter === 'trial')   filtered = subs.filter(function(s){return s.effective_status==='trial';});
   if (_billingFilter === 'expired') filtered = subs.filter(function(s){return s.effective_status==='expired'||s.effective_status==='grace';});
   if (_billingFilter === 'soon')    filtered = subs.filter(function(s){ var dl=s.days_left!==null?s.days_left:(s.trial_days_left||0); return dl<=30&&dl>=0&&s.effective_status!=='expired'; });
+  if (_billingFilter === 'plan_monthly')    filtered = subs.filter(function(s){return (s.plan||'').toLowerCase()==='monthly';});
+  if (_billingFilter === 'plan_quarterly')   filtered = subs.filter(function(s){return (s.plan||'').toLowerCase()==='quarterly';});
+  if (_billingFilter === 'plan_halfyearly')  filtered = subs.filter(function(s){return (s.plan||'').toLowerCase()==='halfyearly';});
+  if (_billingFilter === 'plan_yearly')      filtered = subs.filter(function(s){return (s.plan||'').toLowerCase()==='yearly';});
   // Apply search (client-side, no re-fetch)
   var _bq = (window._billSearch || '').toLowerCase().trim();
   if (_bq) filtered = filtered.filter(function(s){ return (s.station_name||'').toLowerCase().includes(_bq) || (s.location||'').toLowerCase().includes(_bq) || (s.owner_name||'').toLowerCase().includes(_bq); });
 
   // Filter label
-  var filterLabels = {all:'All Stations',active:'Active Subscriptions',trial:'Trial Accounts',expired:'Expired / Grace',soon:'Expiring within 30 Days',mrr:'All Stations'};
-  var filterBar = _billingFilter !== 'all' && _billingFilter !== 'mrr'
+  var filterLabels = {all:'All Stations',active:'Active Subscriptions',trial:'Trial Accounts',expired:'Expired / Grace',soon:'Expiring within 30 Days',plan_monthly:'Monthly Plan',plan_quarterly:'Quarterly Plan',plan_halfyearly:'Half-Yearly Plan',plan_yearly:'Yearly Plan'};
+  var filterBar = _billingFilter !== 'all'
     ? '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;padding:8px 12px;background:rgba(212,148,15,0.06);border:1px solid rgba(212,148,15,0.2);border-radius:8px">'
       + '<span style="font-size:12px;font-weight:700;color:var(--accent-light)">Showing: '+filterLabels[_billingFilter]+'</span>'
       + '<span style="font-size:11px;color:var(--text-3)">('+filtered.length+' station'+(filtered.length!==1?'s':'')+')</span>'
@@ -1424,7 +1439,7 @@ async function mt_subSettingsFromBilling(tenantId, stationName) {
       // ── Sticky header
       + '<div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;position:sticky;top:0;background:var(--bg-0);padding:8px 0;border-bottom:1px solid var(--border-light);z-index:1">'
         + '<button onclick="mt_ssClose()" style="background:var(--bg-2);border:1px solid var(--border);color:var(--text-2);border-radius:8px;padding:6px 12px;cursor:pointer;font-size:13px;font-weight:600">\u2190 Back</button>'
-        + '<h2 style="font-size:16px;font-weight:800;color:var(--text-0)">&amp;#9881;&#65039; Settings \u2014 '+stationName+'</h2>'
+        + '<h2 style="font-size:16px;font-weight:800;color:var(--text-0)">\u2699\uFE0F Settings \u2014 '+stationName+'</h2>'
       + '</div>'
       // ── Status / Grace / WhatsApp
       + '<div style="background:var(--bg-2);border-radius:8px;padding:12px;margin-bottom:12px">'
