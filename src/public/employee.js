@@ -3424,13 +3424,37 @@ function showLoginScreen() {
 // Called when user taps an option on the landing page.
 function landingShowLogin(type) {
   if (type === 'super') {
-    // Super admin: force the ORIGINAL full selector (bypasses our override)
-    // The override would show landing page again since no super session yet
-    var origSelector = (typeof window._origShowSelectorForLanding === 'function')
-      ? window._origShowSelectorForLanding : null;
-    if (origSelector) { origSelector(); }
-    else if (typeof mt_showSelector === 'function') { mt_showSelector(); }
+    // Super admin: show dedicated login form BEFORE station list appears
+    // Station names must never be visible until authenticated
+    var el2 = document.getElementById('loginScreen');
+    if (!el2) return;
+    var CN = (typeof window.FUELBUNK_COMPANY_NAME !== 'undefined') ? window.FUELBUNK_COMPANY_NAME : 'Your Company Name';
+    el2.innerHTML =
+      '<div class="login-screen"><div class="login-container">' +
+      '<div class="login-hero"><div class="login-logo">\u26FD</div>' +
+        '<h1 class="login-title">FuelBunk Pro</h1><p class="login-sub">' + CN + '</p>' +
+      '</div>' +
+      '<div class="login-card">' +
+        '<div style="display:flex;align-items:center;gap:10px;margin-bottom:20px">' +
+          '<div style="width:42px;height:42px;border-radius:10px;background:rgba(148,152,165,0.12);border:1px solid rgba(148,152,165,0.25);display:grid;place-items:center;font-size:18px">&#128737;</div>' +
+          '<div><div class="fw-800" style="color:var(--text-0);font-size:16px">Super Admin</div>' +
+          '<div style="font-size:11px;color:var(--text-3)">Platform management</div></div>' +
+        '</div>' +
+        '<div class="form-group"><label class="form-label">Username</label>' +
+          '<input class="form-input" id="superUser" placeholder="Super admin username" autocomplete="off" ' +
+          'onkeydown="if(event.key===\'Enter\')mt_doSuperLogin()" /></div>' +
+        '<div class="form-group"><label class="form-label">Password</label>' +
+          '<input class="form-input" id="superPass" type="password" placeholder="Enter password" ' +
+          'onkeydown="if(event.key===\'Enter\')mt_doSuperLogin()" /></div>' +
+        '<button class="btn btn-block" style="padding:14px;font-size:14px;margin-top:6px;background:var(--bg-2);' +
+          'border:1px solid var(--border);color:var(--text-1)" onclick="mt_doSuperLogin()">&#128274; Login as Super Admin</button>' +
+      '</div>' +
+      '<div class="login-footer" style="margin-top:16px">' +
+        '<button onclick="showLoginScreen()" style="background:none;border:none;color:var(--text-3);font-size:10px;cursor:pointer;font-family:var(--font)">&#8592; Back to menu</button>' +
+      '</div></div></div>';
+    setTimeout(function() { var u = document.getElementById('superUser'); if (u) u.focus(); }, 100);
     return;
+  }
   }
   if (type === 'employee') {
     // Employee: show original selector so they can pick their station
