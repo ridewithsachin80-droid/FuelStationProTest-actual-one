@@ -144,11 +144,15 @@
   // Override super logout
   const _origSuperLogout = window.mt_superLogout;
   window.mt_superLogout = async function() {
-    await AuthAPI.logout();
+    try { await AuthAPI.logout(); } catch {}
     sessionStorage.removeItem('fb_super_token');
     sessionStorage.removeItem('fb_super_session');
+    sessionStorage.removeItem('fb_session');
     clearAuth();
-    if (typeof mt_showSelector === 'function') mt_showSelector();
+    // Clear APP state so showLoginScreen shows landing page
+    if (typeof APP !== 'undefined') { APP.tenant = null; APP.loggedIn = false; APP.role = null; APP.adminUser = null; }
+    if (typeof showLoginScreen === 'function') showLoginScreen();
+    else if (typeof mt_showSelector === 'function') mt_showSelector();
   };
 
   // Override mt_isSuperLoggedIn — check sessionStorage only (clears on tab close)
@@ -690,8 +694,11 @@
       try { await AuthAPI.logout(); } catch {}
       sessionStorage.removeItem('fb_super_token');
       sessionStorage.removeItem('fb_super_session');
+      sessionStorage.removeItem('fb_session');
       clearAuth();
-      if (typeof mt_showSelector === 'function') mt_showSelector();
+      if (typeof APP !== 'undefined') { APP.tenant = null; APP.loggedIn = false; APP.role = null; APP.adminUser = null; }
+      if (typeof showLoginScreen === 'function') showLoginScreen();
+      else if (typeof mt_showSelector === 'function') mt_showSelector();
     };
 
     // ── Delete station (requires super token) ─────────────────────────────

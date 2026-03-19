@@ -3296,9 +3296,11 @@ function showLoginScreen() {
     window._preloadPromise = loadData().catch(() => {});
   }
 
-  // Hide app shell
-  document.getElementById('sidebar').style.display = 'none';
-  document.querySelector('.main-area').style.display = 'none';
+  // Hide app shell (guard against null — super admin may be on selector, not app)
+  var _sb = document.getElementById('sidebar');
+  var _ma = document.querySelector('.main-area');
+  if (_sb) _sb.style.display = 'none';
+  if (_ma) _ma.style.display = 'none';
 
   var el = document.getElementById('loginScreen');
   if (!el) {
@@ -3998,6 +4000,14 @@ function appLogout() {
   }
   clearSession();
   window.location.hash = '';
+  // Clear tenant from APP so showLoginScreen() shows the landing page,
+  // not the station login screen (which would skip the back-to-menu option)
+  if (typeof APP !== 'undefined') {
+    APP.tenant = null;
+    APP.loggedIn = false;
+    APP.role = null;
+    APP.adminUser = null;
+  }
   // BUG-23 FIX: After logout, pre-fetch employee list so the login dropdown
   // is never empty on the next login screen. Do it after a short delay so
   // showLoginScreen() renders first, then the dropdown is populated.
