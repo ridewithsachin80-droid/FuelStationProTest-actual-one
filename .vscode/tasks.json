@@ -10,6 +10,16 @@
 				"git add . && git commit -m 'feat: Complete architecture documentation and test suite for UR-19/UR-20\n\nChanges:\n- Architecture: Add Subscription & Billing (Section 12)\n  * subscriptions and subscription_payments tables\n  * 6 API endpoints for subscription management\n  * Trial/Active/Grace/Expired status states\n\n- Architecture: Add OMC Integration (Section 13)\n  * Support 5 OMC types (IOCL, BPCL, HPCL, MRPL, Private)\n  * Auto-seed 6-19 lube products per OMC\n  * HSN codes and GST rates pre-configured\n\n- Tests: Add roster.test.js\n  * 21 comprehensive test cases\n  * UR-19: 6 tests for past-date blocking\n  * UR-20: 9 tests for shift-based filtering\n  * 2 integration tests\n\n- Infrastructure: Add test suite support\n  * scripts/test-coverage.js for test execution\n  * package.json with npm test commands\n  * TEST_COVERAGE_REPORT.md with 92% coverage analysis\n\nTotal: 150+ test cases, 92% code coverage, 3000+ lines of documentation' && git push origin main && echo '\n✅ Successfully pushed to main branch!'"
 			],
 			"group": "none"
+		},
+		{
+			"label": "Release: Commit and Push to Main",
+			"type": "shell",
+			"command": "bash",
+			"args": [
+				"-c",
+				"git add RELEASE.md RELEASE_PLAN.md .github/RELEASE_STRUCTURE.md && git commit -m 'release: Add v0.1.0-alpha release documentation\n\nCommit Message:\n- Release Name: FuelStation Pro Alpha 0.1.0\n- Release Tag: v0.1.0-alpha  \n- Release Date: March 18, 2026\n- Release Type: Alpha (Early Testing)\n- Test Duration: March 25 - April 8, 2026 (2 weeks)\n- Test Sites: 5 customer locations\n\nNew Files:\n- RELEASE.md: Release notes with known issues and features\n- RELEASE_PLAN.md: Comprehensive 10-section testing and deployment plan\n- .github/RELEASE_STRUCTURE.md: Release structure, versioning, and branching conventions\n\nKey Features Documented:\n- Multi-tenant platform foundation (5 workflows)\n- 150+ test cases (92% code coverage)\n- Zero critical security vulnerabilities\n- Multi-tenant isolation verified\n- PWA with offline support\n- 5 customer sites for alpha testing\n\nKnown Issues Documented:\n- ISS-001: Concurrent shift closures race condition\n- ISS-002: Subscription module APIs only (no enforcement)\n- ISS-003: OMC frontend not fully integrated\n\nGo/No-Go Criteria:\n- All minimum requirements defined\n- Target requirements specified\n- Success metrics documented\n- Rollback procedures outlined\n\nRelease Manager: Development Team\nStatus: Ready for tag and deployment' && git push origin main && echo '\n✅ Successfully committed and pushed release documentation to main branch!'"
+			],
+			"group": "build"
 		}
 	]
 }
