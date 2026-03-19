@@ -1096,25 +1096,42 @@ async function suite_passwordChange() {
   });
 
   // ─────────────────────────────────────────────────────────────────────────
-  // SESSION INTEGRITY: Old session tokens remain valid after password change
-  // (unlike some implementations that invalidate all sessions)
+  // SESSION INVALIDATION: Verify correct session revocation behaviour
   // ─────────────────────────────────────────────────────────────────────────
-  await test('PasswordChange', 'Existing session token remains valid after another user resets the password', async () => {
+  await test('PasswordChange', 'Self password change preserves the current session (user stays logged in)', async () => {
+    // Admin logs in and immediately changes own password with same token
+    const adminToken = await adminLogin(ADMIN_USER, ORIGINAL_ADMIN_PASS, TENANT_ID);
+    await post('/api/auth/change-password', {
+      currentPassword: ORIGINAL_ADMIN_PASS,
+      newPassword: NEW_ADMIN_PASS
+    }, adminToken);
+    // The token used to make the change should still be valid
+    const sessionCheck = await get('/api/auth/session', adminToken);
+    assertEq(sessionCheck.status, 200,
+      `Token used for self-change should remain valid, got ${sessionCheck.status}`);
+    // Restore
+    await post('/api/auth/change-password', {
+      currentPassword: NEW_ADMIN_PASS,
+      newPassword: ORIGINAL_ADMIN_PASS
+    }, adminToken);
+  });
+
+  await test('PasswordChange', 'reset-password (by super/owner) revokes ALL sessions for that admin user', async () => {
     // Admin logs in — get a token
     const adminToken = await adminLogin(ADMIN_USER, ORIGINAL_ADMIN_PASS, TENANT_ID);
-    // Super resets admin's password
+    // Super resets that admin's password
     const superToken = await superLogin(SUPER_USER, ORIGINAL_SUPER_PASS);
     const adminsResp = await get(`/api/data/tenants/${TENANT_ID}/admins`, superToken);
     const target = adminsResp.body.find(a => a.username === ADMIN_USER);
     await post(
       `/api/data/tenants/${TENANT_ID}/admins/${target.id}/reset-password`,
-      { newPassword: ORIGINAL_ADMIN_PASS }, // reset to same so we don't break other tests
+      { newPassword: ORIGINAL_ADMIN_PASS }, // reset to same value so other tests work
       superToken
     );
-    // Existing adminToken should still work (session table is not wiped on password reset)
+    // The adminToken should now be REVOKED (full session wipe on external reset)
     const sessionCheck = await get('/api/auth/session', adminToken);
-    assertEq(sessionCheck.status, 200,
-      `Existing session should survive a password reset, got ${sessionCheck.status}`);
+    assertEq(sessionCheck.status, 401,
+      `Session should be revoked after external password reset, got ${sessionCheck.status}`);
   });
 }
 

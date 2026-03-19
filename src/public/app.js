@@ -388,19 +388,28 @@ window.addEventListener('hashchange', () => {
 
 // Start
 document.addEventListener('DOMContentLoaded', function() {
+  // FIX: XSS-safe error message helper — escapes HTML entities before injecting into
+  // innerHTML. e.message normally comes from JS runtime errors, but if it ever reflected
+  // server/fetch error text, raw injection would be a stored-XSS vector.
+  function _safeErrMsg(e) {
+    var msg = (e && e.message) ? String(e.message) : 'Unknown error';
+    return msg.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+              .replace(/"/g,'&quot;').replace(/'/g,'&#x27;');
+  }
+  function _renderCrashScreen(msg) {
+    document.body.classList.add('app-ready');
+    var app = document.getElementById('app');
+    if (app) app.innerHTML = '<div style="position:fixed;inset:0;background:#0a0c10;display:flex;align-items:center;justify-content:center;color:#f4f5f7;font-family:sans-serif;text-align:center;padding:24px"><div><div style="font-size:48px;margin-bottom:16px">⚠️</div><h2 style="margin-bottom:8px">App Error</h2><p style="color:#9498a5;font-size:13px;margin-bottom:20px">' + msg + '</p><button onclick="location.reload()" style="background:#d4940f;color:#000;border:none;padding:12px 24px;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer">Reload App</button></div></div>';
+  }
   try {
     initApp().catch(function(e) {
       console.error('initApp async error:', e);
-      document.body.classList.add('app-ready');
-      var app = document.getElementById('app');
-      if (app) app.innerHTML = '<div style="position:fixed;inset:0;background:#0a0c10;display:flex;align-items:center;justify-content:center;color:#f4f5f7;font-family:sans-serif;text-align:center;padding:24px"><div><div style="font-size:48px;margin-bottom:16px">⚠️</div><h2 style="margin-bottom:8px">App Error</h2><p style="color:#9498a5;font-size:13px;margin-bottom:20px">' + (e && e.message ? e.message : 'Unknown error') + '</p><button onclick="location.reload()" style="background:#d4940f;color:#000;border:none;padding:12px 24px;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer">Reload App</button></div></div>';
+      _renderCrashScreen(_safeErrMsg(e));
     });
   } catch(e) {
     console.error('initApp sync error:', e);
-    document.body.classList.add('app-ready');
-    var app = document.getElementById('app');
-    if (app) app.innerHTML = '<div style="position:fixed;inset:0;background:#0a0c10;display:flex;align-items:center;justify-content:center;color:#f4f5f7;font-family:sans-serif;text-align:center;padding:24px"><div><div style="font-size:48px;margin-bottom:16px">⚠️</div><h2 style="margin-bottom:8px">App Error</h2><p style="color:#9498a5;font-size:13px;margin-bottom:20px">' + (e && e.message ? e.message : 'Unknown error') + '</p><button onclick="location.reload()" style="background:#d4940f;color:#000;border:none;padding:12px 24px;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer">Reload App</button></div></div>';
+    _renderCrashScreen(_safeErrMsg(e));
   }
-});
+})
 window.openChangeAdminPassModal = openChangeAdminPassModal;
 window.saveAdminPassword = saveAdminPassword;

@@ -96,31 +96,54 @@ async function startServer() {
     credentials: corsOrigin ? true : false,
   }));
   
-  // PRODUCTION RATE LIMITING: Balanced for 1000 concurrent users while preventing abuse
-  // Peak load: 50-70 req/sec = 3000-4200 req/min, so 5000 allows headroom
-  app.use(rateLimit({ 
-    windowMs: 60000,                // 1 minute window
-    max: 5000,                      // Increased from 500 to 5000 (83 req/sec average)
+  // ── TIERED RATE LIMITING ────────────────────────────────────────────────────
+  // SECURITY FIX: Replaced single blunt 5000 req/min global limiter (effectively
+  // no protection) with three purpose-fit tiers:
+  //
+  //  Tier A — API data endpoints  : 300 req/min per IP+tenant  (~5 req/sec per station)
+  //  Tier B — Auth endpoints      : 30 attempts / 5 min        (existing, kept as-is)
+  //  Tier C — Public/offline paths: 120 req/min per IP+tenant  (health + public sales)
+  //
+  // A fuel station app has ~5–20 active users per station at peak. 300 req/min = 5/sec
+  // which comfortably handles aggressive polling and background syncs while blocking
+  // credential-stuffing, scraping, and DDoS at the data layer.
+  //
+  // keyGenerator: IP alone is too coarse on Railway's shared proxy.
+  // IP + tenantId gives fair per-station bucketing without hurting legitimate users.
+
+  const _rlKeyGen = (req) => {
+    const tenantId = req.body?.tenantId || req.params?.tenantId || req.params?.tid || '';
+    const ip = (req.headers['x-forwarded-for'] || req.ip || 'unknown').split(',')[0].trim();
+    return tenantId ? `${ip}:${tenantId}` : ip;
+  };
+  const _rlErrMsg = { error: 'Too many requests — please wait a moment and try again.' };
+
+  // Tier A: General API — data reads, writes, syncs
+  const apiDataLimiter = rateLimit({
+    windowMs: 60_000,         // 1 minute
+    max: 300,                 // 300 req/min per IP+tenant (5 req/sec) — ample for legit use
     standardHeaders: true,
     legacyHeaders: false,
-    
-    // Skip rate limiting for health checks
-    skip: (req) => {
-      return req.path === '/api/health' || req.path === '/api/health/detailed';
-    },
-    
-    // Custom key generator - combine IP + tenant for fair multi-tenant limits
-    keyGenerator: (req) => {
-      const tenantId = req.body?.tenantId || req.params?.tenantId || '';
-      const ip = req.headers['x-forwarded-for']?.split(',')[0] || req.ip;
-      return tenantId ? `${ip}:${tenantId}` : ip;
-    },
-    
-    // Better error message
-    message: { 
-      error: 'Too many requests. Please wait a moment and try again.' 
-    }
-  }));
+    keyGenerator: _rlKeyGen,
+    skip: (req) => req.path === '/api/health' || req.path === '/api/health/detailed',
+    message: _rlErrMsg,
+  });
+
+  // Tier C: Public/static-serving paths — higher limit, no auth required
+  const publicPathLimiter = rateLimit({
+    windowMs: 60_000,
+    max: 120,                 // 120 req/min for unauthenticated public endpoints
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: _rlKeyGen,
+    message: _rlErrMsg,
+  });
+
+  // Apply Tier A to all /api/* routes (Tier B for /api/auth is applied separately below)
+  app.use('/api', apiDataLimiter);
+  // Apply Tier C to public static file serving and health checks
+  app.use('/api/health',  publicPathLimiter);
+  app.use('/api/public',  publicPathLimiter);
   
   app.use(express.json({ limit: '2mb' }));
   app.use(express.urlencoded({ extended: false }));
@@ -1368,7 +1391,14 @@ async function startServer() {
       if (!target) return res.status(404).json({ error: 'Admin user not found in this tenant' });
       const resetHash = await hashPw(newPassword);
       await db.prepare('UPDATE admin_users SET pass_hash = $1 WHERE id = $2 AND tenant_id = $3').run(resetHash, req.params.uid, req.params.tid);
-      try { await auLog(req, 'RESET_ADMIN_PASSWORD', 'admin_users', req.params.uid, `Reset by ${req.userType}/${req.userName}`); } catch {}
+      // SESSION INVALIDATION FIX: Revoke ALL sessions for the target admin user.
+      // When a super admin or Owner resets someone else's password (often a security response),
+      // any active attacker session for that account must be immediately terminated.
+      // Unlike self-password-change, we revoke ALL sessions (including any current one).
+      await db.prepare(
+        "DELETE FROM sessions WHERE user_type = 'admin' AND user_id = $1 AND tenant_id = $2"
+      ).run(req.params.uid, req.params.tid).catch(() => {});
+      try { await auLog(req, 'RESET_ADMIN_PASSWORD', 'admin_users', req.params.uid, `Reset by ${req.userType}/${req.userName} — sessions revoked`); } catch {}
       res.json({ success: true });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });

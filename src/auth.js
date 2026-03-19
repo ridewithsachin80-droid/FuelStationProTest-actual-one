@@ -253,9 +253,16 @@ function authRoutes(db) {
       await db.prepare(
         'UPDATE super_admin SET username = $1, pass_hash = $2, updated_at = NOW(), credentials_user_managed = TRUE WHERE id = 1'
       ).run(newUsername, superHash);
+      // SESSION INVALIDATION FIX: Revoke all other super sessions except the current one.
+      // If an attacker obtained a super session token, changing the password now kicks them out.
+      // The current token stays valid so the user doesn't get logged out immediately.
+      const currentToken = (req.headers.authorization || '').replace('Bearer ', '').trim();
+      await db.prepare(
+        "DELETE FROM sessions WHERE user_type = 'super' AND token != $1"
+      ).run(currentToken).catch(() => {});
       // Audit
       try {
-        await auditLog({ ...req, tenantId: '', userId: 0, userType: 'super', userName: 'Super Admin', ip: req.ip }, 'CHANGE_PASSWORD', 'super_admin', '1', 'Super admin credentials updated');
+        await auditLog({ ...req, tenantId: '', userId: 0, userType: 'super', userName: 'Super Admin', ip: req.ip }, 'CHANGE_PASSWORD', 'super_admin', '1', 'Super admin credentials updated — other sessions revoked');
       } catch {}
       res.json({ success: true });
     } catch (e) {
@@ -293,8 +300,15 @@ function authRoutes(db) {
       await db.prepare(
         'UPDATE admin_users SET pass_hash = $1 WHERE id = $2 AND tenant_id = $3'
       ).run(newHash, session.user_id, session.tenant_id);
+      // SESSION INVALIDATION FIX: Revoke all other sessions for this admin user.
+      // Attacker with a stolen token is kicked out when the legitimate user changes password.
+      // Current token is preserved so the user stays logged in.
+      const currentToken = (req.headers.authorization || '').replace('Bearer ', '').trim();
+      await db.prepare(
+        "DELETE FROM sessions WHERE user_type = 'admin' AND user_id = $1 AND tenant_id = $2 AND token != $3"
+      ).run(session.user_id, session.tenant_id, currentToken).catch(() => {});
       try {
-        await auditLog({ ...req, tenantId: session.tenant_id, userId: session.user_id, userType: 'admin', userName: session.user_name, ip: req.ip }, 'CHANGE_PASSWORD', 'admin_users', String(session.user_id), 'Admin changed own password');
+        await auditLog({ ...req, tenantId: session.tenant_id, userId: session.user_id, userType: 'admin', userName: session.user_name, ip: req.ip }, 'CHANGE_PASSWORD', 'admin_users', String(session.user_id), 'Admin changed own password — other sessions revoked');
       } catch {}
       res.json({ success: true });
     } catch (e) {

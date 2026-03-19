@@ -675,6 +675,12 @@ async function initDatabase() {
       }
       console.log('[Schema] Super admin credentials synced from environment variables');
     }
+  } else {
+    // ── No env vars set (SUPER_ADMIN_INIT_PASS / SUPER_ADMIN_USERNAME removed or never set)
+    // Row already exists in DB — password is whatever was last set (UI change or initial seed).
+    // This is the CORRECT state after removing the env vars from Railway once the app is
+    // running. Nothing to do — the DB is the source of truth.
+    console.log(`[Schema] Super admin credentials loaded from database (username: ${existing.rows[0].username}). No env var sync.`);
   }
 
   console.log('[Schema] Database schema initialized successfully');
