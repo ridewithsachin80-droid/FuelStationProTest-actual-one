@@ -88,9 +88,9 @@ const AuthAPI = {
       method: 'POST', body: JSON.stringify({ newUsername, newPassword, confirmPassword })
     });
   },
-  async changePassword(newPassword) {
+  async changePassword(currentPassword, newPassword) {
     return apiFetch('/auth/change-password', {
-      method: 'POST', body: JSON.stringify({ newPassword })
+      method: 'POST', body: JSON.stringify({ currentPassword, newPassword })
     });
   }
 };

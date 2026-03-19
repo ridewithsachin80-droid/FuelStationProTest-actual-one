@@ -1303,7 +1303,14 @@ async function startServer() {
   const { hashPassword: hashPw, verifyPassword: verifyPw } = require('./schema');
 
   // GET tenant admins
-  app.get('/api/data/tenants/:id/admins', authMiddleware(db), reqRole('super'), async (req, res) => {
+  // BUG-07 FIX: Allow station Owner/admin to list admins in their own tenant (needed for the
+  // saveAdminPassword bridge fix which fetches real DB IDs before calling reset-password).
+  app.get('/api/data/tenants/:id/admins', authMiddleware(db), async (req, res) => {
+    const isSuperUser = req.userType === 'super';
+    const isOwnerOfTenant = req.userType === 'admin' && req.tenantId === req.params.id;
+    if (!isSuperUser && !isOwnerOfTenant) {
+      return res.status(403).json({ error: 'Insufficient permissions' });
+    }
     try {
       const admins = await db.prepare('SELECT id, name, username, role, active, created_at FROM admin_users WHERE tenant_id = $1').all(req.params.id);
       res.json(admins);
@@ -1342,12 +1349,26 @@ async function startServer() {
   });
 
   // POST reset admin password
-  app.post('/api/data/tenants/:tid/admins/:uid/reset-password', authMiddleware(db), reqRole('super'), async (req, res) => {
+  // BUG-06 FIX: Previously required reqRole('super') only, but the "Change Password" button
+  // is visible to station admins (Owner/Manager) in admin settings. Allow station Owner to
+  // reset passwords within their own tenant — with cross-tenant attack prevention.
+  app.post('/api/data/tenants/:tid/admins/:uid/reset-password', authMiddleware(db), async (req, res) => {
+    const isSuperUser = req.userType === 'super';
+    const isOwnerOfTenant = req.userType === 'admin' &&
+                            (req.userRole === 'Owner' || req.userRole === 'owner') &&
+                            req.tenantId === req.params.tid;
+    if (!isSuperUser && !isOwnerOfTenant) {
+      return res.status(403).json({ error: 'Only Super Admin or station Owner can reset admin passwords' });
+    }
     const { newPassword } = req.body;
     if (!newPassword || newPassword.length < 6) return res.status(400).json({ error: 'Password too short' });
     try {
+      // Verify target admin belongs to this tenant (prevent cross-tenant attack)
+      const target = await db.prepare('SELECT id FROM admin_users WHERE id = $1 AND tenant_id = $2').get(req.params.uid, req.params.tid);
+      if (!target) return res.status(404).json({ error: 'Admin user not found in this tenant' });
       const resetHash = await hashPw(newPassword);
       await db.prepare('UPDATE admin_users SET pass_hash = $1 WHERE id = $2 AND tenant_id = $3').run(resetHash, req.params.uid, req.params.tid);
+      try { await auLog(req, 'RESET_ADMIN_PASSWORD', 'admin_users', req.params.uid, `Reset by ${req.userType}/${req.userName}`); } catch {}
       res.json({ success: true });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });

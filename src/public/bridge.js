@@ -816,10 +816,82 @@
       }
     };
 
+    // ── Station admin password change → API ───────────────────────────────
+    // BUG-01 FIX: This override was promised in a comment in app.js but never written.
+    // app.js saveAdminPassword() only writes SHA-256 to localStorage; every server
+    // re-fetch overwrites it with the server bcrypt hash, reverting the password.
+    //
+    // BUG-09 FIX: APP.tenant.adminUsers[idx].id may be a local _genId() timestamp, not a
+    // real PostgreSQL integer. We call TenantAPI.getAdmins() first to get the DB id, then
+    // match by username to avoid a silent 0-row UPDATE.
+    window.saveAdminPassword = async function() {
+      const idx  = parseInt(document.getElementById('adminUserIdx')?.value);
+      const pass = document.getElementById('newAdminPass')?.value || '';
+      const conf = document.getElementById('confirmAdminPass')?.value || '';
+      if (!pass || pass.length < 6) { toast('Password must be at least 6 characters', 'error'); return; }
+      if (pass !== conf) { toast('Passwords do not match', 'error'); return; }
+
+      const t = (typeof mt_getActiveTenant === 'function') ? mt_getActiveTenant() : null;
+      if (!t) { toast('No active station — cannot change password', 'error'); return; }
+
+      // Get the user from localStorage to know the username
+      const localUser = (t.adminUsers || [])[idx];
+      if (!localUser) { toast('Admin user not found', 'error'); return; }
+
+      try {
+        // BUG-09 FIX: Fetch real DB admin records to get the correct PostgreSQL id.
+        // We may have a super token (from the station management overlay) or an admin token.
+        // Try with the current token first; if it fails, swap to super token.
+        let dbAdmins = null;
+        const savedToken = getAuthToken();
+        const superToken = sessionStorage.getItem('fb_super_token');
+
+        try {
+          dbAdmins = await TenantAPI.getAdmins(t.id);
+        } catch (firstErr) {
+          // If admin token doesn't have access, try with super token
+          if (superToken && superToken !== savedToken) {
+            setAuthToken(superToken);
+            try {
+              dbAdmins = await TenantAPI.getAdmins(t.id);
+            } finally {
+              // Restore original token regardless of outcome
+              if (savedToken) setAuthToken(savedToken);
+              else clearAuth();
+            }
+          } else {
+            throw firstErr;
+          }
+        }
+
+        if (!dbAdmins || !dbAdmins.length) {
+          toast('Could not load admin user list from server', 'error');
+          return;
+        }
+
+        // Match by username to get the real DB id
+        const dbUser = dbAdmins.find(u =>
+          u.username && localUser.username &&
+          u.username.toLowerCase() === localUser.username.toLowerCase()
+        );
+
+        if (!dbUser || !dbUser.id) {
+          toast('Admin user not found on server — try refreshing the page', 'error');
+          return;
+        }
+
+        await TenantAPI.resetAdminPassword(t.id, dbUser.id, pass);
+        if (typeof closeModal === 'function') closeModal();
+        toast('Password updated successfully', 'success');
+      } catch(e) {
+        toast(e.message || 'Failed to update password', 'error');
+      }
+    };
+
     // ── Admin change-own-password → API ───────────────────────────────────
-    // FIX BUG-03: Restored current-password check that was missing in this override.
-    // The app.js version correctly validated curPass; this bridge override skipped it,
-    // allowing any logged-in user to change their password without re-authenticating.
+    // BUG-03 FIX: Restored current-password check that was missing in this override.
+    // BUG-04 FIX: Now sends currentPassword to the server so the server can verify it
+    // (previously, server accepted newPassword alone without verifying current — security gap).
     window.saveMyPassword = async function() {
       const curPass  = document.getElementById('curPass')?.value || '';
       const newPass  = document.getElementById('newPass')?.value || '';
@@ -829,7 +901,7 @@
       if (newPass !== confPass) { toast('Passwords do not match', 'error'); return; }
       if (curPass === newPass) { toast('New password must differ from current password', 'error'); return; }
       try {
-        await AuthAPI.changePassword(newPass);
+        await AuthAPI.changePassword(curPass, newPass);
         if (typeof closeModal === 'function') closeModal();
         toast('Password updated successfully', 'success');
       } catch(e) {

@@ -824,8 +824,301 @@ async function suite_salesSummary() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// RUN ALL SUITES
+// SUITE: PASSWORD CHANGE — BUG-01 through BUG-09 regression tests
+// Covers: super-change-password, change-password, reset-admin-password
+// These endpoints had ZERO test coverage. Every test here maps to a named bug.
 // ─────────────────────────────────────────────────────────────────────────────
+async function suite_passwordChange() {
+
+  // ── Helper: log in fresh as super, returns token ──────────────────────────
+  async function superLogin(user, pass) {
+    const r = await post('/api/auth/super-login', { username: user, password: pass });
+    if (r.status !== 200 || !r.body.token) throw new Error(`Super login failed: ${r.body.error}`);
+    return r.body.token;
+  }
+  async function adminLogin(user, pass, tid) {
+    const r = await post('/api/auth/login', { username: user, password: pass, tenantId: tid });
+    if (r.status !== 200 || !r.body.token) throw new Error(`Admin login failed: ${r.body.error}`);
+    return r.body.token;
+  }
+
+  const ORIGINAL_SUPER_PASS = SUPER_PASS;
+  const ORIGINAL_ADMIN_PASS = ADMIN_PASS;
+  const NEW_SUPER_PASS  = 'NewSuperPwd@2026!';
+  const NEW_ADMIN_PASS  = 'NewAdminPwd@2026!';
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // BUG-02 REGRESSION: /api/auth/* routes were missing authMiddleware,
+  // so req.userType was undefined → requireRole() always returned 401.
+  // ─────────────────────────────────────────────────────────────────────────
+  await test('PasswordChange', 'BUG-02: POST /api/auth/super-change-password without token → 401 not 500', async () => {
+    const r = await post('/api/auth/super-change-password', {
+      newUsername: SUPER_USER,
+      newPassword: NEW_SUPER_PASS,
+      confirmPassword: NEW_SUPER_PASS
+    });
+    assertEq(r.status, 401, `Expected 401 (not authenticated), got ${r.status}: ${r.body.error}`);
+  });
+
+  await test('PasswordChange', 'BUG-02: POST /api/auth/change-password without token → 401 not 500', async () => {
+    const r = await post('/api/auth/change-password', {
+      currentPassword: ORIGINAL_ADMIN_PASS,
+      newPassword: NEW_ADMIN_PASS
+    });
+    assertEq(r.status, 401, `Expected 401, got ${r.status}`);
+  });
+
+  await test('PasswordChange', 'BUG-02: POST /api/auth/super-change-password with admin token → 401', async () => {
+    const adminToken = await adminLogin(ADMIN_USER, ORIGINAL_ADMIN_PASS, TENANT_ID);
+    const r = await post('/api/auth/super-change-password', {
+      newUsername: SUPER_USER,
+      newPassword: NEW_SUPER_PASS,
+      confirmPassword: NEW_SUPER_PASS
+    }, adminToken);
+    assertEq(r.status, 401, `Admin token must not be usable for super password change, got ${r.status}`);
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // VALIDATION: reject weak/mismatched inputs BEFORE auth checks are even needed
+  // ─────────────────────────────────────────────────────────────────────────
+  await test('PasswordChange', 'Super change-password rejects short password (< 8 chars)', async () => {
+    const token = await superLogin(SUPER_USER, ORIGINAL_SUPER_PASS);
+    const r = await post('/api/auth/super-change-password', {
+      newUsername: SUPER_USER,
+      newPassword: 'short',
+      confirmPassword: 'short'
+    }, token);
+    assertEq(r.status, 400, `Expected 400, got ${r.status}`);
+    assert(r.body.error && r.body.error.toLowerCase().includes('short'), 'Error should mention short password');
+  });
+
+  await test('PasswordChange', 'Super change-password rejects mismatched passwords', async () => {
+    const token = await superLogin(SUPER_USER, ORIGINAL_SUPER_PASS);
+    const r = await post('/api/auth/super-change-password', {
+      newUsername: SUPER_USER,
+      newPassword: 'ValidPass@123',
+      confirmPassword: 'DifferentPass@123'
+    }, token);
+    assertEq(r.status, 400, `Expected 400, got ${r.status}`);
+    assert(r.body.error && r.body.error.toLowerCase().includes('match'), 'Error should mention mismatch');
+  });
+
+  await test('PasswordChange', 'Super change-password rejects short username (< 3 chars)', async () => {
+    const token = await superLogin(SUPER_USER, ORIGINAL_SUPER_PASS);
+    const r = await post('/api/auth/super-change-password', {
+      newUsername: 'ab',
+      newPassword: 'ValidPass@123',
+      confirmPassword: 'ValidPass@123'
+    }, token);
+    assertEq(r.status, 400, `Expected 400, got ${r.status}`);
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // CORE: Super admin can actually change their password and use new one
+  // (The primary reported regression: "going back to old password")
+  // ─────────────────────────────────────────────────────────────────────────
+  await test('PasswordChange', 'Super admin can change password via API (BUG-02 fix proves this works)', async () => {
+    const token = await superLogin(SUPER_USER, ORIGINAL_SUPER_PASS);
+    const r = await post('/api/auth/super-change-password', {
+      newUsername: SUPER_USER,
+      newPassword: NEW_SUPER_PASS,
+      confirmPassword: NEW_SUPER_PASS
+    }, token);
+    assertEq(r.status, 200, `Password change failed: ${r.body.error}`);
+    assert(r.body.success === true, 'Should return { success: true }');
+  });
+
+  await test('PasswordChange', 'New super password works for login immediately after change', async () => {
+    const r = await post('/api/auth/super-login', { username: SUPER_USER, password: NEW_SUPER_PASS });
+    assertEq(r.status, 200, `New super password login failed: ${r.body.error}`);
+    assert(r.body.token, 'Should return token with new password');
+  });
+
+  await test('PasswordChange', 'OLD super password rejected after change (BUG-05 regression: no restart wipe)', async () => {
+    const r = await post('/api/auth/super-login', { username: SUPER_USER, password: ORIGINAL_SUPER_PASS });
+    assertEq(r.status, 401, `Old password should be rejected after change, got ${r.status}`);
+  });
+
+  // Restore original super password so other tests continue to work
+  await test('PasswordChange', 'Restore super admin original password after test', async () => {
+    const token = await superLogin(SUPER_USER, NEW_SUPER_PASS);
+    const r = await post('/api/auth/super-change-password', {
+      newUsername: SUPER_USER,
+      newPassword: ORIGINAL_SUPER_PASS,
+      confirmPassword: ORIGINAL_SUPER_PASS
+    }, token);
+    assertEq(r.status, 200, `Failed to restore original super password: ${r.body.error}`);
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // BUG-04 REGRESSION: Server must verify currentPassword before allowing change
+  // ─────────────────────────────────────────────────────────────────────────
+  await test('PasswordChange', 'BUG-04: Admin change-own-password with wrong current password → 403', async () => {
+    const token = await adminLogin(ADMIN_USER, ORIGINAL_ADMIN_PASS, TENANT_ID);
+    const r = await post('/api/auth/change-password', {
+      currentPassword: 'completelyWrongPassword!!!',
+      newPassword: NEW_ADMIN_PASS
+    }, token);
+    assertEq(r.status, 403, `Expected 403 for wrong current password, got ${r.status}: ${r.body.error}`);
+  });
+
+  await test('PasswordChange', 'Admin change-own-password rejects missing currentPassword', async () => {
+    const token = await adminLogin(ADMIN_USER, ORIGINAL_ADMIN_PASS, TENANT_ID);
+    const r = await post('/api/auth/change-password', {
+      newPassword: NEW_ADMIN_PASS
+    }, token);
+    assertEq(r.status, 400, `Expected 400 for missing currentPassword, got ${r.status}`);
+  });
+
+  await test('PasswordChange', 'Admin change-own-password rejects same-as-current new password', async () => {
+    const token = await adminLogin(ADMIN_USER, ORIGINAL_ADMIN_PASS, TENANT_ID);
+    const r = await post('/api/auth/change-password', {
+      currentPassword: ORIGINAL_ADMIN_PASS,
+      newPassword: ORIGINAL_ADMIN_PASS
+    }, token);
+    assertEq(r.status, 400, `Expected 400 when new password matches current, got ${r.status}`);
+  });
+
+  await test('PasswordChange', 'Admin can change own password with correct current password', async () => {
+    const token = await adminLogin(ADMIN_USER, ORIGINAL_ADMIN_PASS, TENANT_ID);
+    const r = await post('/api/auth/change-password', {
+      currentPassword: ORIGINAL_ADMIN_PASS,
+      newPassword: NEW_ADMIN_PASS
+    }, token);
+    assertEq(r.status, 200, `Admin self-password change failed: ${r.body.error}`);
+    assert(r.body.success === true, 'Should return { success: true }');
+  });
+
+  await test('PasswordChange', 'New admin password works immediately after change', async () => {
+    const r = await post('/api/auth/login', {
+      username: ADMIN_USER, password: NEW_ADMIN_PASS, tenantId: TENANT_ID
+    });
+    assertEq(r.status, 200, `New admin password login failed: ${r.body.error}`);
+    assert(r.body.token, 'Should return token with new password');
+  });
+
+  await test('PasswordChange', 'Old admin password rejected after change', async () => {
+    const r = await post('/api/auth/login', {
+      username: ADMIN_USER, password: ORIGINAL_ADMIN_PASS, tenantId: TENANT_ID
+    });
+    assertEq(r.status, 401, `Old admin password should be rejected, got ${r.status}`);
+  });
+
+  // Restore original admin password
+  await test('PasswordChange', 'Restore admin original password after test', async () => {
+    const token = await adminLogin(ADMIN_USER, NEW_ADMIN_PASS, TENANT_ID);
+    const r = await post('/api/auth/change-password', {
+      currentPassword: NEW_ADMIN_PASS,
+      newPassword: ORIGINAL_ADMIN_PASS
+    }, token);
+    assertEq(r.status, 200, `Failed to restore original admin password: ${r.body.error}`);
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // BUG-06 REGRESSION: reset-password endpoint was super-only;
+  // station Owner needs to reset co-admin passwords within their own tenant
+  // ─────────────────────────────────────────────────────────────────────────
+  await test('PasswordChange', 'BUG-06: Super can reset any station admin password', async () => {
+    const superToken = await superLogin(SUPER_USER, ORIGINAL_SUPER_PASS);
+    // Get admin list to find a valid uid
+    const adminsResp = await get(`/api/data/tenants/${TENANT_ID}/admins`, superToken);
+    assertEq(adminsResp.status, 200, `Could not fetch admins: ${adminsResp.body.error}`);
+    assert(adminsResp.body.length > 0, 'Test tenant must have at least one admin');
+    const targetAdmin = adminsResp.body.find(a => a.username === ADMIN_USER);
+    assert(targetAdmin, `Admin user ${ADMIN_USER} not found in tenant`);
+
+    const r = await post(
+      `/api/data/tenants/${TENANT_ID}/admins/${targetAdmin.id}/reset-password`,
+      { newPassword: ORIGINAL_ADMIN_PASS },
+      superToken
+    );
+    assertEq(r.status, 200, `Super reset-password failed: ${r.body.error}`);
+    assert(r.body.success === true, 'Should return { success: true }');
+  });
+
+  await test('PasswordChange', 'BUG-06: Station Owner can reset co-admin password in OWN tenant', async () => {
+    const ownerToken = await adminLogin(ADMIN_USER, ORIGINAL_ADMIN_PASS, TENANT_ID);
+    // Get admin list (BUG-07 fix: Owner can now GET admins in own tenant)
+    const adminsResp = await get(`/api/data/tenants/${TENANT_ID}/admins`, ownerToken);
+    assertEq(adminsResp.status, 200, `Owner could not fetch own tenant admins (BUG-07 not fixed?): ${adminsResp.body.error}`);
+
+    const targetAdmin = adminsResp.body.find(a => a.username === ADMIN_USER);
+    assert(targetAdmin, 'Should find own admin user in list');
+
+    const r = await post(
+      `/api/data/tenants/${TENANT_ID}/admins/${targetAdmin.id}/reset-password`,
+      { newPassword: ORIGINAL_ADMIN_PASS },
+      ownerToken
+    );
+    assertEq(r.status, 200, `Owner reset-password failed (BUG-06 not fixed?): ${r.body.error}`);
+  });
+
+  await test('PasswordChange', 'BUG-06: Station admin CANNOT reset password in a DIFFERENT tenant', async () => {
+    const ownerToken = await adminLogin(ADMIN_USER, ORIGINAL_ADMIN_PASS, TENANT_ID);
+    // Attempt cross-tenant reset — must fail with 403 or 404, never 200
+    const r = await post(
+      `/api/data/tenants/different_tenant_xyz/admins/999/reset-password`,
+      { newPassword: 'NewCrossPass@1' },
+      ownerToken
+    );
+    assert(r.status === 403 || r.status === 404,
+      `Cross-tenant reset must return 403 or 404, got ${r.status}`);
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // BUG-07 REGRESSION: GET /api/data/tenants/:id/admins was super-only
+  // ─────────────────────────────────────────────────────────────────────────
+  await test('PasswordChange', 'BUG-07: Station Owner can GET admins for own tenant', async () => {
+    const token = await adminLogin(ADMIN_USER, ORIGINAL_ADMIN_PASS, TENANT_ID);
+    const r = await get(`/api/data/tenants/${TENANT_ID}/admins`, token);
+    assertEq(r.status, 200, `Owner GET admins failed (BUG-07 not fixed?): ${r.body.error}`);
+    assert(Array.isArray(r.body), 'Admins response should be an array');
+  });
+
+  await test('PasswordChange', 'BUG-07: Station admin CANNOT GET admins for a DIFFERENT tenant', async () => {
+    const token = await adminLogin(ADMIN_USER, ORIGINAL_ADMIN_PASS, TENANT_ID);
+    const r = await get(`/api/data/tenants/other_tenant_xyz/admins`, token);
+    assert(r.status === 403 || r.status === 404,
+      `Cross-tenant admin list must be rejected, got ${r.status}`);
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // BUG-09 REGRESSION: reset-password must validate target admin belongs to tenant
+  // ─────────────────────────────────────────────────────────────────────────
+  await test('PasswordChange', 'BUG-09: reset-password with non-existent uid → 404 not silent 0-row update', async () => {
+    const superToken = await superLogin(SUPER_USER, ORIGINAL_SUPER_PASS);
+    const r = await post(
+      `/api/data/tenants/${TENANT_ID}/admins/999999999/reset-password`,
+      { newPassword: ORIGINAL_ADMIN_PASS },
+      superToken
+    );
+    assertEq(r.status, 404, `Non-existent admin uid must return 404, got ${r.status}`);
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // SESSION INTEGRITY: Old session tokens remain valid after password change
+  // (unlike some implementations that invalidate all sessions)
+  // ─────────────────────────────────────────────────────────────────────────
+  await test('PasswordChange', 'Existing session token remains valid after another user resets the password', async () => {
+    // Admin logs in — get a token
+    const adminToken = await adminLogin(ADMIN_USER, ORIGINAL_ADMIN_PASS, TENANT_ID);
+    // Super resets admin's password
+    const superToken = await superLogin(SUPER_USER, ORIGINAL_SUPER_PASS);
+    const adminsResp = await get(`/api/data/tenants/${TENANT_ID}/admins`, superToken);
+    const target = adminsResp.body.find(a => a.username === ADMIN_USER);
+    await post(
+      `/api/data/tenants/${TENANT_ID}/admins/${target.id}/reset-password`,
+      { newPassword: ORIGINAL_ADMIN_PASS }, // reset to same so we don't break other tests
+      superToken
+    );
+    // Existing adminToken should still work (session table is not wiped on password reset)
+    const sessionCheck = await get('/api/auth/session', adminToken);
+    assertEq(sessionCheck.status, 200,
+      `Existing session should survive a password reset, got ${sessionCheck.status}`);
+  });
+}
+
+
 async function runAll() {
   console.log('\n' + '═'.repeat(72));
   console.log('  FUELBUNK PRO — INTEGRATION TEST SUITE');
@@ -838,6 +1131,7 @@ async function runAll() {
     await suite_superAuth();
     await suite_adminAuth();
     await suite_authMiddleware();
+    await suite_passwordChange();  // BUG-01 through BUG-09 regression tests
     await suite_employeePIN();
     await suite_saleFlow();
     await suite_saleEditDelete();

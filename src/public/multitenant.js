@@ -618,11 +618,19 @@ async function mt_saveSupercreds() {
   if (!newUser || newUser.length < 3) { mt_toast('Username must be at least 3 characters', 'error'); return; }
   if (newPass.length < 6) { mt_toast('Password must be at least 6 characters', 'error'); return; }
   if (newPass !== confPass) { mt_toast('Passwords do not match', 'error'); return; }
-  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(newPass));
-  const passHash = Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('');
-  mt_saveSuperCreds(newUser, passHash);
-  document.getElementById('superCredsOverlay').remove();
-  mt_toast('Super admin credentials updated! Use new login next time.', 'success');
+  // BUG-03 FIX: Removed localStorage SHA-256 write that was here.
+  // Previously this wrote a SHA-256 hash locally even when the API call hadn't been made,
+  // creating a silent mismatch — the server kept the old bcrypt password while localStorage
+  // showed "success". Now we rely on bridge.js to make the API call when online.
+  // In offline mode, show an explicit error rather than silently storing mismatched creds.
+  if (typeof AuthAPI !== 'undefined') {
+    // bridge.js is loaded — delegate to bridge's API-backed override (window.mt_saveSupercreds)
+    // This fallback body should never run in the bridge context because bridge overrides this
+    // function in DOMContentLoaded. Guard here just in case.
+    mt_toast('Saving credentials via server...', 'info');
+  } else {
+    mt_toast('Server connection required to change credentials. Please connect and try again.', 'error');
+  }
 }
 
 async function mt_doSuperLogin() {

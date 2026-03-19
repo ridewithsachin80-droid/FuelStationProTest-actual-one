@@ -211,8 +211,32 @@ function authRoutes(db) {
     }
   });
 
+  // ── Inline session resolver ────────────────────────────────
+  // BUG-02 FIX: /api/auth routes are mounted WITHOUT authMiddleware, so req.userType
+  // is never populated and requireRole() always returns 401. The /session route already
+  // handles this correctly by doing its own inline token lookup — we replicate that
+  // pattern here for the two change-password routes.
+  async function resolveSession(req, requiredType) {
+    const token = (req.headers.authorization || '').replace('Bearer ', '').trim();
+    if (!token || token.length < 10) return null;
+    try {
+      const session = await db.prepare(
+        'SELECT * FROM sessions WHERE token = $1 AND expires_at > NOW()'
+      ).get(token);
+      if (!session) return null;
+      if (requiredType && session.user_type !== requiredType) return null;
+      return session;
+    } catch {
+      return null;
+    }
+  }
+
   // ── Super Change Password ──────────────────────────────────
-  router.post('/super-change-password', requireRole('super'), async (req, res) => {
+  // BUG-02 FIX: was requireRole('super') — always 401 because authMiddleware not in chain.
+  router.post('/super-change-password', async (req, res) => {
+    const session = await resolveSession(req, 'super');
+    if (!session) return res.status(401).json({ error: 'Super admin authentication required' });
+
     const { newUsername, newPassword, confirmPassword } = req.body;
     if (!newUsername || newUsername.length < 3) {
       return res.status(400).json({ error: 'Username too short (min 3 chars)' });
@@ -225,26 +249,53 @@ function authRoutes(db) {
     }
     try {
       const superHash = await hashPassword(newPassword);
+      // BUG-05 companion fix: also set a flag so schema.js startup sync skips this row
       await db.prepare(
-        'UPDATE super_admin SET username = $1, pass_hash = $2, updated_at = NOW() WHERE id = 1'
+        'UPDATE super_admin SET username = $1, pass_hash = $2, updated_at = NOW(), credentials_user_managed = TRUE WHERE id = 1'
       ).run(newUsername, superHash);
+      // Audit
+      try {
+        await auditLog({ ...req, tenantId: '', userId: 0, userType: 'super', userName: 'Super Admin', ip: req.ip }, 'CHANGE_PASSWORD', 'super_admin', '1', 'Super admin credentials updated');
+      } catch {}
       res.json({ success: true });
     } catch (e) {
       res.status(500).json({ error: e.message });
     }
   });
 
-  // ── Admin Change Password ──────────────────────────────────
-  router.post('/change-password', requireRole('admin'), async (req, res) => {
-    const { newPassword } = req.body;
+  // ── Admin Change Password (own password) ──────────────────
+  // BUG-02 FIX: was requireRole('admin') — always 401 because authMiddleware not in chain.
+  // BUG-04 FIX: verify currentPassword server-side before allowing update.
+  router.post('/change-password', async (req, res) => {
+    const session = await resolveSession(req, 'admin');
+    if (!session) return res.status(401).json({ error: 'Admin authentication required' });
+
+    const { currentPassword, newPassword } = req.body;
+    if (!currentPassword) {
+      return res.status(400).json({ error: 'Current password is required' });
+    }
     if (!newPassword || newPassword.length < 6) {
-      return res.status(400).json({ error: 'Password too short (min 6 chars)' });
+      return res.status(400).json({ error: 'New password too short (min 6 chars)' });
+    }
+    if (currentPassword === newPassword) {
+      return res.status(400).json({ error: 'New password must differ from current password' });
     }
     try {
+      const user = await db.prepare(
+        'SELECT * FROM admin_users WHERE id = $1 AND tenant_id = $2 AND active = 1'
+      ).get(session.user_id, session.tenant_id);
+      if (!user) return res.status(404).json({ error: 'Admin user not found' });
+
+      const currentValid = await verifyPassword(currentPassword, user.pass_hash);
+      if (!currentValid) return res.status(403).json({ error: 'Current password is incorrect' });
+
       const newHash = await hashPassword(newPassword);
       await db.prepare(
         'UPDATE admin_users SET pass_hash = $1 WHERE id = $2 AND tenant_id = $3'
-      ).run(newHash, req.userId, req.tenantId);
+      ).run(newHash, session.user_id, session.tenant_id);
+      try {
+        await auditLog({ ...req, tenantId: session.tenant_id, userId: session.user_id, userType: 'admin', userName: session.user_name, ip: req.ip }, 'CHANGE_PASSWORD', 'admin_users', String(session.user_id), 'Admin changed own password');
+      } catch {}
       res.json({ success: true });
     } catch (e) {
       res.status(500).json({ error: e.message });

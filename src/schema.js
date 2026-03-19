@@ -237,7 +237,8 @@ async function initDatabase() {
       id INTEGER PRIMARY KEY CHECK(id=1),
       username TEXT NOT NULL,
       pass_hash TEXT NOT NULL,
-      updated_at TIMESTAMPTZ DEFAULT NOW()
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      credentials_user_managed BOOLEAN DEFAULT FALSE
     )`,
     `CREATE TABLE IF NOT EXISTS tenants (
       id TEXT PRIMARY KEY,
@@ -611,7 +612,16 @@ async function initDatabase() {
     catch (e) { console.warn('[Schema]', e.message.substring(0, 120)); }
   }
 
-  const existing = await pool.query('SELECT id FROM super_admin WHERE id = 1');
+  // BUG-05 FIX: Add credentials_user_managed column to existing deployments safely
+  try {
+    await pool.query(
+      'ALTER TABLE super_admin ADD COLUMN IF NOT EXISTS credentials_user_managed BOOLEAN DEFAULT FALSE'
+    );
+  } catch (e) { console.warn('[Schema] super_admin migration:', e.message.substring(0, 80)); }
+
+  const existing = await pool.query(
+    'SELECT id, username, pass_hash, credentials_user_managed FROM super_admin WHERE id = 1'
+  );
   if (existing.rows.length === 0) {
     // No row yet — insert fresh
     const initPass = process.env.SUPER_ADMIN_INIT_PASS || crypto.randomBytes(16).toString('hex');
@@ -628,22 +638,43 @@ async function initDatabase() {
       console.log('╚══════════════════════════════════════════════════════╝');
     }
   } else if (process.env.SUPER_ADMIN_USERNAME && process.env.SUPER_ADMIN_INIT_PASS) {
-    // Row exists — if env vars are explicitly set, sync them to the DB
-    // This ensures Railway env var changes always take effect on redeploy
-    const envUser = process.env.SUPER_ADMIN_USERNAME;
-    const envPass = process.env.SUPER_ADMIN_INIT_PASS;
+    // BUG-05 FIX: Row exists — ONLY sync env vars if the admin has NOT changed credentials
+    // via the UI (credentials_user_managed = TRUE). Previously this ALWAYS overwrote,
+    // meaning every Railway restart/deploy silently wiped any password set through the UI.
     const currentRow = existing.rows[0];
-    const usernameChanged = currentRow.username !== envUser;
-    // Always re-hash and update when env vars are present, so credentials stay in sync
-    const syncHash = await hashPassword(envPass);
-    await pool.query(
-      'UPDATE super_admin SET username = $1, pass_hash = $2, updated_at = NOW() WHERE id = 1',
-      [envUser, syncHash]
-    );
-    if (usernameChanged) {
-      console.log(`[Schema] Super admin username updated to: ${envUser}`);
+    const userManaged = currentRow.credentials_user_managed === true;
+
+    if (userManaged) {
+      // User has changed credentials via UI — NEVER overwrite them from env vars.
+      // If you genuinely need to reset, set FORCE_SUPER_CREDS_RESET=true in Railway env.
+      if (process.env.FORCE_SUPER_CREDS_RESET === 'true') {
+        const envUser = process.env.SUPER_ADMIN_USERNAME;
+        const envPass = process.env.SUPER_ADMIN_INIT_PASS;
+        const syncHash = await hashPassword(envPass);
+        await pool.query(
+          'UPDATE super_admin SET username = $1, pass_hash = $2, updated_at = NOW(), credentials_user_managed = FALSE WHERE id = 1',
+          [envUser, syncHash]
+        );
+        console.log('[Schema] ⚠️  Super admin credentials FORCE-reset from environment variables (FORCE_SUPER_CREDS_RESET=true).');
+        console.log('[Schema] Remove FORCE_SUPER_CREDS_RESET from env to prevent this on next restart.');
+      } else {
+        console.log('[Schema] Super admin credentials are user-managed — skipping env var sync. (Set FORCE_SUPER_CREDS_RESET=true to override.)');
+      }
+    } else {
+      // Credentials are still the defaults — safe to sync env var changes
+      const envUser = process.env.SUPER_ADMIN_USERNAME;
+      const envPass = process.env.SUPER_ADMIN_INIT_PASS;
+      const usernameChanged = currentRow.username !== envUser;
+      const syncHash = await hashPassword(envPass);
+      await pool.query(
+        'UPDATE super_admin SET username = $1, pass_hash = $2, updated_at = NOW() WHERE id = 1',
+        [envUser, syncHash]
+      );
+      if (usernameChanged) {
+        console.log(`[Schema] Super admin username updated to: ${envUser}`);
+      }
+      console.log('[Schema] Super admin credentials synced from environment variables');
     }
-    console.log('[Schema] Super admin credentials synced from environment variables');
   }
 
   console.log('[Schema] Database schema initialized successfully');
