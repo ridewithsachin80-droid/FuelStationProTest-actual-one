@@ -3464,7 +3464,7 @@ function landingShowLogin(type) {
       '<button class="btn btn-accent btn-block" style="padding:14px;font-size:14px;margin-top:6px" onclick="doAdminLogin()">\uD83D\uDD10 Login</button>' +
     '</div>' +
     '<div class="login-footer" style="margin-top:16px">' +
-      '<button onclick="emp_loadLoginScreen()" style="background:none;border:none;color:var(--text-3);font-size:10px;cursor:pointer;font-family:var(--font)">&#8592; Back to menu</button>' +
+      '<button onclick="showLoginScreen()" style="background:none;border:none;color:var(--text-3);font-size:10px;cursor:pointer;font-family:var(--font)">&#8592; Back to menu</button>' +
     '</div>' +
     '</div></div>';
   // Focus phone field

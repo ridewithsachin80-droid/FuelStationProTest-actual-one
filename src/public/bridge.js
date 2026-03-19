@@ -27,7 +27,7 @@
 
   // ── mt_showSelector override — landing page vs full station selector ────
   // When a non-super user has no active station, show the branded landing page
-  // (rendered by emp_loadLoginScreen when APP.tenant is null) instead of the
+  // (rendered by showLoginScreen when APP.tenant is null) instead of the
   // full station list which exposes all station names publicly.
   // When super admin calls it (via secret URL cookie or after super login),
   // show the original full selector so they can manage all stations.
@@ -42,10 +42,10 @@
       // Super admin path — show full selector with all stations + management tools
       if (typeof _origShowSelector === 'function') return _origShowSelector();
     }
-    // Normal path — show landing page via emp_loadLoginScreen (APP.tenant is null)
-    // emp_loadLoginScreen detects APP.tenant === null and renders the landing page
-    if (typeof emp_loadLoginScreen === 'function') {
-      emp_loadLoginScreen();
+    // Normal path — show landing page via showLoginScreen (APP.tenant is null)
+    // showLoginScreen detects APP.tenant === null and renders the landing page
+    if (typeof showLoginScreen === 'function') {
+      showLoginScreen();
     } else if (typeof _origShowSelector === 'function') {
       return _origShowSelector(); // fallback if employee.js not loaded yet
     }
@@ -335,6 +335,18 @@
             APP.tenant    = tenantObj;
           }
           window.db = new FuelDB('FuelBunkPro_' + result.tenantId);
+          // Refresh full tenant object from server (phone login returns minimal tenant data)
+          // This ensures ownerName, omc, stationCode etc. are populated correctly
+          try {
+            if (typeof mt_getTenants_async === 'function') {
+              const allTenants = await mt_getTenants_async();
+              const fullTenant = allTenants.find(function(t) { return t.id === result.tenantId; });
+              if (fullTenant) {
+                APP.tenant = fullTenant;
+                if (typeof mt_setActiveTenant === 'function') mt_setActiveTenant(fullTenant);
+              }
+            }
+          } catch(e) { /* non-fatal — minimal tenant object still works */ }
           if (typeof loadData === 'function') {
             try { await loadData(); } catch(e) { console.warn('[Bridge] loadData:', e.message); }
           }
@@ -572,13 +584,13 @@
 
     // ── 2. Fetch tenants from server; landing page handles no-tenant case ─
     // When no active tenant: app.js initApp() calls mt_showSelector() → which now
-    // routes to the landing page (emp_loadLoginScreen checks APP.tenant === null).
+    // routes to the landing page (showLoginScreen checks APP.tenant === null).
     // mt_getTenants_async() is still called to warm the tenant cache, but we no longer
     // force mt_showSelector() here — the login screen renderer decides what to show.
     const activeTenant = (typeof mt_getActiveTenant === 'function') ? mt_getActiveTenant() : null;
     if (!activeTenant) {
       mt_getTenants_async().catch(() => {});
-      // mt_showSelector will be called by initApp → mt_showSelector → emp_loadLoginScreen
+      // mt_showSelector will be called by initApp → mt_showSelector → showLoginScreen
       // which detects APP.tenant === null and renders the landing page
     } else {
       mt_getTenants_async().catch(() => {});
@@ -829,6 +841,13 @@
             sessionStorage.setItem('fb_session', JSON.stringify({ loggedIn:true, role:'admin', adminUser:{name:result.userName, username:phone, role:result.userRole}, tenant:tenantObj, token:result.token }));
             if (typeof APP !== 'undefined') { APP.loggedIn=true; APP.role='admin'; APP.adminUser={name:result.userName, username:phone, role:result.userRole}; APP.tenant=tenantObj; }
             window.db = new FuelDB('FuelBunkPro_' + result.tenantId);
+            try {
+              if (typeof mt_getTenants_async === 'function') {
+                var allT = await mt_getTenants_async();
+                var fullT = allT && allT.find(function(t){return t.id===result.tenantId;});
+                if (fullT) { APP.tenant=fullT; if(typeof mt_setActiveTenant==='function') mt_setActiveTenant(fullT); }
+              }
+            } catch(e2) {}
             if (typeof loadData === 'function') { try { await loadData(); } catch(e) {} }
             if (typeof enterApp === 'function') enterApp();
             if (typeof toast === 'function') toast('Welcome, ' + result.userName, 'success');
