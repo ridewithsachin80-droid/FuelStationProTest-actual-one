@@ -121,14 +121,19 @@ function bruteForceCheck(db) {
     const ip = (req.headers['x-forwarded-for'] || req.ip || 'unknown')
       .split(',')[0].trim();
     const username = (req.body?.username || '').toLowerCase().trim();
+    // FIX: scope username lockout to tenant_id so failed attempts at one station
+    // never lock out the same username at a different station.
+    // "owner" failing 5x at MIRJI must NOT lock "owner" at PETROL_PLUS.
+    // tenant_id is already stored by recordLoginAttempt — we just need to filter on it.
+    const tenantId = (req.body?.tenantId || '').trim();
     try {
-      // Rate limit by USERNAME — handles Railway shared proxy where all users share same IP
+      // Rate limit by USERNAME + TENANT — fully isolated per station
       if (username) {
         const byUser = await db.prepare(
           `SELECT COUNT(*)::int AS cnt FROM login_attempts
-           WHERE username = $1 AND success = 0
+           WHERE username = $1 AND tenant_id = $2 AND success = 0
            AND attempted_at > NOW() - INTERVAL '10 minutes'`
-        ).get(username);
+        ).get(username, tenantId);
         if (byUser && byUser.cnt >= 5) {
           return res.status(429).json({ error: 'Too many failed attempts for this username. Please wait 10 minutes.' });
         }
