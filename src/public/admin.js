@@ -12650,3 +12650,48 @@ async function testTallyConnection() {
   }
 }
 window.testTallyConnection = testTallyConnection;
+
+function openChangeMyPasswordModal() {
+  openModal('🔑 Change My Password', `
+    <div class="form-group"><label class="form-label">Current Password</label>
+      <input class="form-input" id="cmpOld" type="password" placeholder="Enter current password" autocomplete="current-password" />
+    </div>
+    <div class="form-group"><label class="form-label">New Password</label>
+      <input class="form-input" id="cmpNew" type="password" placeholder="Min 6 characters" autocomplete="new-password" />
+    </div>
+    <div class="form-group"><label class="form-label">Confirm New Password</label>
+      <input class="form-input" id="cmpConf" type="password" placeholder="Re-enter new password" autocomplete="new-password" />
+    </div>
+    <button class="btn btn-accent btn-block" style="padding:12px;margin-top:4px" onclick="saveChangeMyPassword()">Update Password</button>
+  `);
+  setTimeout(() => { const el = document.getElementById('cmpOld'); if (el) el.focus(); }, 100);
+}
+window.openChangeMyPasswordModal = openChangeMyPasswordModal;
+
+async function saveChangeMyPassword() {
+  const old = document.getElementById('cmpOld')?.value || '';
+  const np  = document.getElementById('cmpNew')?.value || '';
+  const cp  = document.getElementById('cmpConf')?.value || '';
+  if (!old) { toast('Enter your current password', 'error'); return; }
+  if (np.length < 6) { toast('New password must be at least 6 characters', 'error'); return; }
+  if (np !== cp) { toast('Passwords do not match', 'error'); return; }
+  const btn = document.querySelector('#modalContainer .btn-accent');
+  if (btn) { btn.disabled = true; btn.textContent = 'Updating...'; }
+  try {
+    const token = typeof getAuthToken === 'function' ? getAuthToken() : '';
+    const res = await fetch('/api/auth/change-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+      body: JSON.stringify({ oldPassword: old, newPassword: np })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to change password');
+    toast('Password updated successfully!', 'success');
+    closeModal();
+  } catch(e) {
+    toast(e.message || 'Failed to change password', 'error');
+    if (btn) { btn.disabled = false; btn.textContent = 'Update Password'; }
+  }
+}
+window.saveChangeMyPassword = saveChangeMyPassword;
+
