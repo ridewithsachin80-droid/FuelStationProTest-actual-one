@@ -25,6 +25,32 @@
   let _tenantCacheTime = 0;
   const CACHE_TTL = 5000; // 5 second cache
 
+  // ── mt_showSelector override — landing page vs full station selector ────
+  // When a non-super user has no active station, show the branded landing page
+  // (rendered by emp_loadLoginScreen when APP.tenant is null) instead of the
+  // full station list which exposes all station names publicly.
+  // When super admin calls it (via secret URL cookie or after super login),
+  // show the original full selector so they can manage all stations.
+  const _origShowSelector = window.mt_showSelector;
+  window.mt_showSelector = async function() {
+    const isSuperActive = (typeof mt_isSuperLoggedIn === 'function') ? mt_isSuperLoggedIn() : false;
+    const hasSuperCookie = (function() {
+      var m = document.cookie.match(/(?:^|; )sa_entry=([^;]*)/);
+      return m ? decodeURIComponent(m[1]) === '1' : false;
+    })();
+    if (isSuperActive || hasSuperCookie) {
+      // Super admin path — show full selector with all stations + management tools
+      if (typeof _origShowSelector === 'function') return _origShowSelector();
+    }
+    // Normal path — show landing page via emp_loadLoginScreen (APP.tenant is null)
+    // emp_loadLoginScreen detects APP.tenant === null and renders the landing page
+    if (typeof emp_loadLoginScreen === 'function') {
+      emp_loadLoginScreen();
+    } else if (typeof _origShowSelector === 'function') {
+      return _origShowSelector(); // fallback if employee.js not loaded yet
+    }
+  };
+
   // Override mt_getTenants to fetch from API with localStorage fallback
   const _origGetTenants = window.mt_getTenants;
   window.mt_getTenants = function() {
@@ -155,6 +181,7 @@
     const id       = document.getElementById('tId')?.value;
     const adminUser= document.getElementById('tAdminUser')?.value?.trim() || 'admin';
     const adminPass= document.getElementById('tAdminPass')?.value || 'admin123';
+    const ownerPhone= (document.getElementById('tOwnerPhone')?.value || '').replace(/\D/g,'').replace(/^(91|0)/,'').trim();
 
     if (!name || name.length < 2) { if (typeof mt_toast === 'function') mt_toast('Enter a station name', 'error'); return; }
 
@@ -175,7 +202,7 @@
         await TenantAPI.update(id, { name, location, ownerName, phone, icon, omc });
         if (typeof mt_toast === 'function') mt_toast(name + ' updated', 'success');
       } else {
-        await TenantAPI.create({ name, location, ownerName, phone, icon, omc, adminUser, adminPass });
+        await TenantAPI.create({ name, location, ownerName, phone, ownerPhone, icon, omc, adminUser, adminPass });
         if (typeof mt_toast === 'function') mt_toast(name + ' created!', 'success');
       }
       // Fetch fresh list from server (includes updated omc field)
@@ -266,36 +293,81 @@
     mt_getTenants_async().then(() => mt_showSelector()).catch(()=>{});
   };
 
-  // Override doAdminLogin — used by station selector login screen
+  // Override doAdminLogin — handles BOTH login paths:
+  // 1. Landing page (no APP.tenant) → phone + password via /phone-login
+  //    Server returns tenantId/tenantName — no station selection needed
+  // 2. Station login screen (APP.tenant already set) → username + password (unchanged)
   window.doAdminLogin = async function() {
+    const tenant = (typeof mt_getActiveTenant === 'function') ? mt_getActiveTenant() : null;
+
+    if (!tenant) {
+      // ── PHONE LOGIN PATH (landing page) ─────────────────────────────────
+      const phoneRaw = document.getElementById('adminUser')?.value?.trim() || '';
+      const pass     = document.getElementById('adminPass')?.value || '';
+      if (!phoneRaw || !pass) { if(typeof toast==='function') toast('Enter phone number and password', 'error'); return; }
+      const phone = phoneRaw.replace(/\D/g,'').replace(/^(91|0)/,'').trim();
+      if (phone.length !== 10) { if(typeof toast==='function') toast('Enter a valid 10-digit phone number', 'error'); return; }
+      try {
+        const result = await AuthAPI.phoneLogin(phone, pass);
+        if (result.success) {
+          setAuthToken(result.token);
+          setTenantId(result.tenantId);
+          // Build tenant object from response and save to localStorage
+          const tenantObj = {
+            id:          result.tenantId,
+            name:        result.tenantName,
+            location:    result.tenantLocation || '',
+            icon:        result.tenantIcon    || '⛽',
+            color:       '#d4940f',
+            colorLight:  '#f0b429',
+            active:      true,
+          };
+          if (typeof mt_setActiveTenant === 'function') mt_setActiveTenant(tenantObj);
+          sessionStorage.setItem('fb_session', JSON.stringify({
+            loggedIn: true, role: 'admin',
+            adminUser: { name: result.userName, username: phone, role: result.userRole },
+            tenant: tenantObj, token: result.token
+          }));
+          if (typeof APP !== 'undefined') {
+            APP.loggedIn = true;
+            APP.role     = 'admin';
+            APP.adminUser = { name: result.userName, username: phone, role: result.userRole };
+            APP.tenant    = tenantObj;
+          }
+          window.db = new FuelDB('FuelBunkPro_' + result.tenantId);
+          if (typeof loadData === 'function') {
+            try { await loadData(); } catch(e) { console.warn('[Bridge] loadData:', e.message); }
+          }
+          if (typeof enterApp === 'function') enterApp();
+          if (typeof toast === 'function') toast('Welcome, ' + result.userName, 'success');
+        }
+      } catch (e) {
+        if (typeof toast === 'function') toast(e.message || 'Invalid phone or password', 'error');
+      }
+      return;
+    }
+
+    // ── USERNAME LOGIN PATH (station login screen — tenant already set) ───
     const user = document.getElementById('adminUser')?.value?.trim()?.toLowerCase();
     const pass = document.getElementById('adminPass')?.value;
-
     if (!user || !pass) { if(typeof toast==='function') toast('Enter credentials', 'error'); return; }
-
-    const tenant = mt_getActiveTenant();
-    if (!tenant) { if(typeof toast==='function') toast('No station selected', 'error'); return; }
-
     try {
       const result = await AuthAPI.adminLogin(user, pass, tenant.id);
       if (result.success) {
         setAuthToken(result.token);
-        // NOTE: Do NOT write empty string to fb_super_token — if there's no super token
-        // present, don't set this key at all. An empty string would make mt_isSuperLoggedIn()
-        // find a truthy-but-empty token and cause incorrect super-admin UI display.
-        // BUG-C FIX: removed: sessionStorage.setItem('fb_super_token', sessionStorage.getItem('fb_super_token') || '')
         sessionStorage.setItem('fb_session', JSON.stringify({
           loggedIn: true, role: 'admin',
           adminUser: { name: result.userName, username: user, role: result.userRole },
           tenant: tenant, token: result.token
         }));
-        APP.loggedIn = true;
-        APP.role = 'admin';
-        APP.adminUser = { name: result.userName, username: user, role: result.userRole };
-        APP.tenant = tenant;
+        if (typeof APP !== 'undefined') {
+          APP.loggedIn  = true;
+          APP.role      = 'admin';
+          APP.adminUser = { name: result.userName, username: user, role: result.userRole };
+          APP.tenant    = tenant;
+        }
         window.db = new FuelDB('FuelBunkPro_' + tenant.id);
         setTenantId(tenant.id);
-        // Load real DB data BEFORE rendering (prevents all-zeros dashboard)
         if (typeof loadData === 'function') {
           try { await loadData(); } catch(e) { console.warn('[Bridge] loadData:', e.message); }
         }
@@ -306,7 +378,6 @@
       if (typeof toast === 'function') toast(e.message || 'Invalid credentials', 'error');
     }
   };
-
   const _origAppLogin = window.appLogin;
   window.appLogin = async function() {
     const user = document.getElementById('loginUser')?.value?.trim()?.toLowerCase();
@@ -460,6 +531,37 @@
   }
 
   document.addEventListener('DOMContentLoaded', function() {
+    // ── 0. Super Admin Secret Entry Route handler ─────────────────────────
+    // When the server serves index.html from the secret SUPER_ENTRY_PATH, it sets
+    // the X-Super-Entry response header. We can't read response headers in JS directly,
+    // so instead we check a meta tag the server injects — OR we use the cleaner approach:
+    // check if the current pathname matches what we stored in a session flag.
+    // Actual mechanism: the /super route sets a short-lived cookie 'sa_entry=1' (httpOnly:false
+    // so JS can read it), then bridge.js reads it, clears it, and opens the selector.
+    // This way the secret path never appears in JS source code.
+    (function() {
+      function _getCookie(name) {
+        var match = document.cookie.match(new RegExp('(?:^|; )' + name + '=([^;]*)'));
+        return match ? decodeURIComponent(match[1]) : null;
+      }
+      if (_getCookie('sa_entry') === '1') {
+        // Clear the cookie immediately — single-use
+        document.cookie = 'sa_entry=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/; SameSite=Strict';
+        // Clear active tenant so the selector is shown (not the login screen)
+        if (typeof mt_clearActiveTenant === 'function') mt_clearActiveTenant();
+        // Show selector after a short delay to let the rest of bridge init complete
+        setTimeout(function() {
+          if (typeof mt_showSelector === 'function') mt_showSelector();
+          else if (typeof mt_getTenants_async === 'function') {
+            mt_getTenants_async().then(function() {
+              if (typeof mt_showSelector === 'function') mt_showSelector();
+            });
+          }
+        }, 150);
+        return; // skip normal init flow
+      }
+    })();
+
     // ── 1. Restore super token from sessionStorage only ───────────────────
     const savedToken = sessionStorage.getItem('fb_super_token');
     if (savedToken) {
@@ -468,14 +570,16 @@
       startSuperSessionHeartbeat();
     }
 
-    // ── 2. Fetch tenants from server; show selector if no active tenant ───
+    // ── 2. Fetch tenants from server; landing page handles no-tenant case ─
+    // When no active tenant: app.js initApp() calls mt_showSelector() → which now
+    // routes to the landing page (emp_loadLoginScreen checks APP.tenant === null).
+    // mt_getTenants_async() is still called to warm the tenant cache, but we no longer
+    // force mt_showSelector() here — the login screen renderer decides what to show.
     const activeTenant = (typeof mt_getActiveTenant === 'function') ? mt_getActiveTenant() : null;
     if (!activeTenant) {
-      mt_getTenants_async().then(() => {
-        if (typeof mt_showSelector === 'function') mt_showSelector();
-      }).catch(() => {
-        if (typeof mt_showSelector === 'function') mt_showSelector();
-      });
+      mt_getTenants_async().catch(() => {});
+      // mt_showSelector will be called by initApp → mt_showSelector → emp_loadLoginScreen
+      // which detects APP.tenant === null and renders the landing page
     } else {
       mt_getTenants_async().catch(() => {});
     }
@@ -657,6 +761,7 @@
       const id        = document.getElementById('tId')?.value;
       const adminUser = document.getElementById('tAdminUser')?.value?.trim() || 'admin';
       const adminPass = document.getElementById('tAdminPass')?.value || 'admin123';
+      const ownerPhone= (document.getElementById('tOwnerPhone')?.value || '').replace(/\D/g,'').replace(/^(91|0)/,'').trim();
       if (!name || name.length < 2) { if (typeof mt_toast === 'function') mt_toast('Enter a station name', 'error'); return; }
       if (!getAuthToken()) {
         const saved = sessionStorage.getItem('fb_super_token');
@@ -668,7 +773,7 @@
           await TenantAPI.update(id, { name, location, ownerName, phone, icon, omc });
           if (typeof mt_toast === 'function') mt_toast(name + ' updated', 'success');
         } else {
-          await TenantAPI.create({ name, location, ownerName, phone, icon, omc, adminUser, adminPass });
+          await TenantAPI.create({ name, location, ownerName, phone, ownerPhone, icon, omc, adminUser, adminPass });
           if (typeof mt_toast === 'function') mt_toast(name + ' created!', 'success');
         }
         const freshT = await mt_getTenants_async();

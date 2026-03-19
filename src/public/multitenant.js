@@ -320,7 +320,15 @@ function mt_showTenantForm(existing) {
           ${mt_omcSelectorHTML(existing && existing.omc ? existing.omc : 'iocl')}
           ${!isEdit ? `
           <div style="background:var(--bg-0);border-radius:var(--radius-sm);border:1px solid var(--border-light);padding:14px;margin-top:4px">
-            <div style="font-size:11px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px">Admin Credentials for this Station</div>
+            <div style="font-size:11px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px">Owner Login Credentials</div>
+            <div class="form-group mb-0" style="margin-bottom:10px">
+              <label class="form-label">Owner Mobile Number <span style="color:var(--red)">*</span></label>
+              <div style="display:flex;gap:0;border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden;background:var(--bg-1)">
+                <span style="display:flex;align-items:center;padding:0 10px;background:var(--bg-2);border-right:1px solid var(--border);color:var(--text-2);font-size:12px;font-weight:600">+91</span>
+                <input class="form-input" id="tOwnerPhone" type="tel" inputmode="numeric" maxlength="10" placeholder="10-digit number (used for login)" oninput="this.value=this.value.replace(/[^0-9]/g,'')" style="border:none;border-radius:0;background:transparent;flex:1" />
+              </div>
+              <div style="font-size:10px;color:var(--text-3);margin-top:3px">This phone number is the owner's unique login ID across all stations</div>
+            </div>
             <div class="form-row">
               <div class="form-group mb-0"><label class="form-label">Admin Username</label>
                 <input class="form-input" id="tAdminUser" placeholder="admin" value="admin" />
@@ -355,6 +363,10 @@ async function mt_saveTenant(isEdit) {
   const omc      = (document.querySelector('input[name="tOmc"]:checked')?.value || 'iocl');
   const adminUser= document.getElementById('tAdminUser')?.value?.trim() || 'admin';
   const adminPass= document.getElementById('tAdminPass')?.value || 'admin123';
+  const ownerPhone = (document.getElementById('tOwnerPhone')?.value || '').replace(/\D/g,'').replace(/^(91|0)/,'').trim();
+  if (!isEdit && (!ownerPhone || ownerPhone.length !== 10)) {
+    mt_toast('Enter the owner\'s 10-digit mobile number — it is their login ID', 'error'); return;
+  }
   if (!name || name.length < 2) { mt_toast('Enter a station name', 'error'); return; }
   if (!phone || phone.length !== 10 || !/^[0-9]{10}$/.test(phone)) { mt_toast('Phone number must be exactly 10 digits', 'error'); return; }
 
@@ -366,7 +378,7 @@ async function mt_saveTenant(isEdit) {
         mt_toast(name + ' updated', 'success');
       } else {
         // Create station — subscription will be configured from Billing dashboard
-        const result = await TenantAPI.create({ name, location, ownerName, phone, icon, omc, adminUser, adminPass });
+        const result = await TenantAPI.create({ name, location, ownerName, phone, ownerPhone, icon, omc, adminUser, adminPass });
         // Auto-create a 30-day trial record (server handles this via auto-create in GET /api/subscriptions)
         mt_toast(name + ' created! Configure subscription from Billing dashboard.', 'success');
       }

@@ -688,6 +688,12 @@ async function initDatabase() {
   // ── Non-breaking column additions for existing deployments ─────────────────
   // These ADD COLUMN IF NOT EXISTS statements are safe to run repeatedly.
   const safeAlters = [
+    // ── ADMIN_USERS PHONE MIGRATION ────────────────────────────────────────
+    // Phone number is now the login credential for Owner/admin logins.
+    // Globally unique per user — server identifies station from phone alone.
+    // NULL allowed for existing accounts until phone is set by super admin.
+    "ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS phone TEXT DEFAULT ''",
+
     // ── PUMPS TABLE MIGRATIONS ─────────────────────────────────────────────
     // current_reading and reading_updated_at were used in the reading endpoint
     // but never added to the CREATE TABLE. Add them safely now.

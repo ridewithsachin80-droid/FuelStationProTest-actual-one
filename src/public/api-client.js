@@ -64,6 +64,11 @@ const AuthAPI = {
     if (result.token) setAuthToken(result.token);
     return result;
   },
+  async phoneLogin(phone, password) {
+    return apiFetch('/auth/phone-login', {
+      method: 'POST', body: JSON.stringify({ phone, password })
+    });
+  },
   async adminLogin(username, password, tenantId) {
     const result = await apiFetch('/auth/login', {
       method: 'POST', body: JSON.stringify({ username, password, tenantId })

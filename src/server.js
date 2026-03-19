@@ -1345,20 +1345,30 @@ async function startServer() {
   app.post('/api/data/tenants/:id/admins', authMiddleware(db), async (req, res) => {
     // Allow super OR an Owner managing their own tenant
     const isSuperUser = req.userType === 'super';
-    const isOwnerOfTenant = req.userType === 'admin' && 
+    const isOwnerOfTenant = req.userType === 'admin' &&
                             (req.userRole === 'Owner' || req.userRole === 'owner') &&
                             req.tenantId === req.params.id;
     if (!isSuperUser && !isOwnerOfTenant) {
       return res.status(403).json({ error: 'Only Super Admin or Owner can add admin users' });
     }
-    const { name, username, password, role } = req.body;
+    const { name, username, password, role, phone } = req.body;
     if (!name || !username || !password) return res.status(400).json({ error: 'All fields required' });
     if (password.length < 6) return res.status(400).json({ error: 'Password too short' });
+    // Normalise and validate phone
+    const normPhone = phone ? String(phone).replace(/\D/g,'').replace(/^(91|0)/,'').trim() : '';
+    if (!normPhone || normPhone.length !== 10) {
+      return res.status(400).json({ error: 'A valid 10-digit phone number is required — it is the login credential' });
+    }
     try {
       const exists = await db.prepare('SELECT id FROM admin_users WHERE tenant_id = $1 AND username = $2').get(req.params.id, username);
       if (exists) return res.status(409).json({ error: 'Username already exists' });
+      // Phone must be globally unique across all stations
+      const phoneExists = await db.prepare('SELECT id FROM admin_users WHERE phone = $1').get(normPhone);
+      if (phoneExists) return res.status(409).json({ error: 'This phone number is already registered to another user' });
       const adminHash = await hashPw(password);
-      const result = await db.prepare('INSERT INTO admin_users (tenant_id, name, username, pass_hash, role) VALUES ($1,$2,$3,$4,$5)').run(req.params.id, name, username, adminHash, role||'Manager');
+      const result = await db.prepare(
+        'INSERT INTO admin_users (tenant_id, name, username, pass_hash, role, phone) VALUES ($1,$2,$3,$4,$5,$6)'
+      ).run(req.params.id, name, username, adminHash, role||'Manager', normPhone);
       res.json({ success: true, id: result.lastInsertRowid });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
@@ -1405,7 +1415,7 @@ async function startServer() {
 
   // POST create tenant
   app.post('/api/data/tenants', authMiddleware(db), reqRole('super'), async (req, res) => {
-    const { id, name, location, ownerName, phone, icon, color, colorLight, stationCode,
+    const { id, name, location, ownerName, phone, ownerPhone, icon, color, colorLight, stationCode,
             omc, adminUser, adminPass } = req.body;
     if (!name || name.length < 2) return res.status(400).json({ error: 'Station name required' });
     try {
@@ -1417,9 +1427,12 @@ async function startServer() {
         .run(tenantId, name, location||'', ownerName||'', phone||'', icon||'⛽', color||'#d4940f', colorLight||'#f0b429', stationCode||'', omcValue, 1);
       if (adminUser && adminPass) {
         try {
+          // Normalise owner phone for login credential
+          const rawOwnerPhone = ownerPhone || phone || '';
+          const normOwnerPhone = rawOwnerPhone.replace(/\D/g,'').replace(/^(91|0)/,'').trim();
           const ownerHash = await hashPw(adminPass);
-          await db.prepare('INSERT INTO admin_users (tenant_id, name, username, pass_hash, role) VALUES ($1,$2,$3,$4,$5)')
-            .run(tenantId, ownerName||adminUser, adminUser, ownerHash, 'Owner');
+          await db.prepare('INSERT INTO admin_users (tenant_id, name, username, pass_hash, role, phone) VALUES ($1,$2,$3,$4,$5,$6)')
+            .run(tenantId, ownerName||adminUser, adminUser, ownerHash, 'Owner', normOwnerPhone||'');
         } catch (e2) { console.warn('[Tenant] Admin creation failed:', e2.message); }
       }
       await auLog(req, 'CREATE_TENANT', 'tenants', tenantId, name);
@@ -1532,6 +1545,27 @@ async function startServer() {
       await db.prepare(
         'UPDATE admin_users SET role = $1 WHERE id = $2 AND tenant_id = $3'
       ).run(role, req.params.uid, req.params.tid);
+      res.json({ success: true });
+    } catch(e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // PUT update admin user phone (login credential)
+  app.put('/api/data/tenants/:tid/admins/:uid/phone', authMiddleware(db), async (req, res) => {
+    if (req.userType !== 'super' && req.tenantId !== req.params.tid) {
+      return res.status(403).json({ error: 'Insufficient permissions' });
+    }
+    const rawPhone = (req.body.phone || '').replace(/\D/g,'').replace(/^(91|0)/,'').trim();
+    if (!rawPhone || rawPhone.length !== 10) {
+      return res.status(400).json({ error: 'Enter a valid 10-digit phone number' });
+    }
+    try {
+      const phoneExists = await db.prepare(
+        'SELECT id FROM admin_users WHERE phone = $1 AND id != $2'
+      ).get(rawPhone, req.params.uid);
+      if (phoneExists) return res.status(409).json({ error: 'This phone number is already registered to another user' });
+      await db.prepare(
+        'UPDATE admin_users SET phone = $1 WHERE id = $2 AND tenant_id = $3'
+      ).run(rawPhone, req.params.uid, req.params.tid);
       res.json({ success: true });
     } catch(e) { res.status(500).json({ error: e.message }); }
   });
@@ -2530,6 +2564,31 @@ Pack decoding: "300x40ML-POU"=packQty:300,packSize:"40ml",packType:"Pouch",isCar
   // ══════════════════════════════════════════════════════════════════════════
 
   // ── COMPARE: multi-station summary (super = all tenants; admin = own + benchmark) ──
+  // ── Super Admin Secret Entry Route ──────────────────────────────────────
+  // Set SUPER_ENTRY_PATH in Railway env vars (e.g. /super or /manage or /fs-admin-2026)
+  // - Not set → route doesn't exist, returns 404 like any unknown page
+  // - Set → visiting that URL sets a single-use cookie 'sa_entry=1' and redirects
+  //   to '/' — bridge.js reads the cookie, clears it, and opens the station selector
+  // - The secret path never appears in any JS file served to the browser
+  // - Change the path in Railway any time without redeploying code
+  const SUPER_ENTRY_PATH = (process.env.SUPER_ENTRY_PATH || '').trim();
+  if (SUPER_ENTRY_PATH && SUPER_ENTRY_PATH.startsWith('/')) {
+    app.get(SUPER_ENTRY_PATH, (req, res) => {
+      // Set a single-use, short-lived JS-readable cookie
+      // maxAge: 30 seconds — enough for the redirect + page load, expires quickly if unused
+      res.cookie('sa_entry', '1', {
+        maxAge: 30000,
+        httpOnly: false,   // JS must read it in bridge.js
+        sameSite: 'Strict',
+        secure: req.secure || req.headers['x-forwarded-proto'] === 'https',
+        path: '/'
+      });
+      // Redirect to root — clean URL, no trace of the secret path in the browser
+      res.redirect(302, '/');
+    });
+    console.log(`[Server] Super admin entry route active at: ${SUPER_ENTRY_PATH}`);
+  }
+
   // H-02 FIX: Rewritten from N+1 (5 queries × N tenants) to 5 aggregated queries total.
   // At 200 bunks: was 1,000 DB hits → now 5 DB hits regardless of bunk count.
   app.get('*', (req, res) => {

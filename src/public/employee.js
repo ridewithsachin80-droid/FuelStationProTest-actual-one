@@ -3318,12 +3318,59 @@ function showLoginScreen() {
     empOpts = '<option value="" disabled selected>No employees with PIN configured</option>';
   }
 
+  // ── Landing page vs station login screen ─────────────────────────────────
+  // If no active station → show branded landing page (new design)
+  // If station is already selected → show existing station login screen (unchanged)
+  var COMPANY_NAME = (typeof window.FUELBUNK_COMPANY_NAME !== 'undefined') ? window.FUELBUNK_COMPANY_NAME : 'Your Company Name';
+
+  if (!APP.tenant) {
+    // ── NEW LANDING PAGE ────────────────────────────────────────────────
+    el.innerHTML =
+      '<div class="landing-screen"><div class="landing-container">' +
+        '<div class="landing-hero">' +
+          '<div class="landing-logo">\u26FD</div>' +
+          '<div class="landing-company">' + COMPANY_NAME + '</div>' +
+          '<div class="landing-title">FuelBunk Pro</div>' +
+          '<div class="landing-tagline">Fuel Station Management System</div>' +
+        '</div>' +
+        '<div class="landing-divider">' +
+          '<div class="landing-divider-line"></div>' +
+          '<div class="landing-divider-text">Select Login Type</div>' +
+          '<div class="landing-divider-line"></div>' +
+        '</div>' +
+        '<div class="landing-options">' +
+          '<button class="landing-option lo-owner" onclick="landingShowLogin(\'admin\')">' +
+            '<div class="lo-icon lo-icon-owner">\uD83D\uDD11</div>' +
+            '<div class="lo-body">' +
+              '<div class="lo-title">Owner / Staff Login</div>' +
+              '<div class="lo-desc">Login with your phone number &amp; password</div>' +
+            '</div>' +
+            '<div class="lo-arrow">\u203A</div>' +
+          '</button>' +
+          '<button class="landing-option lo-emp" onclick="landingShowLogin(\'employee\')">' +
+            '<div class="lo-icon lo-icon-emp">\uD83E\uDDD1\u200D\uD83D\uDD27</div>' +
+            '<div class="lo-body">' +
+              '<div class="lo-title">Employee Login</div>' +
+              '<div class="lo-desc">Name &amp; 4-digit PIN</div>' +
+            '</div>' +
+            '<div class="lo-arrow">\u203A</div>' +
+          '</button>' +
+        '</div>' +
+        '<div class="landing-footer-row">' +
+          '<div class="landing-copy">FuelBunk Pro v3.0 &copy; 2026</div>' +
+          '<button class="landing-sa-btn" onclick="landingShowLogin(\'super\')">\uD83D\uDEE1\uFE0F Super Admin</button>' +
+        '</div>' +
+      '</div></div>';
+    return; // landing page shown — no station yet, nothing else to render
+  }
+
+  // ── EXISTING STATION LOGIN SCREEN (unchanged) ──────────────────────────
   el.innerHTML =
     '<div class="login-screen"><div class="login-container">' +
     '<div class="login-hero">' +
       '<div class="login-logo">\u26FD</div>' +
       '<h1 class="login-title">FuelBunk Pro</h1>' +
-      '<div style="margin-top:10px">' +(APP.tenant ?   '<span class="login-station-name">🏪 ' + sanitize(APP.tenant.name) + '</span>' +  (APP.tenant.location ? '<span class="login-station-loc">' + sanitize(APP.tenant.location) + '</span>' : '') : '<p class="login-sub">FuelBunk Pro</p>') +'</div>' +
+      '<div style="margin-top:10px">' + '<span class="login-station-name">\uD83C\uDFEA ' + sanitize(APP.tenant.name) + '</span>' + (APP.tenant.location ? '<span class="login-station-loc">' + sanitize(APP.tenant.location) + '</span>' : '') + '</div>' +
     '</div>' +
     '<div class="login-tabs">' +
       '<button class="login-tab active" id="ltAdmin" onclick="switchLoginTab(\'admin\')">\uD83D\uDD11 Admin Login</button>' +
@@ -3350,11 +3397,12 @@ function showLoginScreen() {
       '<button class="btn btn-block" style="background:var(--green);color:#fff;padding:14px;font-size:14px;margin-top:6px' + (hasEmployees ? '' : ';opacity:0.6;cursor:not-allowed') + '" onclick="doEmpLogin()"' + (hasEmployees ? '' : ' disabled') + '>\uD83E\uDDD1\u200D\uD83D\uDD27 Login</button>' +
       (hasEmployees ? '' : '<div style="font-size:11px;color:var(--red);margin-top:8px">No employees with PIN set. Ask admin to set PINs in Staff &amp; Allocation.</div>') +
     '</div>' +
-    '<div class="login-footer">FuelBunk Pro v3.0 &copy; 2026 &nbsp;·&nbsp; <a href="#" onclick="mt_switchStation();return false;" style="color:var(--accent-light);text-decoration:none;font-weight:600;">🏪 Switch Station</a></div>' +
+    '<div class="login-footer">FuelBunk Pro v3.0 &copy; 2026</div>' +
     '</div></div>';
 
   // Fetch employee list + subscription status from server in background
   setTimeout(fetchPublicEmployees, 100);
+
   setTimeout(function() {
     var tenant = (typeof mt_getActiveTenant === 'function') ? mt_getActiveTenant() : null;
     if (tenant && tenant.id) {
@@ -3371,6 +3419,61 @@ function showLoginScreen() {
     if (p) p.value = '';
   }, 300);
 }
+
+// ── Landing page navigation ────────────────────────────────────────────────
+// Called when user taps an option on the landing page.
+function landingShowLogin(type) {
+  if (type === 'super') {
+    // Super admin: show the full selector (includes super login panel)
+    if (typeof mt_showSelector === 'function') mt_showSelector();
+    return;
+  }
+  if (type === 'employee') {
+    // Employee: needs station selected first — show selector
+    if (typeof mt_showSelector === 'function') mt_showSelector();
+    return;
+  }
+  // Owner / Staff: show phone login form directly — no station picker needed
+  // doAdminLogin detects APP.tenant === null and calls phoneLogin API
+  var el = document.getElementById('loginScreen');
+  if (!el) return;
+  var COMPANY_NAME = (typeof window.FUELBUNK_COMPANY_NAME !== 'undefined') ? window.FUELBUNK_COMPANY_NAME : 'Your Company Name';
+  el.innerHTML =
+    '<div class="login-screen"><div class="login-container">' +
+    '<div class="login-hero">' +
+      '<div class="login-logo">\u26FD</div>' +
+      '<h1 class="login-title">FuelBunk Pro</h1>' +
+      '<p class="login-sub">' + COMPANY_NAME + '</p>' +
+    '</div>' +
+    '<div class="login-card">' +
+      '<input type="text" style="display:none" aria-hidden="true" />' +
+      '<input type="password" style="display:none" aria-hidden="true" />' +
+      '<div style="display:flex;align-items:center;gap:10px;margin-bottom:20px">' +
+        '<div style="width:42px;height:42px;border-radius:10px;background:linear-gradient(135deg,var(--accent),var(--accent-light));display:grid;place-items:center;font-size:18px">\uD83D\uDD11</div>' +
+        '<div><div class="fw-800" style="color:var(--text-0);font-size:16px">Owner / Staff Login</div><div style="font-size:11px;color:var(--text-3)">Enter your registered phone number</div></div>' +
+      '</div>' +
+      '<div class="form-group">' +
+        '<label class="form-label">Phone Number</label>' +
+        '<div style="display:flex;gap:0;border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden;background:var(--bg-1)">' +
+          '<span style="display:flex;align-items:center;padding:0 12px;background:var(--bg-2);border-right:1px solid var(--border);color:var(--text-2);font-size:13px;font-weight:600;white-space:nowrap">+91</span>' +
+          '<input class="form-input" id="adminUser" type="tel" inputmode="numeric" maxlength="10" placeholder="10-digit mobile number" autocomplete="tel" oninput="this.value=this.value.replace(/[^0-9]/g,\'\')" onkeydown="if(event.key===\'Enter\')doAdminLogin()" style="border:none;border-radius:0;background:transparent;flex:1" />' +
+        '</div>' +
+      '</div>' +
+      '<div class="form-group"><label class="form-label">Password</label>' +
+        '<input class="form-input" id="adminPass" type="password" placeholder="Enter your password" autocomplete="current-password" onkeydown="if(event.key===\'Enter\')doAdminLogin()" /></div>' +
+      '<button class="btn btn-accent btn-block" style="padding:14px;font-size:14px;margin-top:6px" onclick="doAdminLogin()">\uD83D\uDD10 Login</button>' +
+    '</div>' +
+    '<div class="login-footer" style="margin-top:16px">' +
+      '<button onclick="emp_loadLoginScreen()" style="background:none;border:none;color:var(--text-3);font-size:10px;cursor:pointer;font-family:var(--font)">&#8592; Back to menu</button>' +
+    '</div>' +
+    '</div></div>';
+  // Focus phone field
+  setTimeout(function() {
+    var u = document.getElementById('adminUser');
+    if (u) u.focus();
+  }, 100);
+}
+window.landingShowLogin = landingShowLogin;
 
 function switchLoginTab(tab) {
   document.getElementById('ltAdmin').className = 'login-tab' + (tab === 'admin' ? ' active' : '');

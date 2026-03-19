@@ -61,6 +61,7 @@ function authMiddleware(db) {
     const fullPath = req.originalUrl.split('?')[0];
     const publicPaths = [
       '/api/auth/login',
+      '/api/auth/phone-login',
       '/api/auth/super-login',
       '/api/auth/employee-login',
       '/api/auth/logout',

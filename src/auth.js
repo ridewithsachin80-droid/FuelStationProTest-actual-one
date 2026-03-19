@@ -113,6 +113,62 @@ function authRoutes(db) {
     }
   });
 
+  // ── Phone Number Login (Owner / Staff) ────────────────────────────────
+  // Phone is globally unique — server finds the user and their station automatically.
+  // No tenantId required. Station owners type phone + password, done.
+  router.post('/phone-login', bruteForceCheck(db), async (req, res) => {
+    const { phone, password } = req.body;
+    if (!phone || !password) {
+      return res.status(400).json({ error: 'Phone number and password are required' });
+    }
+    // Normalise: strip non-digits, remove leading 91 or 0
+    const normalised = String(phone).replace(/\D/g, '').replace(/^(91|0)/, '').trim();
+    if (!normalised || normalised.length < 10) {
+      return res.status(400).json({ error: 'Enter a valid 10-digit phone number' });
+    }
+    try {
+      const user = await db.prepare(
+        'SELECT * FROM admin_users WHERE phone = $1 AND active = 1'
+      ).get(normalised);
+
+      if (!user || !(await verifyPassword(password, user.pass_hash))) {
+        await recordLoginAttempt(db, req._bruteForceIp, normalised, '', false);
+        return res.status(401).json({ error: 'Invalid phone number or password' });
+      }
+
+      const tenant = await db.prepare(
+        'SELECT * FROM tenants WHERE id = $1 AND active = 1'
+      ).get(user.tenant_id);
+      if (!tenant) {
+        return res.status(403).json({ error: 'Your station is inactive. Contact your service provider.' });
+      }
+
+      // Upgrade legacy SHA-256 hash on first successful login
+      if (user.pass_hash && !user.pass_hash.startsWith('$2')) {
+        const newHash = await hashPassword(password);
+        await db.prepare('UPDATE admin_users SET pass_hash = $1 WHERE id = $2').run(newHash, user.id);
+      }
+
+      await recordLoginAttempt(db, req._bruteForceIp, normalised, user.tenant_id, true);
+      const token = await createSession(db, {
+        tenantId: user.tenant_id, userId: user.id, userType: 'admin',
+        userName: user.name, role: user.role,
+        ip: req.ip, userAgent: req.headers['user-agent']
+      });
+      res.json({
+        success: true, token,
+        userType: 'admin', userName: user.name, userRole: user.role,
+        tenantId: user.tenant_id, tenantName: tenant.name,
+        tenantIcon: tenant.icon || '⛽',
+        tenantLocation: tenant.location || '',
+        loginAt: new Date().toISOString(),
+      });
+    } catch (e) {
+      console.error('[phone-login]', e.message);
+      res.status(500).json({ error: 'Login error' });
+    }
+  });
+
   // ── Employee PIN Login ─────────────────────────────────────
   router.post('/employee-login', bruteForceCheck(db), async (req, res) => {
     const { pin, tenantId, employeeId } = req.body;

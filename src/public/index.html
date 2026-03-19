@@ -86,9 +86,6 @@
     <nav class="nav" id="nav"></nav>
     <div class="sidebar-foot" style="padding:10px 16px">
       <div style="margin-bottom:8px"><span class="online-dot"></span> <span id="tenantNameFoot" style="font-size:10px">FuelBunk Pro</span></div>
-      <button onclick="mt_switchStation()" style="width:100%;background:var(--bg-0);border:1px solid var(--border-light);color:var(--text-3);border-radius:var(--radius-xs);padding:6px 10px;font-size:10px;font-weight:600;cursor:pointer;font-family:var(--font)">
-        🏪 Switch Station
-      </button>
     </div>
   </aside>
   <main class="main-area" style="display:none">
@@ -883,6 +880,68 @@ body { padding-bottom: var(--safe-bottom); }
 @keyframes loginIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
 
 .login-footer{text-align:center;font-size:10px;color:#2a2f3d;margin-top:24px}
+
+/* ── Landing Page (shown when no station selected) ─────────────────── */
+.landing-screen{
+  position:fixed;inset:0;z-index:500;background:var(--bg-0);
+  display:flex;align-items:center;justify-content:center;
+  overflow-y:auto;padding:20px;
+}
+.landing-container{width:100%;max-width:400px;display:flex;flex-direction:column;align-items:center}
+.landing-hero{text-align:center;margin-bottom:32px}
+.landing-logo{
+  width:82px;height:82px;border-radius:24px;margin:0 auto 16px;
+  background:linear-gradient(135deg,var(--accent),var(--accent-light));
+  display:grid;place-items:center;font-size:38px;
+  box-shadow:0 10px 36px rgba(212,148,15,0.32);
+}
+.landing-company{font-size:11px;font-weight:700;color:var(--text-3);letter-spacing:1.8px;text-transform:uppercase;margin-bottom:6px}
+.landing-title{font-size:28px;font-weight:900;color:var(--text-0);letter-spacing:-0.8px}
+.landing-tagline{font-size:12px;color:var(--text-3);margin-top:7px}
+.landing-divider{display:flex;align-items:center;gap:12px;width:100%;margin-bottom:20px}
+.landing-divider-line{flex:1;height:1px;background:var(--border-light)}
+.landing-divider-text{font-size:10px;color:var(--text-3);font-weight:600;letter-spacing:0.8px;text-transform:uppercase;white-space:nowrap}
+.landing-options{width:100%;display:flex;flex-direction:column;gap:10px;margin-bottom:20px}
+.landing-option{
+  width:100%;padding:16px 18px;border-radius:14px;border:1px solid;
+  display:flex;align-items:center;gap:14px;cursor:pointer;text-align:left;
+  background:transparent;font-family:var(--font);
+  transition:transform 0.15s,opacity 0.15s;
+}
+.landing-option:hover{transform:translateY(-1px)}
+.landing-option:active{transform:scale(0.98);opacity:0.85}
+.lo-owner{background:rgba(212,148,15,0.08);border-color:rgba(212,148,15,0.35)}
+.lo-emp{background:rgba(34,197,94,0.06);border-color:rgba(34,197,94,0.25)}
+.lo-icon{width:42px;height:42px;border-radius:10px;display:grid;place-items:center;font-size:20px;flex-shrink:0}
+.lo-icon-owner{background:rgba(212,148,15,0.15)}
+.lo-icon-emp{background:rgba(34,197,94,0.10)}
+.lo-body{flex:1}
+.lo-title{font-size:14px;font-weight:800;margin-bottom:2px}
+.lo-owner .lo-title{color:var(--accent-light)}
+.lo-emp .lo-title{color:var(--green)}
+.lo-desc{font-size:11px;color:var(--text-3);line-height:1.4}
+.lo-arrow{font-size:18px;color:var(--border)}
+.landing-footer-row{width:100%;display:flex;align-items:center;justify-content:center;gap:10px;margin-top:8px}
+.landing-copy{font-size:10px;color:var(--border)}
+.landing-sa-btn{
+  font-size:10px;font-weight:600;color:var(--text-3);letter-spacing:0.3px;
+  background:none;border:1px solid var(--border-light);cursor:pointer;
+  font-family:var(--font);padding:3px 10px;border-radius:6px;
+  transition:color 0.2s,border-color 0.2s;
+}
+.landing-sa-btn:hover{color:var(--text-2);border-color:var(--border)}
+/* Landing → Login transition */
+.landing-login-pane{display:none;width:100%;flex-direction:column;animation:loginIn 0.3s ease}
+.landing-back{
+  display:inline-flex;align-items:center;gap:6px;margin-bottom:22px;
+  font-size:12px;color:var(--text-3);cursor:pointer;font-weight:600;
+  background:none;border:none;padding:0;font-family:var(--font);transition:color 0.2s;
+}
+.landing-back:hover{color:var(--text-2)}
+.landing-mini-hero{display:flex;align-items:center;gap:12px;margin-bottom:22px}
+.landing-mini-icon{width:44px;height:44px;border-radius:11px;display:grid;place-items:center;font-size:20px;flex-shrink:0}
+.landing-mini-title{font-size:16px;font-weight:800;color:var(--text-0)}
+.landing-mini-sub{font-size:11px;color:var(--text-3);margin-top:2px}
 
 /* Employee mode: hide sidebar, full width content */
 .sidebar.emp-hidden{display:none!important}
