@@ -1879,21 +1879,6 @@ function renderSettings(D) {
       ` : `<div style="padding:20px;text-align:center;color:var(--text-3);font-size:13px">No tax rates configured. Click <strong>＋ Add Tax</strong> to set up ZLST/VAT rates.</div>`}
     </div>
 
-    <!-- Tenant Admin Users Management -->
-    <div class="card card-pad mt-16">
-      <h4 class="mb-16 fw-700" style="color:var(--text-0);font-size:13px">👤 Admin Users — ${sanitize((_t.name||'Station'))}</h4>
-      <div style="margin-bottom:12px">
-        ${((_t.adminUsers||[]).map((u,i) => `
-          <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border-light)">
-            <div>
-              <div class="fw-700" style="color:var(--text-0);font-size:13px">${sanitize(u.name)}</div>
-              <div style="font-size:11px;color:var(--text-3)">${sanitize(u.username)} · ${badge(u.role,'badge-accent')}</div>
-            </div>
-            <button class="btn btn-ghost btn-sm" onclick="openChangeAdminPassModal(${i})">🔑 Change Password</button>
-          </div>`).join('')) || '<div style="color:var(--text-3);font-size:13px">No admin users found</div>'}
-      </div>
-      <button class="btn btn-ghost btn-sm btn-block" onclick="openAddAdminUserModal()">+ Add Admin User</button>
-    </div>
 
     <!-- Switch Station -->
     <div class="card card-pad mt-16" style="text-align:center">
@@ -6967,12 +6952,29 @@ async function saveAddAdminUser() {
   if (!name || name.length < 2) { toast('Enter full name','error'); return; }
   if (!user || user.length < 2) { toast('Enter username','error'); return; }
   if (pass.length < 6) { toast('Password must be at least 6 characters','error'); return; }
-  // Use AuthAPI if available (server), else update local tenant
   if (typeof TenantAPI !== 'undefined' && APP.tenant?.id) {
     try {
-      // FIX: was AuthAPI.addAdminUser (doesn't exist) → correct is TenantAPI.addAdmin
       const tid = APP.tenant.id;
       await TenantAPI.addAdmin(tid, { name, username: user, role, password: pass });
+      // FIX: Refresh APP.tenant.adminUsers from server after adding so the User Management
+      // panel shows the new user immediately instead of "No admin users found".
+      // Root cause: TenantAPI.addAdmin() saved to DB but APP.tenant came from stale
+      // localStorage which never included the new record — renderPage() showed old (empty) list.
+      try {
+        const freshAdmins = await TenantAPI.getAdmins(tid);
+        if (Array.isArray(freshAdmins)) {
+          APP.tenant.adminUsers = freshAdmins;
+          const tenants = (typeof mt_getTenants === 'function') ? mt_getTenants() : [];
+          const tIdx = tenants.findIndex(t => t.id === tid);
+          if (tIdx !== -1) {
+            tenants[tIdx].adminUsers = freshAdmins;
+            if (typeof mt_saveTenants === 'function') mt_saveTenants(tenants);
+            if (typeof mt_setActiveTenant === 'function') mt_setActiveTenant(tenants[tIdx]);
+          }
+        }
+      } catch (refreshErr) {
+        console.warn('[saveAddAdminUser] Could not refresh admin list:', refreshErr.message);
+      }
       toast(`${name} added as ${role}`, 'success');
       closeModal(); renderPage();
     } catch(e) { toast(e.message||'Failed to add user','error'); }
@@ -7029,14 +7031,37 @@ async function saveAdminUserRole(userIdx) {
 }
 window.saveAdminUserRole = saveAdminUserRole;
 
-function removeAdminUser(userIdx) {
+async function removeAdminUser(userIdx) {
   const admins = APP.tenant?.adminUsers;
   if (!admins || !admins[userIdx]) return;
   const u = admins[userIdx];
   if (!confirm(`Remove ${u.name||u.username} as admin user?`)) return;
-  APP.tenant.adminUsers = admins.filter((_,i)=>i!==userIdx);
+  const tid = APP.tenant?.id;
+  // FIX: Call server API to delete from DB, then refresh list from server.
+  // Previously only removed from localStorage — next server fetch restored the user.
+  if (typeof TenantAPI !== 'undefined' && tid && u.id) {
+    try {
+      await TenantAPI.removeAdmin(tid, u.id);
+    } catch(e) {
+      toast(e.message || 'Failed to remove user', 'error'); return;
+    }
+  }
+  try {
+    const freshAdmins = await TenantAPI.getAdmins(tid);
+    if (Array.isArray(freshAdmins)) {
+      APP.tenant.adminUsers = freshAdmins;
+      const tenants = (typeof mt_getTenants === 'function') ? mt_getTenants() : [];
+      const tIdx = tenants.findIndex(t => t.id === tid);
+      if (tIdx !== -1) {
+        tenants[tIdx].adminUsers = freshAdmins;
+        if (typeof mt_saveTenants === 'function') mt_saveTenants(tenants);
+        if (typeof mt_setActiveTenant === 'function') mt_setActiveTenant(tenants[tIdx]);
+      }
+    }
+  } catch(refreshErr) { console.warn('[removeAdminUser] refresh failed:', refreshErr.message); }
   toast(`${u.name||u.username} removed`, 'success');
-  closeModal(); renderPage();
+  if (typeof closeModal === 'function') closeModal();
+  renderPage();
 }
 window.removeAdminUser = removeAdminUser;
 
