@@ -1961,7 +1961,11 @@ function renderSettings(D) {
           return admins.map((u,i) => `<div class="flex-between" style="padding:9px 0;border-bottom:1px solid var(--border-light)">
             <div>
               <div class="fw-700" style="font-size:13px;color:var(--text-0)">${sanitize(u.name||u.username)}</div>
-              <div style="font-size:11px;color:var(--text-3)">@${sanitize(u.username)}${u.phone ? ' &nbsp;·&nbsp; <span style=\"color:var(--text-2)\">+91 ' + sanitize(u.phone) + '</span>' : ' &nbsp;<span style=\"color:var(--orange);font-weight:700;font-size:9px\">⚠ NO PHONE</span>'}</div>
+              <div style="font-size:11px;color:var(--text-3)">@${sanitize(u.username)}
+                ${u.phone ? ' &nbsp;·&nbsp; <span style=\"color:var(--text-2)\">📱 +91 ' + sanitize(u.phone) + '</span>' : ''}
+                ${u.email ? ' &nbsp;·&nbsp; <span style=\"color:var(--text-2)\">✉️ ' + sanitize(u.email) + '</span>' : ''}
+                ${!u.phone && !u.email ? ' &nbsp;<span style=\"color:var(--orange);font-weight:700;font-size:9px\">⚠ NO CONTACT</span>' : ''}
+              </div>
             </div>
             <div style="display:flex;align-items:center;gap:8px">
               ${roleBadge(u.role||'Manager')}
@@ -6984,12 +6988,15 @@ function openAddAdminUserModal() {
       <div class="form-group"><label class="form-label">Username *</label>
         <input class="form-input" id="au_user" placeholder="e.g. ramesh" autocomplete="off" /></div>
     </div>
-    <div class="form-group"><label class="form-label">Phone Number * <span style="font-size:10px;color:var(--text-3)">(used for login)</span></label>
+    <div class="form-group"><label class="form-label">Phone Number <span style="font-size:10px;color:var(--text-3)">(for SMS OTP login)</span></label>
       <div style="display:flex;gap:8px">
         <span style="background:var(--bg-1);border:1px solid var(--border);border-radius:var(--radius-sm);padding:0 10px;display:flex;align-items:center;font-size:13px;color:var(--text-2);flex-shrink:0">+91</span>
         <input class="form-input" id="au_phone" type="tel" inputmode="numeric" maxlength="10" placeholder="10-digit mobile number" oninput="this.value=this.value.replace(/[^0-9]/g,'')" autocomplete="off" />
       </div>
-      <div style="font-size:10px;color:var(--text-3);margin-top:3px">Must be unique — this number is their login ID</div>
+    </div>
+    <div class="form-group"><label class="form-label">Email Address <span style="font-size:10px;color:var(--text-3)">(for email OTP login)</span></label>
+      <input class="form-input" id="au_email" type="email" placeholder="name@example.com" autocomplete="off" />
+      <div style="font-size:10px;color:var(--text-3);margin-top:3px">Phone or email required for forgot password. Both recommended.</div>
     </div>
     <div class="form-group"><label class="form-label">Role</label>
       <select class="form-input" id="au_role">
@@ -7006,16 +7013,19 @@ async function saveAddAdminUser() {
   const name  = (document.getElementById('au_name')?.value||'').trim();
   const user  = (document.getElementById('au_user')?.value||'').trim().toLowerCase();
   const phone = (document.getElementById('au_phone')?.value||'').replace(/\D/g,'').trim();
+  const email = (document.getElementById('au_email')?.value||'').trim().toLowerCase();
   const role  = document.getElementById('au_role')?.value || 'Manager';
   const pass  = document.getElementById('au_pass')?.value || '';
   if (!name || name.length < 2) { toast('Enter full name','error'); return; }
   if (!user || user.length < 2) { toast('Enter username','error'); return; }
-  if (!phone || phone.length !== 10) { toast('Enter a valid 10-digit phone number','error'); return; }
+  if (!phone && !email) { toast('Enter at least a phone number or email address','error'); return; }
+  if (phone && phone.length !== 10) { toast('Phone must be exactly 10 digits','error'); return; }
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { toast('Enter a valid email address','error'); return; }
   if (pass.length < 6) { toast('Password must be at least 6 characters','error'); return; }
   if (typeof TenantAPI !== 'undefined' && APP.tenant?.id) {
     try {
       const tid = APP.tenant.id;
-      await TenantAPI.addAdmin(tid, { name, username: user, phone, role, password: pass });
+      await TenantAPI.addAdmin(tid, { name, username: user, phone: phone||'', email: email||'', role, password: pass });
       // FIX: Refresh APP.tenant.adminUsers from server after adding so the User Management
       // panel shows the new user immediately instead of "No admin users found".
       // Root cause: TenantAPI.addAdmin() saved to DB but APP.tenant came from stale
@@ -7057,14 +7067,19 @@ function openEditAdminUserRoleModal(userIdx) {
   const u = admins[userIdx];
   if (!u) return;
   const currentPhone = u.phone || '';
+  const currentEmail = u.email || '';
   openModal(`✏️ Edit User — ${sanitize(u.name||u.username)}`, `
     <div class="form-group">
-      <label class="form-label">Phone Number <span style="font-size:10px;color:var(--text-3)">(login credential)</span></label>
+      <label class="form-label">Phone Number <span style="font-size:10px;color:var(--text-3)">(SMS OTP login)</span></label>
       <div style="display:flex;gap:0;border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden;background:var(--bg-1)">
         <span style="display:flex;align-items:center;padding:0 10px;background:var(--bg-2);border-right:1px solid var(--border);color:var(--text-2);font-size:12px;font-weight:600">+91</span>
         <input class="form-input" id="aue_phone" type="tel" inputmode="numeric" maxlength="10" value="${sanitize(currentPhone)}" placeholder="10-digit number" oninput="this.value=this.value.replace(/[^0-9]/g,'')" style="border:none;border-radius:0;background:transparent;flex:1" />
       </div>
-      ${!currentPhone ? '<div style="font-size:10px;color:var(--orange);margin-top:3px">⚠️ No phone set — this user cannot log in until a phone is added</div>' : ''}
+    </div>
+    <div class="form-group">
+      <label class="form-label">Email Address <span style="font-size:10px;color:var(--text-3)">(Email OTP login)</span></label>
+      <input class="form-input" id="aue_email" type="email" value="${sanitize(currentEmail)}" placeholder="name@example.com" />
+      ${(!currentPhone && !currentEmail) ? '<div style="font-size:10px;color:var(--orange);margin-top:3px">⚠️ No phone or email — forgot password will not work</div>' : ''}
     </div>
     <div class="form-group"><label class="form-label">Role</label>
       <select class="form-input" id="aue_role">
@@ -7080,30 +7095,23 @@ window.openEditAdminUserRoleModal = openEditAdminUserRoleModal;
 async function saveAdminUserRole(userIdx) {
   const newRole  = document.getElementById('aue_role')?.value;
   const newPhone = (document.getElementById('aue_phone')?.value || '').replace(/\D/g,'').trim();
+  const newEmail = (document.getElementById('aue_email')?.value || '').trim().toLowerCase();
   if (!newRole) return;
   const admins = APP.tenant?.adminUsers;
   if (!admins || !admins[userIdx]) return;
   if (newPhone && newPhone.length !== 10) { toast('Phone must be exactly 10 digits', 'error'); return; }
+  if (newEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newEmail)) { toast('Enter a valid email address', 'error'); return; }
   admins[userIdx].role = newRole;
   if (newPhone) admins[userIdx].phone = newPhone;
+  if (newEmail) admins[userIdx].email = newEmail;
   const tid = APP.tenant?.id;
   const uid = admins[userIdx]?.id;
+  const authH = { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + (typeof getAuthToken === 'function' ? getAuthToken() : '') };
   try {
     if (tid && uid) {
-      // Update role
-      await fetch('/api/data/tenants/' + encodeURIComponent(tid) + '/admins/' + encodeURIComponent(uid) + '/role', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + (typeof getAuthToken === 'function' ? getAuthToken() : '') },
-        body: JSON.stringify({ role: newRole })
-      });
-      // Update phone if provided
-      if (newPhone) {
-        await fetch('/api/data/tenants/' + encodeURIComponent(tid) + '/admins/' + encodeURIComponent(uid) + '/phone', {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + (typeof getAuthToken === 'function' ? getAuthToken() : '') },
-          body: JSON.stringify({ phone: newPhone })
-        });
-      }
+      await fetch('/api/data/tenants/' + encodeURIComponent(tid) + '/admins/' + encodeURIComponent(uid) + '/role', { method: 'PUT', headers: authH, body: JSON.stringify({ role: newRole }) });
+      if (newPhone) await fetch('/api/data/tenants/' + encodeURIComponent(tid) + '/admins/' + encodeURIComponent(uid) + '/phone', { method: 'PUT', headers: authH, body: JSON.stringify({ phone: newPhone }) });
+      if (newEmail) await fetch('/api/data/tenants/' + encodeURIComponent(tid) + '/admins/' + encodeURIComponent(uid) + '/email', { method: 'PUT', headers: authH, body: JSON.stringify({ email: newEmail }) });
     }
   } catch(e) { console.warn('[saveAdminUserRole]', e.message); }
   toast('User updated', 'success');

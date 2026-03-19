@@ -1351,24 +1351,36 @@ async function startServer() {
     if (!isSuperUser && !isOwnerOfTenant) {
       return res.status(403).json({ error: 'Only Super Admin or Owner can add admin users' });
     }
-    const { name, username, password, role, phone } = req.body;
+    const { name, username, password, role, phone, email } = req.body;
     if (!name || !username || !password) return res.status(400).json({ error: 'All fields required' });
     if (password.length < 6) return res.status(400).json({ error: 'Password too short' });
-    // Normalise and validate phone
+    // Normalise phone (optional if email provided)
     const normPhone = phone ? String(phone).replace(/\D/g,'').replace(/^(91|0)/,'').trim() : '';
-    if (!normPhone || normPhone.length !== 10) {
-      return res.status(400).json({ error: 'A valid 10-digit phone number is required — it is the login credential' });
+    const normEmail = email ? String(email).trim().toLowerCase() : '';
+    if (!normPhone && !normEmail) {
+      return res.status(400).json({ error: 'A phone number or email address is required for OTP login' });
+    }
+    if (normPhone && normPhone.length !== 10) {
+      return res.status(400).json({ error: 'Phone must be exactly 10 digits' });
+    }
+    if (normEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normEmail)) {
+      return res.status(400).json({ error: 'Enter a valid email address' });
     }
     try {
       const exists = await db.prepare('SELECT id FROM admin_users WHERE tenant_id = $1 AND username = $2').get(req.params.id, username);
       if (exists) return res.status(409).json({ error: 'Username already exists' });
-      // Phone must be globally unique across all stations
-      const phoneExists = await db.prepare('SELECT id FROM admin_users WHERE phone = $1').get(normPhone);
-      if (phoneExists) return res.status(409).json({ error: 'This phone number is already registered to another user' });
+      if (normPhone) {
+        const phoneExists = await db.prepare('SELECT id FROM admin_users WHERE phone = $1').get(normPhone);
+        if (phoneExists) return res.status(409).json({ error: 'This phone number is already registered to another user' });
+      }
+      if (normEmail) {
+        const emailExists = await db.prepare('SELECT id FROM admin_users WHERE email = $1').get(normEmail);
+        if (emailExists) return res.status(409).json({ error: 'This email is already registered to another user' });
+      }
       const adminHash = await hashPw(password);
       const result = await db.prepare(
-        'INSERT INTO admin_users (tenant_id, name, username, pass_hash, role, phone) VALUES ($1,$2,$3,$4,$5,$6)'
-      ).run(req.params.id, name, username, adminHash, role||'Manager', normPhone);
+        'INSERT INTO admin_users (tenant_id, name, username, pass_hash, role, phone, email) VALUES ($1,$2,$3,$4,$5,$6,$7)'
+      ).run(req.params.id, name, username, adminHash, role||'Manager', normPhone||'', normEmail||'');
       res.json({ success: true, id: result.lastInsertRowid });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
@@ -1415,7 +1427,7 @@ async function startServer() {
 
   // POST create tenant
   app.post('/api/data/tenants', authMiddleware(db), reqRole('super'), async (req, res) => {
-    const { id, name, location, ownerName, phone, ownerPhone, icon, color, colorLight, stationCode,
+    const { id, name, location, ownerName, phone, ownerPhone, ownerEmail, icon, color, colorLight, stationCode,
             omc, adminUser, adminPass } = req.body;
     if (!name || name.length < 2) return res.status(400).json({ error: 'Station name required' });
     try {
@@ -1430,9 +1442,10 @@ async function startServer() {
           // Normalise owner phone for login credential
           const rawOwnerPhone = ownerPhone || phone || '';
           const normOwnerPhone = rawOwnerPhone.replace(/\D/g,'').replace(/^(91|0)/,'').trim();
+          const normOwnerEmail = (ownerEmail || '').trim().toLowerCase();
           const ownerHash = await hashPw(adminPass);
-          await db.prepare('INSERT INTO admin_users (tenant_id, name, username, pass_hash, role, phone) VALUES ($1,$2,$3,$4,$5,$6)')
-            .run(tenantId, ownerName||adminUser, adminUser, ownerHash, 'Owner', normOwnerPhone||'');
+          await db.prepare('INSERT INTO admin_users (tenant_id, name, username, pass_hash, role, phone, email) VALUES ($1,$2,$3,$4,$5,$6,$7)')
+            .run(tenantId, ownerName||adminUser, adminUser, ownerHash, 'Owner', normOwnerPhone||'', normOwnerEmail||'');
         } catch (e2) { console.warn('[Tenant] Admin creation failed:', e2.message); }
       }
       await auLog(req, 'CREATE_TENANT', 'tenants', tenantId, name);
@@ -1566,6 +1579,27 @@ async function startServer() {
       await db.prepare(
         'UPDATE admin_users SET phone = $1 WHERE id = $2 AND tenant_id = $3'
       ).run(rawPhone, req.params.uid, req.params.tid);
+      res.json({ success: true });
+    } catch(e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // PUT update admin user email
+  app.put('/api/data/tenants/:tid/admins/:uid/email', authMiddleware(db), async (req, res) => {
+    if (req.userType !== 'super' && req.tenantId !== req.params.tid) {
+      return res.status(403).json({ error: 'Insufficient permissions' });
+    }
+    const normEmail = (req.body.email || '').trim().toLowerCase();
+    if (!normEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normEmail)) {
+      return res.status(400).json({ error: 'Enter a valid email address' });
+    }
+    try {
+      const emailExists = await db.prepare(
+        'SELECT id FROM admin_users WHERE email = $1 AND id != $2'
+      ).get(normEmail, req.params.uid);
+      if (emailExists) return res.status(409).json({ error: 'This email is already registered to another user' });
+      await db.prepare(
+        'UPDATE admin_users SET email = $1 WHERE id = $2 AND tenant_id = $3'
+      ).run(normEmail, req.params.uid, req.params.tid);
       res.json({ success: true });
     } catch(e) { res.status(500).json({ error: e.message }); }
   });

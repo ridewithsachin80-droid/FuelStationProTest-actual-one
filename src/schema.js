@@ -271,6 +271,16 @@ async function initDatabase() {
       created_at TIMESTAMPTZ DEFAULT NOW(),
       UNIQUE(tenant_id, username)
     )`,
+    `CREATE TABLE IF NOT EXISTS otp_requests (
+      id SERIAL PRIMARY KEY,
+      contact TEXT NOT NULL,
+      contact_type TEXT DEFAULT 'phone',
+      otp_hash TEXT NOT NULL,
+      reset_token TEXT DEFAULT '',
+      token_used INTEGER DEFAULT 0,
+      expires_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
     `CREATE TABLE IF NOT EXISTS sessions (
       token TEXT PRIMARY KEY,
       tenant_id TEXT DEFAULT '',
@@ -693,6 +703,7 @@ async function initDatabase() {
     // Globally unique per user — server identifies station from phone alone.
     // NULL allowed for existing accounts until phone is set by super admin.
     "ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS phone TEXT DEFAULT ''",
+    "ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS email TEXT DEFAULT ''",
 
     // ── PUMPS TABLE MIGRATIONS ─────────────────────────────────────────────
     // current_reading and reading_updated_at were used in the reading endpoint

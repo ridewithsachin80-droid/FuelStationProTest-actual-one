@@ -64,6 +64,15 @@ const AuthAPI = {
     if (result.token) setAuthToken(result.token);
     return result;
   },
+  async forgotPassword(contact) {
+    return apiFetch('/auth/forgot-password', { method: 'POST', body: JSON.stringify({ contact }) });
+  },
+  async verifyOtp(contact, otp) {
+    return apiFetch('/auth/verify-otp', { method: 'POST', body: JSON.stringify({ contact, otp }) });
+  },
+  async resetPasswordOtp(contact, resetToken, newPassword) {
+    return apiFetch('/auth/reset-password-otp', { method: 'POST', body: JSON.stringify({ contact, resetToken, newPassword }) });
+  },
   async phoneLogin(phone, password) {
     return apiFetch('/auth/phone-login', {
       method: 'POST', body: JSON.stringify({ phone, password })

@@ -185,6 +185,7 @@
     const adminUser= document.getElementById('tAdminUser')?.value?.trim() || 'admin';
     const adminPass= document.getElementById('tAdminPass')?.value || 'admin123';
     const ownerPhone= (document.getElementById('tOwnerPhone')?.value || '').replace(/\D/g,'').replace(/^(91|0)/,'').trim();
+    const ownerEmail= (document.getElementById('tOwnerEmail')?.value || '').trim().toLowerCase();
 
     if (!name || name.length < 2) { if (typeof mt_toast === 'function') mt_toast('Enter a station name', 'error'); return; }
 
@@ -205,7 +206,7 @@
         await TenantAPI.update(id, { name, location, ownerName, phone, icon, omc });
         if (typeof mt_toast === 'function') mt_toast(name + ' updated', 'success');
       } else {
-        await TenantAPI.create({ name, location, ownerName, phone, ownerPhone, icon, omc, adminUser, adminPass });
+        await TenantAPI.create({ name, location, ownerName, phone, ownerPhone, ownerEmail, icon, omc, adminUser, adminPass });
         if (typeof mt_toast === 'function') mt_toast(name + ' created!', 'success');
       }
       // Fetch fresh list from server (includes updated omc field)
@@ -777,6 +778,7 @@
       const adminUser = document.getElementById('tAdminUser')?.value?.trim() || 'admin';
       const adminPass = document.getElementById('tAdminPass')?.value || 'admin123';
       const ownerPhone= (document.getElementById('tOwnerPhone')?.value || '').replace(/\D/g,'').replace(/^(91|0)/,'').trim();
+      const ownerEmail= (document.getElementById('tOwnerEmail')?.value || '').trim().toLowerCase();
       if (!name || name.length < 2) { if (typeof mt_toast === 'function') mt_toast('Enter a station name', 'error'); return; }
       if (!getAuthToken()) {
         const saved = sessionStorage.getItem('fb_super_token');
@@ -788,7 +790,7 @@
           await TenantAPI.update(id, { name, location, ownerName, phone, icon, omc });
           if (typeof mt_toast === 'function') mt_toast(name + ' updated', 'success');
         } else {
-          await TenantAPI.create({ name, location, ownerName, phone, ownerPhone, icon, omc, adminUser, adminPass });
+          await TenantAPI.create({ name, location, ownerName, phone, ownerPhone, ownerEmail, icon, omc, adminUser, adminPass });
           if (typeof mt_toast === 'function') mt_toast(name + ' created!', 'success');
         }
         const freshT = await mt_getTenants_async();

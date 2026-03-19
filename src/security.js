@@ -65,6 +65,9 @@ function authMiddleware(db) {
       '/api/auth/super-login',
       '/api/auth/employee-login',
       '/api/auth/logout',
+      '/api/auth/forgot-password',
+      '/api/auth/verify-otp',
+      '/api/auth/reset-password-otp',
       '/api/health',
     ];
     if (publicPaths.some(p => fullPath.startsWith(p))) return next();

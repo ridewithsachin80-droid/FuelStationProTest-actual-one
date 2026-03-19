@@ -3492,6 +3492,9 @@ function landingShowLogin(type) {
       '<div class="form-group"><label class="form-label">Password</label>' +
         '<input class="form-input" id="adminPass" type="password" placeholder="Enter your password" autocomplete="current-password" onkeydown="if(event.key===\'Enter\')doAdminLogin()" /></div>' +
       '<button class="btn btn-accent btn-block" style="padding:14px;font-size:14px;margin-top:6px" onclick="doAdminLogin()">\uD83D\uDD10 Login</button>' +
+      '<div style="text-align:center;margin-top:12px">' +
+        '<button onclick="showForgotPassword()" style="background:none;border:none;color:var(--text-3);font-size:11px;cursor:pointer;font-family:var(--font);text-decoration:underline">Forgot Password?</button>' +
+      '</div>' +
     '</div>' +
     '<div class="login-footer" style="margin-top:16px">' +
       '<button onclick="showLoginScreen()" style="background:none;border:none;color:var(--text-3);font-size:10px;cursor:pointer;font-family:var(--font)">&#8592; Back to menu</button>' +
@@ -3504,6 +3507,140 @@ function landingShowLogin(type) {
   }, 100);
 }
 window.landingShowLogin = landingShowLogin;
+
+// ── Forgot Password — 3-step flow ─────────────────────────────────────────
+// Step 1: enter phone → Step 2: enter OTP → Step 3: set new password
+function showForgotPassword(step, data) {
+  step = step || 'contact';
+  data = data || {};
+  var el = document.getElementById('loginScreen');
+  if (!el) return;
+  var COMPANY_NAME = (typeof window.FUELBUNK_COMPANY_NAME !== 'undefined') ? window.FUELBUNK_COMPANY_NAME : 'Your Company Name';
+  var backBtn = '<div class="login-footer" style="margin-top:16px"><button onclick="landingShowLogin(\'admin\')" style="background:none;border:none;color:var(--text-3);font-size:10px;cursor:pointer;font-family:var(--font)">&#8592; Back to login</button></div>';
+
+  if (step === 'contact' || step === 'phone') {
+    el.innerHTML =
+      '<div class="login-screen"><div class="login-container">' +
+      '<div class="login-hero"><div class="login-logo">\u26FD</div><h1 class="login-title">Reset Password</h1><p class="login-sub">' + COMPANY_NAME + '</p></div>' +
+      '<div class="login-card">' +
+        '<div style="margin-bottom:14px;font-size:13px;color:var(--text-2)">Enter your registered phone number or email address. A 6-digit OTP will be sent.</div>' +
+        '<div class="form-group"><label class="form-label">Phone Number or Email</label>' +
+          '<input class="form-input" id="fpContact" type="text" placeholder="9876543210  or  name@email.com" autocomplete="off" onkeydown="if(event.key===\'Enter\')doForgotStep1()" />' +
+        '</div>' +
+        '<div id="fpHint" style="font-size:11px;margin-top:-8px;margin-bottom:10px;min-height:14px;color:var(--text-3)"></div>' +
+        '<button class="btn btn-accent btn-block" style="padding:14px;font-size:14px;margin-top:4px" onclick="doForgotStep1()">Send OTP</button>' +
+      '</div>' + backBtn +
+      '</div></div>';
+    setTimeout(function() {
+      var u = document.getElementById('fpContact');
+      if (!u) return;
+      u.focus();
+      u.addEventListener('input', function() {
+        var v = u.value.trim();
+        var hint = document.getElementById('fpHint');
+        if (!hint) return;
+        if (!v) { hint.textContent = ''; return; }
+        if (v.indexOf('@') !== -1) {
+          hint.style.color = 'var(--blue)';
+          hint.textContent = '\u2709 OTP will be sent to this email address';
+        } else if (/^[0-9]+$/.test(v)) {
+          hint.style.color = 'var(--green)';
+          hint.textContent = '\uD83D\uDCF1 OTP will be sent as SMS to +91 ' + v;
+        } else {
+          hint.style.color = 'var(--text-3)';
+          hint.textContent = 'Enter digits only for phone, or include @ for email';
+        }
+      });
+    }, 100);
+  }
+
+  else if (step === 'otp') {
+    var cIcon = (data.contactType === 'email') ? '\u2709' : '\uD83D\uDCF1';
+    var cLabel = data.maskedContact || data.contact || '';
+    el.innerHTML =
+      '<div class="login-screen"><div class="login-container">' +
+      '<div class="login-hero"><div class="login-logo">\u26FD</div><h1 class="login-title">Enter OTP</h1><p class="login-sub">' + COMPANY_NAME + '</p></div>' +
+      '<div class="login-card">' +
+        '<div style="margin-bottom:16px;font-size:13px;color:var(--text-2)">' + cIcon + ' OTP sent to <b style="color:var(--text-0)">' + cLabel + '</b>. Valid for 10 minutes.</div>' +
+        '<div class="form-group"><label class="form-label">6-Digit OTP</label>' +
+          '<input class="form-input" id="fpOtp" type="tel" inputmode="numeric" maxlength="6" placeholder="0  0  0  0  0  0" style="font-size:24px;letter-spacing:10px;text-align:center" oninput="this.value=this.value.replace(/[^0-9]/g,\'\');" onkeydown="if(event.key===\'Enter\')doForgotStep2(\'' + (data.contact||'') + '\')" />' +
+        '</div>' +
+        '<button class="btn btn-accent btn-block" style="padding:14px;font-size:14px;margin-top:6px" onclick="doForgotStep2(\'' + (data.contact||'') + '\')">Verify OTP</button>' +
+        '<div style="text-align:center;margin-top:12px"><button onclick="showForgotPassword(\'contact\')" style="background:none;border:none;color:var(--text-3);font-size:11px;cursor:pointer;font-family:var(--font)">&#8592; Try different contact</button></div>' +
+      '</div>' + backBtn +
+      '</div></div>';
+    setTimeout(function() { var u = document.getElementById('fpOtp'); if (u) u.focus(); }, 100);
+  }
+
+  else if (step === 'newpass') {
+    el.innerHTML =
+      '<div class="login-screen"><div class="login-container">' +
+      '<div class="login-hero"><div class="login-logo">\u26FD</div><h1 class="login-title">New Password</h1><p class="login-sub">' + COMPANY_NAME + '</p></div>' +
+      '<div class="login-card">' +
+        '<div style="margin-bottom:16px;font-size:13px;color:var(--text-2)">OTP verified. Set your new password.</div>' +
+        '<div class="form-group"><label class="form-label">New Password</label>' +
+          '<input class="form-input" id="fpNewPass" type="password" placeholder="Min 6 characters" onkeydown="if(event.key===\'Enter\')doForgotStep3(\'' + (data.contact||'') + '\',\'' + (data.resetToken||'') + '\')" /></div>' +
+        '<div class="form-group"><label class="form-label">Confirm Password</label>' +
+          '<input class="form-input" id="fpConfPass" type="password" placeholder="Re-enter password" onkeydown="if(event.key===\'Enter\')doForgotStep3(\'' + (data.contact||'') + '\',\'' + (data.resetToken||'') + '\')" /></div>' +
+        '<button class="btn btn-accent btn-block" style="padding:14px;font-size:14px;margin-top:6px" onclick="doForgotStep3(\'' + (data.contact||'') + '\',\'' + (data.resetToken||'') + '\')">Set New Password</button>' +
+      '</div>' + backBtn +
+      '</div></div>';
+    setTimeout(function() { var u = document.getElementById('fpNewPass'); if (u) u.focus(); }, 100);
+  }
+}
+window.showForgotPassword = showForgotPassword;
+
+async function doForgotStep1() {
+  var raw = (document.getElementById('fpContact')?.value || '').trim();
+  if (!raw) { if(typeof toast==='function') toast('Enter phone number or email', 'error'); return; }
+  var btn = document.querySelector('#loginScreen .btn-accent');
+  if (btn) { btn.disabled = true; btn.textContent = 'Sending...'; }
+  try {
+    var result = await AuthAPI.forgotPassword(raw);
+    showForgotPassword('otp', {
+      contact: result.contact || raw,
+      contactType: result.contactType || (raw.indexOf('@') !== -1 ? 'email' : 'phone'),
+      maskedContact: result.maskedContact || raw
+    });
+  } catch(e) {
+    if(typeof toast==='function') toast(e.message || 'Failed to send OTP', 'error');
+    if (btn) { btn.disabled = false; btn.textContent = 'Send OTP'; }
+  }
+}
+window.doForgotStep1 = doForgotStep1;
+
+async function doForgotStep2(contact) {
+  var otp = (document.getElementById('fpOtp')?.value || '').trim();
+  if (otp.length !== 6) { if(typeof toast==='function') toast('Enter the 6-digit OTP', 'error'); return; }
+  var btn = document.querySelector('#loginScreen .btn-accent');
+  if (btn) { btn.disabled = true; btn.textContent = 'Verifying...'; }
+  try {
+    var result = await AuthAPI.verifyOtp(contact, otp);
+    showForgotPassword('newpass', { contact, resetToken: result.resetToken });
+  } catch(e) {
+    if(typeof toast==='function') toast(e.message || 'Invalid OTP', 'error');
+    if (btn) { btn.disabled = false; btn.textContent = 'Verify OTP'; }
+  }
+}
+window.doForgotStep2 = doForgotStep2;
+
+async function doForgotStep3(contact, resetToken) {
+  var np = document.getElementById('fpNewPass')?.value || '';
+  var cp = document.getElementById('fpConfPass')?.value || '';
+  if (np.length < 6) { if(typeof toast==='function') toast('Password must be at least 6 characters', 'error'); return; }
+  if (np !== cp) { if(typeof toast==='function') toast('Passwords do not match', 'error'); return; }
+  var btn = document.querySelector('#loginScreen .btn-accent');
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving...'; }
+  try {
+    await AuthAPI.resetPasswordOtp(contact, resetToken, np);
+    if(typeof toast==='function') toast('Password reset successfully! Please log in.', 'success');
+    landingShowLogin('admin');
+  } catch(e) {
+    if(typeof toast==='function') toast(e.message || 'Reset failed', 'error');
+    if (btn) { btn.disabled = false; btn.textContent = 'Set New Password'; }
+  }
+}
+window.doForgotStep3 = doForgotStep3;
 
 function switchLoginTab(tab) {
   document.getElementById('ltAdmin').className = 'login-tab' + (tab === 'admin' ? ' active' : '');

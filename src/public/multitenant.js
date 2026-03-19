@@ -132,6 +132,13 @@ async function mt_showSelector() {
   const app = document.getElementById('app');
   const isSuperLoggedIn = mt_isSuperLoggedIn();
   document.body.classList.add('app-ready');
+  // Re-focus search input after re-render if user was typing
+  if (window._mtSearchFocused) {
+    setTimeout(function() {
+      var si = document.getElementById('mt_search_input');
+      if (si) { var vl = (window._mtSearch||'').length; si.focus(); si.setSelectionRange(vl,vl); }
+    }, 0);
+  }
 
   // Stats
   const total = tenants.length;
@@ -187,7 +194,7 @@ async function mt_showSelector() {
           <!-- Search -->
           <div style="padding:10px 14px;border-bottom:1px solid var(--border-light)">
             <input id="mt_search_input" class="form-input" placeholder="🔍  Search by name or city..." value="${q}"
-              oninput="window._mtSearch=this.value;mt_showSelector()"
+              oninput="window._mtSearch=this.value;window._mtSearchFocused=true;mt_showSelector()"
               style="width:100%;font-size:13px;background:var(--bg-1)" />
           </div>
           ` : ''}
@@ -322,12 +329,16 @@ function mt_showTenantForm(existing) {
           <div style="background:var(--bg-0);border-radius:var(--radius-sm);border:1px solid var(--border-light);padding:14px;margin-top:4px">
             <div style="font-size:11px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px">Owner Login Credentials</div>
             <div class="form-group mb-0" style="margin-bottom:10px">
-              <label class="form-label">Owner Mobile Number <span style="color:var(--red)">*</span></label>
+              <label class="form-label">Owner Mobile Number <span style="font-size:10px;color:var(--text-3)">(SMS OTP login)</span></label>
               <div style="display:flex;gap:0;border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden;background:var(--bg-1)">
                 <span style="display:flex;align-items:center;padding:0 10px;background:var(--bg-2);border-right:1px solid var(--border);color:var(--text-2);font-size:12px;font-weight:600">+91</span>
-                <input class="form-input" id="tOwnerPhone" type="tel" inputmode="numeric" maxlength="10" placeholder="10-digit number (used for login)" oninput="this.value=this.value.replace(/[^0-9]/g,'')" style="border:none;border-radius:0;background:transparent;flex:1" />
+                <input class="form-input" id="tOwnerPhone" type="tel" inputmode="numeric" maxlength="10" placeholder="10-digit mobile number" oninput="this.value=this.value.replace(/[^0-9]/g,'')" style="border:none;border-radius:0;background:transparent;flex:1" />
               </div>
-              <div style="font-size:10px;color:var(--text-3);margin-top:3px">This phone number is the owner's unique login ID across all stations</div>
+            </div>
+            <div class="form-group mb-0" style="margin-bottom:10px">
+              <label class="form-label">Owner Email Address <span style="font-size:10px;color:var(--text-3)">(Email OTP login)</span></label>
+              <input class="form-input" id="tOwnerEmail" type="email" placeholder="owner@example.com" />
+              <div style="font-size:10px;color:var(--text-3);margin-top:3px">Phone or email required for forgot password. Both recommended.</div>
             </div>
             <div class="form-row">
               <div class="form-group mb-0"><label class="form-label">Admin Username</label>
@@ -364,8 +375,12 @@ async function mt_saveTenant(isEdit) {
   const adminUser= document.getElementById('tAdminUser')?.value?.trim() || 'admin';
   const adminPass= document.getElementById('tAdminPass')?.value || 'admin123';
   const ownerPhone = (document.getElementById('tOwnerPhone')?.value || '').replace(/\D/g,'').replace(/^(91|0)/,'').trim();
-  if (!isEdit && (!ownerPhone || ownerPhone.length !== 10)) {
-    mt_toast('Enter the owner\'s 10-digit mobile number — it is their login ID', 'error'); return;
+  const ownerEmail = (document.getElementById('tOwnerEmail')?.value || '').trim().toLowerCase();
+  if (!isEdit && !ownerPhone && !ownerEmail) {
+    mt_toast('Enter the owner\'s mobile number or email address — needed for login', 'error'); return;
+  }
+  if (ownerPhone && ownerPhone.length !== 10) {
+    mt_toast('Owner phone must be exactly 10 digits', 'error'); return;
   }
   if (!name || name.length < 2) { mt_toast('Enter a station name', 'error'); return; }
   if (!phone || phone.length !== 10 || !/^[0-9]{10}$/.test(phone)) { mt_toast('Phone number must be exactly 10 digits', 'error'); return; }
@@ -378,7 +393,7 @@ async function mt_saveTenant(isEdit) {
         mt_toast(name + ' updated', 'success');
       } else {
         // Create station — subscription will be configured from Billing dashboard
-        const result = await TenantAPI.create({ name, location, ownerName, phone, ownerPhone, icon, omc, adminUser, adminPass });
+        const result = await TenantAPI.create({ name, location, ownerName, phone, ownerPhone, ownerEmail, icon, omc, adminUser, adminPass });
         // Auto-create a 30-day trial record (server handles this via auto-create in GET /api/subscriptions)
         mt_toast(name + ' created! Configure subscription from Billing dashboard.', 'success');
       }
@@ -998,6 +1013,9 @@ async function mt_loadBillingData(filter) {
   if (_billingFilter === 'trial')   filtered = subs.filter(function(s){return s.effective_status==='trial';});
   if (_billingFilter === 'expired') filtered = subs.filter(function(s){return s.effective_status==='expired'||s.effective_status==='grace';});
   if (_billingFilter === 'soon')    filtered = subs.filter(function(s){ var dl=s.days_left!==null?s.days_left:(s.trial_days_left||0); return dl<=30&&dl>=0&&s.effective_status!=='expired'; });
+  // Apply search (client-side, no re-fetch)
+  var _bq = (window._billSearch || '').toLowerCase().trim();
+  if (_bq) filtered = filtered.filter(function(s){ return (s.station_name||'').toLowerCase().includes(_bq) || (s.location||'').toLowerCase().includes(_bq) || (s.owner_name||'').toLowerCase().includes(_bq); });
 
   // Filter label
   var filterLabels = {all:'All Stations',active:'Active Subscriptions',trial:'Trial Accounts',expired:'Expired / Grace',soon:'Expiring within 30 Days',mrr:'All Stations'};
@@ -1039,7 +1057,23 @@ async function mt_loadBillingData(filter) {
   });
   if (!cards) cards = '<div style="text-align:center;padding:40px;color:var(--text-3)">No stations match this filter</div>';
 
-  el.innerHTML = statRow + filterBar + cards;
+  var searchBar = '<div style="margin-bottom:12px;position:relative">'
+    + '<input id="billSearchInput" type="text" class="form-input" placeholder="🔍 Search station, city, owner..." '
+    + 'value="'+(window._billSearch||'')+'" '
+    + 'oninput="window._billSearch=this.value;mt_loadBillingData(\''+_billingFilter+'\')" '
+    + 'style="padding-left:14px;font-size:13px" />'
+    + '</div>';
+  el.innerHTML = statRow + searchBar + filterBar + cards;
+  // Re-focus search input and restore cursor position after re-render
+  var billSI = document.getElementById('billSearchInput');
+  if (billSI && document.activeElement !== billSI && window._billSearchFocused) {
+    var vlen = (window._billSearch||'').length;
+    billSI.focus(); billSI.setSelectionRange(vlen, vlen);
+  }
+  if (billSI) {
+    billSI.addEventListener('focus', function(){ window._billSearchFocused = true; });
+    billSI.addEventListener('blur',  function(){ window._billSearchFocused = false; });
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
