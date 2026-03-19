@@ -2591,9 +2591,21 @@ Pack decoding: "300x40ML-POU"=packQty:300,packSize:"40ml",packType:"Pouch",isCar
 
   // H-02 FIX: Rewritten from N+1 (5 queries × N tenants) to 5 aggregated queries total.
   // At 200 bunks: was 1,000 DB hits → now 5 DB hits regardless of bunk count.
+  // Inject company name from env var into every page — reads COMPANY_NAME from Railway
+  const COMPANY_NAME_JS = JSON.stringify(process.env.COMPANY_NAME || 'Your Company Name');
   app.get('*', (req, res) => {
     if (req.path.startsWith('/api/')) return res.status(404).json({ error: 'Not found' });
-    res.sendFile(path.join(publicDir, 'index.html'));
+    // Serve index.html with company name injected as a global JS variable
+    const fs = require('fs');
+    const indexPath = path.join(publicDir, 'index.html');
+    let html = fs.readFileSync(indexPath, 'utf8');
+    html = html.replace(
+      '<script src="/api-client.js?v=24">',
+      `<script>window.FUELBUNK_COMPANY_NAME = ${COMPANY_NAME_JS};</script>\n<script src="/api-client.js?v=24">`
+    );
+    res.setHeader('Content-Type', 'text/html');
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.send(html);
   });
 
   app.use((err, req, res, next) => {

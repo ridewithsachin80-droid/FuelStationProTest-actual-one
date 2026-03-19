@@ -1961,7 +1961,7 @@ function renderSettings(D) {
           return admins.map((u,i) => `<div class="flex-between" style="padding:9px 0;border-bottom:1px solid var(--border-light)">
             <div>
               <div class="fw-700" style="font-size:13px;color:var(--text-0)">${sanitize(u.name||u.username)}</div>
-              <div style="font-size:11px;color:var(--text-3)">@${sanitize(u.username)}</div>
+              <div style="font-size:11px;color:var(--text-3)">@${sanitize(u.username)}${u.phone ? ' &nbsp;·&nbsp; <span style=\"color:var(--text-2)\">+91 ' + sanitize(u.phone) + '</span>' : ' &nbsp;<span style=\"color:var(--orange);font-weight:700;font-size:9px\">⚠ NO PHONE</span>'}</div>
             </div>
             <div style="display:flex;align-items:center;gap:8px">
               ${roleBadge(u.role||'Manager')}

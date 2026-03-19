@@ -809,39 +809,50 @@
     };
 
     // ── Admin login via API (NOT localStorage hash check) ─────────────────
+    // Re-apply dual-path doAdminLogin (same logic as top of IIFE — phone when no tenant, username when tenant set)
     window.doAdminLogin = async function() {
+      const tenant = (typeof mt_getActiveTenant === 'function') ? mt_getActiveTenant() : null;
+      if (!tenant) {
+        // Phone login path (landing page)
+        const phoneRaw = (document.getElementById('adminUser')?.value || '').trim();
+        const pass     = document.getElementById('adminPass')?.value || '';
+        if (!phoneRaw || !pass) { if(typeof toast==='function') toast('Enter phone number and password', 'error'); return; }
+        const phone = phoneRaw.replace(/\D/g,'').replace(/^(91|0)/,'').trim();
+        if (phone.length !== 10) { if(typeof toast==='function') toast('Enter a valid 10-digit phone number', 'error'); return; }
+        try {
+          const result = await AuthAPI.phoneLogin(phone, pass);
+          if (result.success) {
+            setAuthToken(result.token);
+            setTenantId(result.tenantId);
+            const tenantObj = { id: result.tenantId, name: result.tenantName, location: result.tenantLocation||'', icon: result.tenantIcon||'⛽', color:'#d4940f', colorLight:'#f0b429', active:true };
+            if (typeof mt_setActiveTenant === 'function') mt_setActiveTenant(tenantObj);
+            sessionStorage.setItem('fb_session', JSON.stringify({ loggedIn:true, role:'admin', adminUser:{name:result.userName, username:phone, role:result.userRole}, tenant:tenantObj, token:result.token }));
+            if (typeof APP !== 'undefined') { APP.loggedIn=true; APP.role='admin'; APP.adminUser={name:result.userName, username:phone, role:result.userRole}; APP.tenant=tenantObj; }
+            window.db = new FuelDB('FuelBunkPro_' + result.tenantId);
+            if (typeof loadData === 'function') { try { await loadData(); } catch(e) {} }
+            if (typeof enterApp === 'function') enterApp();
+            if (typeof toast === 'function') toast('Welcome, ' + result.userName, 'success');
+          }
+        } catch(e) { if(typeof toast==='function') toast(e.message||'Invalid phone or password','error'); }
+        return;
+      }
+      // Username login path (station login screen)
       const user = (document.getElementById('adminUser')?.value || '').trim().toLowerCase();
       const pass = document.getElementById('adminPass')?.value || '';
-      if (!user || !pass) { if (typeof toast === 'function') toast('Enter credentials', 'error'); return; }
-      const tenant = (typeof mt_getActiveTenant === 'function') ? mt_getActiveTenant() : null;
-      if (!tenant) { if (typeof toast === 'function') toast('No station selected', 'error'); return; }
+      if (!user || !pass) { if(typeof toast==='function') toast('Enter credentials','error'); return; }
       try {
         const result = await AuthAPI.adminLogin(user, pass, tenant.id);
         if (result.success) {
           setAuthToken(result.token);
           setTenantId(tenant.id);
-          sessionStorage.setItem('fb_session', JSON.stringify({
-            loggedIn: true, role: 'admin',
-            adminUser: { name: result.userName, username: user, role: result.userRole },
-            tenant, token: result.token
-          }));
-          if (typeof APP !== 'undefined') {
-            APP.loggedIn = true;
-            APP.role = 'admin';
-            APP.adminUser = { name: result.userName, username: user, role: result.userRole };
-            APP.tenant = tenant;
-          }
+          sessionStorage.setItem('fb_session', JSON.stringify({ loggedIn:true, role:'admin', adminUser:{name:result.userName, username:user, role:result.userRole}, tenant, token:result.token }));
+          if (typeof APP !== 'undefined') { APP.loggedIn=true; APP.role='admin'; APP.adminUser={name:result.userName, username:user, role:result.userRole}; APP.tenant=tenant; }
           window.db = new FuelDB('FuelBunkPro_' + tenant.id);
-          // Load real data BEFORE rendering
-          if (typeof loadData === 'function') {
-            try { await loadData(); } catch(e) { console.warn('[Bridge] loadData:', e.message); }
-          }
+          if (typeof loadData === 'function') { try { await loadData(); } catch(e) { console.warn('[Bridge] loadData:', e.message); } }
           if (typeof enterApp === 'function') enterApp();
           if (typeof toast === 'function') toast('Welcome, ' + result.userName, 'success');
         }
-      } catch (e) {
-        if (typeof toast === 'function') toast(e.message || 'Invalid credentials', 'error');
-      }
+      } catch(e) { if(typeof toast==='function') toast(e.message||'Invalid credentials','error'); }
     };
 
     // ── Session restore (uses sessionStorage + API token) ─────────────────
