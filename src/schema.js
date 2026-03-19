@@ -626,10 +626,34 @@ async function initDatabase() {
       console.log(`║  Username : ${(process.env.SUPER_ADMIN_USERNAME || 'superadmin').padEnd(40)}║`);
       console.log(`║  Password : ${initPass.padEnd(40)}║`);
       console.log('╚══════════════════════════════════════════════════════╝');
-    }} else {
-    // Row exists — credentials managed via app, do not overwrite
-    console.log('[Schema] Super admin row exists — skipping env sync');
+    }
+  } else if (process.env.SUPER_ADMIN_USERNAME && process.env.SUPER_ADMIN_INIT_PASS) {
+    // Row exists — if env vars are explicitly set, sync them to the DB
+    // This ensures Railway env var changes always take effect on redeploy
+    const envUser = process.env.SUPER_ADMIN_USERNAME;
+    const envPass = process.env.SUPER_ADMIN_INIT_PASS;
+    const currentRow = existing.rows[0];
+    const usernameChanged = currentRow.username !== envUser;
+    // Always re-hash and update when env vars are present, so credentials stay in sync
+    const syncHash = await hashPassword(envPass);
+    await pool.query(
+      'UPDATE super_admin SET username = $1, pass_hash = $2, updated_at = NOW() WHERE id = 1',
+      [envUser, syncHash]
+    );
+    if (usernameChanged) {
+      console.log(`[Schema] Super admin username updated to: ${envUser}`);
+    }
+    console.log('[Schema] Super admin credentials synced from environment variables');
   }
+
+  console.log('[Schema] Database schema initialized successfully');
+
+  // ── Non-breaking column additions for existing deployments ─────────────────
+  // These ADD COLUMN IF NOT EXISTS statements are safe to run repeatedly.
+  const safeAlters = [
+    // ── PUMPS TABLE MIGRATIONS ─────────────────────────────────────────────
+    // current_reading and reading_updated_at were used in the reading endpoint
+    // but never added to the CREATE TABLE. Add them safely now.
     "ALTER TABLE pumps ADD COLUMN IF NOT EXISTS current_reading REAL DEFAULT 0",
     "ALTER TABLE pumps ADD COLUMN IF NOT EXISTS reading_updated_at TEXT DEFAULT ''",
     "ALTER TABLE pumps ADD COLUMN IF NOT EXISTS open_reading REAL DEFAULT 0",
