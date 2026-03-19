@@ -32,6 +32,9 @@
   // When super admin calls it (via secret URL cookie or after super login),
   // show the original full selector so they can manage all stations.
   const _origShowSelector = window.mt_showSelector;
+  // Expose original selector so landingShowLogin() can call it directly
+  // (bypassing our override when employee/super admin taps the landing page buttons)
+  window._origShowSelectorForLanding = _origShowSelector;
   window.mt_showSelector = async function() {
     const isSuperActive = (typeof mt_isSuperLoggedIn === 'function') ? mt_isSuperLoggedIn() : false;
     const hasSuperCookie = (function() {

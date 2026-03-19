@@ -3424,13 +3424,20 @@ function showLoginScreen() {
 // Called when user taps an option on the landing page.
 function landingShowLogin(type) {
   if (type === 'super') {
-    // Super admin: show the full selector (includes super login panel)
-    if (typeof mt_showSelector === 'function') mt_showSelector();
+    // Super admin: force the ORIGINAL full selector (bypasses our override)
+    // The override would show landing page again since no super session yet
+    var origSelector = (typeof window._origShowSelectorForLanding === 'function')
+      ? window._origShowSelectorForLanding : null;
+    if (origSelector) { origSelector(); }
+    else if (typeof mt_showSelector === 'function') { mt_showSelector(); }
     return;
   }
   if (type === 'employee') {
-    // Employee: needs station selected first — show selector
-    if (typeof mt_showSelector === 'function') mt_showSelector();
+    // Employee: show original selector so they can pick their station
+    var origSel = (typeof window._origShowSelectorForLanding === 'function')
+      ? window._origShowSelectorForLanding : null;
+    if (origSel) { origSel(); }
+    else if (typeof mt_showSelector === 'function') { mt_showSelector(); }
     return;
   }
   // Owner / Staff: show phone login form directly — no station picker needed
