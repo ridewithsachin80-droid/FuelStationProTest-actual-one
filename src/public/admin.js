@@ -1664,6 +1664,60 @@ function renderSettings(D) {
             }
           }
         }).catch(() => {});
+
+      // FIX: APP.tenant.adminUsers is NEVER populated from the server on login or session
+      // restore — TenantAPI.list() doesn't include adminUsers, so the panel always showed
+      // "No admin users configured" even when users exist in the DB.
+      // Solution: fetch admin list from server when Settings page opens, update APP.tenant,
+      // then re-render just the adminUsersList div (no full page re-render needed).
+      if (typeof TenantAPI !== 'undefined') {
+        TenantAPI.getAdmins(_tid)
+          .then(function(freshAdmins) {
+            if (!Array.isArray(freshAdmins)) return;
+            APP.tenant.adminUsers = freshAdmins;
+            // Also sync localStorage so it survives a page reload
+            try {
+              var tenants = (typeof mt_getTenants === 'function') ? mt_getTenants() : [];
+              var tIdx = tenants.findIndex(function(t) { return t.id === _tid; });
+              if (tIdx !== -1) {
+                tenants[tIdx].adminUsers = freshAdmins;
+                if (typeof mt_saveTenants === 'function') mt_saveTenants(tenants);
+                if (typeof mt_setActiveTenant === 'function') mt_setActiveTenant(tenants[tIdx]);
+              }
+            } catch(cacheErr) { /* non-fatal */ }
+            // Re-render just the user list panel — not the full page
+            if (APP.page !== 'settings') return;
+            var listEl = document.getElementById('adminUsersList');
+            if (!listEl) return;
+            if (!freshAdmins.length) {
+              listEl.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-3);font-size:12px">No admin users configured</div>';
+              return;
+            }
+            listEl.innerHTML = freshAdmins.map(function(u, i) {
+              var nameHtml = (typeof sanitize === 'function') ? sanitize(u.name || u.username) : (u.name || u.username);
+              var unHtml   = (typeof sanitize === 'function') ? sanitize(u.username) : u.username;
+              var roleB    = (typeof roleBadge === 'function') ? roleBadge(u.role || 'Manager') : u.role;
+              var editBtn  = (typeof rbac_can === 'function' && rbac_can('add_admin_user') && APP.adminUser?.id !== u.id)
+                ? '<button class="btn btn-ghost btn-sm" onclick="openEditAdminUserRoleModal(' + i + ')">✏️</button>'
+                : '';
+              return '<div class="flex-between" style="padding:9px 0;border-bottom:1px solid var(--border-light)">'
+                + '<div>'
+                + '<div class="fw-700" style="font-size:13px;color:var(--text-0)">' + nameHtml + '</div>'
+                + '<div style="font-size:11px;color:var(--text-3)">@' + unHtml + '</div>'
+                + '</div>'
+                + '<div style="display:flex;align-items:center;gap:8px">' + roleB + editBtn + '</div>'
+                + '</div>';
+            }).join('');
+          })
+          .catch(function(err) {
+            // If fetch fails (e.g. token expired), show the proper empty state
+            var listEl = document.getElementById('adminUsersList');
+            if (listEl && !(APP.tenant?.adminUsers || []).length) {
+              listEl.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-3);font-size:12px">No admin users configured</div>';
+            }
+            console.warn('[Settings] Could not load admin users:', err.message);
+          });
+      }
     }
   }
   const sub = window._subStatus;
@@ -1900,9 +1954,10 @@ function renderSettings(D) {
             <span style="font-size:11px;color:var(--text-3);text-align:right;max-width:200px">${r.desc}</span>
           </div>`).join('')}
         </div>
-        ${(() => {
+        <div id="adminUsersList">
+          ${(() => {
           const admins = APP.tenant?.adminUsers || [];
-          if (!admins.length) return '<div style="text-align:center;padding:20px;color:var(--text-3);font-size:12px">No admin users configured</div>';
+          if (!admins.length) return '<div style="text-align:center;padding:20px;color:var(--text-3);font-size:12px"><span id="adminUsersSpinner" style="opacity:0.5">Loading...</span></div>';
           return admins.map((u,i) => `<div class="flex-between" style="padding:9px 0;border-bottom:1px solid var(--border-light)">
             <div>
               <div class="fw-700" style="font-size:13px;color:var(--text-0)">${sanitize(u.name||u.username)}</div>
@@ -1914,6 +1969,7 @@ function renderSettings(D) {
             </div>
           </div>`).join('');
         })()}
+        </div>
       </div>
 
       <!-- Loyalty Points Settings Card -->
