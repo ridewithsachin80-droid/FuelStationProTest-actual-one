@@ -298,10 +298,16 @@ function authRoutes(db) {
       if (emailUser && emailPass) {
         const nodemailer = require('nodemailer');
         const transporter = nodemailer.createTransport({
-          host: emailHost, port: emailPort,
-          secure: emailPort === 465,
-          auth: { user: emailUser, pass: emailPass }
+          host: emailHost,
+          port: emailPort,
+          secure: emailPort === 465,  // true for 465, false for 587
+          auth: { user: emailUser, pass: emailPass },
+          connectionTimeout: 10000,   // 10 seconds
+          greetingTimeout: 10000,
+          socketTimeout: 15000,
+          tls: { rejectUnauthorized: false }
         });
+        console.log(`[Email] Attempting to send OTP to ${contact} via ${emailHost}:${emailPort}`);
         await transporter.sendMail({
           from: `"FuelBunk Pro" <${emailFrom}>`,
           to: contact,
@@ -318,6 +324,7 @@ function authRoutes(db) {
           </div>`
         });
       } else {
+        console.log(`[Email] ✅ OTP sent successfully to ${contact}`);
         console.log(`[OTP DEV EMAIL] To: ${contact}, OTP: ${otp} (set SMTP_USER + SMTP_PASS in Railway)`);
       }
     }
