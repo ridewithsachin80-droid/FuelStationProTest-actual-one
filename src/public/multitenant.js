@@ -298,7 +298,6 @@ function mt_showTenantForm(existing) {
   document.documentElement.scrollTop = 0;
   document.body.scrollTop = 0;
   app.innerHTML = `
-    <div style="background:var(--bg-0);padding:10px 14px 80px;min-height:100vh">
     <div style="position:fixed;inset:0;background:var(--bg-0);overflow-y:auto;z-index:9999">
       <div style="width:100%;max-width:460px;margin:0 auto;padding:12px 16px 80px">
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;padding:4px 0">
