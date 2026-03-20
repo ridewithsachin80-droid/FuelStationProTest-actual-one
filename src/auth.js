@@ -289,43 +289,74 @@ function authRoutes(db) {
         console.log(`[OTP DEV SMS] Phone: ${contact}, OTP: ${otp} (set FAST2SMS_API_KEY in Railway to enable SMS)`);
       }
     } else {
-      // Email OTP via nodemailer
-      const emailUser = process.env.SMTP_USER;
-      const emailPass = process.env.SMTP_PASS;
-      const emailHost = process.env.SMTP_HOST || 'smtp.gmail.com';
-      const emailPort = parseInt(process.env.SMTP_PORT || '587');
-      const emailFrom = process.env.SMTP_FROM || emailUser;
-      if (emailUser && emailPass) {
-        const nodemailer = require('nodemailer');
-        const transporter = nodemailer.createTransport({
-          host: emailHost,
-          port: emailPort,
-          secure: emailPort === 465,  // true for 465, false for 587
-          auth: { user: emailUser, pass: emailPass },
-          connectionTimeout: 10000,   // 10 seconds
-          greetingTimeout: 10000,
-          socketTimeout: 15000,
-          tls: { rejectUnauthorized: false }
+      // ── Email OTP ──────────────────────────────────────────────────────────
+      // Uses Resend HTTP API (port 443 — works on Railway, unlike SMTP which is blocked)
+      // Free tier: 100 emails/day at resend.com
+      const resendKey   = process.env.RESEND_API_KEY;
+      const brevoKey    = process.env.BREVO_API_KEY;
+      const emailUser   = process.env.SMTP_USER;  // kept for display name only
+
+      const emailSubject = 'Your FuelBunk Pro Password Reset OTP';
+      const emailText    = `Your OTP is: ${otp}\n\nValid for 10 minutes.\nDo not share this with anyone.\n\n— FuelBunk Pro`;
+      const emailHtml    = `<div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:32px;background:#0a0c10;color:#f4f5f7;border-radius:8px">
+  <h2 style="color:#d4940f;margin-bottom:8px">FuelBunk Pro</h2>
+  <p style="color:#9098a8;font-size:13px;margin-bottom:24px">Password Reset</p>
+  <div style="background:#14161a;border:1px solid #252830;border-radius:6px;padding:24px;text-align:center;margin-bottom:24px">
+    <p style="color:#9098a8;font-size:12px;margin-bottom:8px;letter-spacing:.1em;text-transform:uppercase">Your OTP</p>
+    <div style="font-size:36px;font-weight:700;letter-spacing:8px;color:#f4f5f7">${otp}</div>
+    <p style="color:#6b7080;font-size:11px;margin-top:12px">Valid for 10 minutes</p>
+  </div>
+  <p style="color:#6b7080;font-size:11px">Do not share this OTP with anyone. FuelBunk Pro will never ask for your OTP.</p>
+</div>`;
+
+      if (resendKey) {
+        // ── Resend API (resend.com — free 100/day, uses HTTPS) ──────────────
+        console.log(`[Email] Sending via Resend API to ${contact}`);
+        const fromAddr = emailUser ? `FuelBunk Pro <${emailUser}>` : 'FuelBunk Pro <onboarding@resend.dev>';
+        const resendRes = await fetch('https://api.resend.com/emails', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${resendKey}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            from: fromAddr,
+            to: [contact],
+            subject: emailSubject,
+            html: emailHtml,
+            text: emailText
+          }),
+          signal: AbortSignal.timeout(10000)
         });
-        console.log(`[Email] Attempting to send OTP to ${contact} via ${emailHost}:${emailPort}`);
-        await transporter.sendMail({
-          from: `"FuelBunk Pro" <${emailFrom}>`,
-          to: contact,
-          subject: 'Your FuelBunk Pro Password Reset OTP',
-          text: `Your OTP is: ${otp}\n\nValid for 10 minutes. Do not share this with anyone.\n\n— FuelBunk Pro`,
-          html: `<div style="font-family:sans-serif;max-width:400px;margin:0 auto;padding:24px;background:#0a0c10;color:#f4f5f7;border-radius:12px">
-            <h2 style="color:#f0b429;margin-bottom:8px">FuelBunk Pro</h2>
-            <p style="color:#9498a5;margin-bottom:20px">Password Reset OTP</p>
-            <div style="background:#161a24;border:1px solid #2a3040;border-radius:8px;padding:20px;text-align:center;margin-bottom:20px">
-              <div style="font-size:36px;font-weight:900;letter-spacing:12px;color:#f0b429">${otp}</div>
-              <div style="font-size:12px;color:#6b7080;margin-top:8px">Valid for 10 minutes</div>
-            </div>
-            <p style="font-size:12px;color:#6b7080">Do not share this OTP with anyone. If you did not request this, ignore this email.</p>
-          </div>`
+        const resendJson = await resendRes.json();
+        if (!resendRes.ok) throw new Error('Resend failed: ' + (resendJson.message || JSON.stringify(resendJson)));
+        console.log(`[Email] ✅ Sent via Resend to ${contact} — id: ${resendJson.id}`);
+
+      } else if (brevoKey) {
+        // ── Brevo API (brevo.com — free 300/day, uses HTTPS) ────────────────
+        console.log(`[Email] Sending via Brevo API to ${contact}`);
+        const brevoRes = await fetch('https://api.brevo.com/v3/smtp/email', {
+          method: 'POST',
+          headers: {
+            'api-key': brevoKey,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            sender: { name: 'FuelBunk Pro', email: emailUser || 'noreply@fuelbunk.app' },
+            to: [{ email: contact }],
+            subject: emailSubject,
+            htmlContent: emailHtml,
+            textContent: emailText
+          }),
+          signal: AbortSignal.timeout(10000)
         });
+        const brevoJson = await brevoRes.json();
+        if (!brevoRes.ok) throw new Error('Brevo failed: ' + (brevoJson.message || JSON.stringify(brevoJson)));
+        console.log(`[Email] ✅ Sent via Brevo to ${contact} — id: ${brevoJson.messageId}`);
+
       } else {
-        console.log(`[Email] ✅ OTP sent successfully to ${contact}`);
-        console.log(`[OTP DEV EMAIL] To: ${contact}, OTP: ${otp} (set SMTP_USER + SMTP_PASS in Railway)`);
+        // ── Dev mode: log OTP to Railway console ────────────────────────────
+        console.log(`[OTP DEV EMAIL] To: ${contact}, OTP: ${otp} (set RESEND_API_KEY or BREVO_API_KEY in Railway to send real emails)`);
       }
     }
   }
