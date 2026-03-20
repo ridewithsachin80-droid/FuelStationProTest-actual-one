@@ -231,16 +231,40 @@ function authRoutes(db) {
   // ── Forgot Password — helper: send OTP via SMS or Email ─────────────────
   async function sendOtpDelivery(contactType, contact, otp) {
     if (contactType === 'phone') {
-      const apiKey = process.env.FAST2SMS_API_KEY;
+      const apiKey      = process.env.FAST2SMS_API_KEY;
+      const dltSenderId = process.env.FAST2SMS_SENDER_ID;    // e.g. FBLPRO — set after DLT registration
+      const dltTemplate = process.env.FAST2SMS_TEMPLATE_ID;  // DLT template ID from Fast2SMS portal
+
       if (apiKey) {
-        const smsRes = await fetch(
-          `https://www.fast2sms.com/dev/bulkV2?authorization=${apiKey}&route=otp&variables_values=${otp}&flash=0&numbers=${contact}`,
-          { method: 'GET', headers: { 'cache-control': 'no-cache' } }
-        );
+        let smsUrl;
+
+        if (dltSenderId && dltTemplate) {
+          // ── DLT SMS route ──────────────────────────────────────────────
+          // Used AFTER DLT registration is complete on Fast2SMS portal.
+          // Requires: FAST2SMS_SENDER_ID + FAST2SMS_TEMPLATE_ID in Railway.
+          // DLT message format: "Your FuelBunk Pro OTP is {#var#}. Valid 10 mins."
+          // variables_values fills the {#var#} placeholder with the actual OTP.
+          smsUrl = `https://www.fast2sms.com/dev/bulkV2?authorization=${apiKey}&route=dlt&sender_id=${dltSenderId}&message=${dltTemplate}&variables_values=${otp}&flash=0&numbers=${contact}`;
+          console.log(`[SMS] Using DLT route — sender: ${dltSenderId}, template: ${dltTemplate}`);
+        } else {
+          // ── OTP route (no DLT needed) ──────────────────────────────────
+          // Works immediately after Fast2SMS signup. No sender ID or template needed.
+          // Sends: "Your OTP is 123456" (Fast2SMS default OTP message).
+          // Switch to DLT route by adding FAST2SMS_SENDER_ID + FAST2SMS_TEMPLATE_ID to Railway.
+          smsUrl = `https://www.fast2sms.com/dev/bulkV2?authorization=${apiKey}&route=otp&variables_values=${otp}&flash=0&numbers=${contact}`;
+          console.log(`[SMS] Using OTP route. Add FAST2SMS_SENDER_ID + FAST2SMS_TEMPLATE_ID to switch to DLT route.`);
+        }
+
+        // DLT route already has apiKey in query param above; OTP route also includes it in URL
+        const smsRes = await fetch(smsUrl, {
+          method: 'GET',
+          headers: { 'cache-control': 'no-cache' }
+        });
         const smsJson = await smsRes.json();
-        if (!smsJson.return) throw new Error('SMS send failed: ' + (smsJson.message||'unknown'));
+        if (!smsJson.return) throw new Error('SMS send failed: ' + (smsJson.message || 'unknown'));
+        console.log(`[SMS] Sent to ${contact} — request_id: ${smsJson.request_id || 'n/a'}`);
       } else {
-        console.log(`[OTP DEV SMS] Phone: ${contact}, OTP: ${otp} (set FAST2SMS_API_KEY in Railway)`);
+        console.log(`[OTP DEV SMS] Phone: ${contact}, OTP: ${otp} (set FAST2SMS_API_KEY in Railway to enable SMS)`);
       }
     } else {
       // Email OTP via nodemailer
@@ -315,7 +339,13 @@ function authRoutes(db) {
         'INSERT INTO otp_requests (contact, contact_type, otp_hash, expires_at) VALUES ($1, $2, $3, $4)'
       ).run(contact, contactType, otpHash, expiresAt);
 
-      await sendOtpDelivery(contactType, contact, otp);
+      let smsErr = null;
+      try {
+        await sendOtpDelivery(contactType, contact, otp);
+      } catch(smsErr) {
+        // Non-fatal: OTP already saved to DB. Log and continue — dev mode shows OTP in Railway console.
+        console.error('[forgot-password] OTP delivery failed (non-fatal):', smsErr.message);
+      }
 
       const maskedContact = isEmail
         ? contact.replace(/(.{2}).*(@.*)/, '$1***$2')
