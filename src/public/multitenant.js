@@ -128,6 +128,10 @@ function mt_omcSelect(radio) {
 }
 
 async function mt_showSelector() {
+  // Clean ALL body-level overlays — they persist through app.innerHTML changes
+  document.querySelectorAll(
+    '#modal-overlay, [id*="Overlay"], [id*="overlay"], .modal-overlay'
+  ).forEach(function(el){ el.remove(); });
   const tenants = mt_getTenants();
   const app = document.getElementById('app');
   const isSuperLoggedIn = mt_isSuperLoggedIn();
@@ -294,6 +298,11 @@ function mt_showTenantForm(existing) {
   const isEdit = !!existing;
   const app = document.getElementById('app');
   const newId = existing?.id || ('t_' + Date.now().toString(36));
+  // Clean ALL body-level overlays before rendering the form
+  // These persist across app.innerHTML replacements and intercept button clicks
+  document.querySelectorAll(
+    '#modal-overlay, [id*="Overlay"], [id*="overlay"], .modal-overlay'
+  ).forEach(function(el){ el.remove(); });
   window.scrollTo(0, 0);
   document.documentElement.scrollTop = 0;
   document.body.scrollTop = 0;
@@ -351,9 +360,9 @@ function mt_showTenantForm(existing) {
           ` : ''}
         </div>
         <input type="hidden" id="tId" value="${newId}" />
-        <div style="display:flex;gap:8px">
-          <button class="btn btn-ghost" style="flex:1" onclick="mt_showSelector()">Cancel</button>
-          <button class="btn btn-accent" style="flex:1" onclick="mt_saveTenant(${isEdit})">💾 ${isEdit ? 'Save Changes' : 'Create Station'}</button>
+        <div style="display:flex;gap:8px;position:sticky;bottom:0;background:var(--bg-0);padding:12px 0 4px;margin-top:8px;border-top:1px solid var(--border-light)">
+          <button type="button" class="btn btn-ghost" style="flex:1" onclick="mt_showSelector()">Cancel</button>
+          <button type="button" class="btn btn-accent" style="flex:1" onclick="mt_saveTenant(${isEdit})">💾 ${isEdit ? 'Save Changes' : 'Create Station'}</button>
         </div>
       </div>
     </div>

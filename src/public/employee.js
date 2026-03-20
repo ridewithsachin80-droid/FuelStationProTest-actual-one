@@ -3286,6 +3286,17 @@ async function fetchPublicEmployees() {
 }
 
 function showLoginScreen() {
+  // Clean ALL body-level overlays — they intercept clicks if left in DOM
+  document.querySelectorAll(
+    '#modal-overlay, [id*="Overlay"], [id*="overlay"], .modal-overlay'
+  ).forEach(function(el){ el.remove(); });
+
+  // Clean ALL body-level overlays first — they stay across app.innerHTML replacements
+  // and will intercept all clicks if left lingering (modal-overlay, billingOverlay, etc.)
+  document.querySelectorAll(
+    '#modal-overlay, [id*="Overlay"], [id*="overlay"], .modal-overlay'
+  ).forEach(function(el){ el.remove(); });
+
   // Cache active tenant ID so _tenantKey() works for localStorage scoping
   _cacheTenantId();
 

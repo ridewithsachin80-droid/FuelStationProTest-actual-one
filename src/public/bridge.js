@@ -36,6 +36,10 @@
   // (bypassing our override when employee/super admin taps the landing page buttons)
   window._origShowSelectorForLanding = _origShowSelector;
   window.mt_showSelector = async function() {
+    // Always clean body overlays first — they intercept clicks on rendered content
+    document.querySelectorAll(
+      '#modal-overlay, [id*="Overlay"], [id*="overlay"], .modal-overlay'
+    ).forEach(function(el){ el.remove(); });
     const isSuperActive = (typeof mt_isSuperLoggedIn === 'function') ? mt_isSuperLoggedIn() : false;
     const hasSuperCookie = (function() {
       var m = document.cookie.match(/(?:^|; )sa_entry=([^;]*)/);
