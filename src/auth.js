@@ -256,13 +256,35 @@ function authRoutes(db) {
         }
 
         // DLT route already has apiKey in query param above; OTP route also includes it in URL
+        const smsController = new AbortController();
+        const smsTimeout = setTimeout(() => smsController.abort(), 8000); // 8 second timeout
         const smsRes = await fetch(smsUrl, {
           method: 'GET',
-          headers: { 'cache-control': 'no-cache' }
+          headers: { 'cache-control': 'no-cache' },
+          signal: smsController.signal
         });
+        clearTimeout(smsTimeout);
         const smsJson = await smsRes.json();
-        if (!smsJson.return) throw new Error('SMS send failed: ' + (smsJson.message || 'unknown'));
-        console.log(`[SMS] Sent to ${contact} — request_id: ${smsJson.request_id || 'n/a'}`);
+        // Always log the full Fast2SMS response to Railway console for debugging
+        console.log(`[SMS] Fast2SMS response:`, JSON.stringify(smsJson));
+        if (!smsJson.return) throw new Error('SMS send failed: ' + (smsJson.message || JSON.stringify(smsJson)));
+        console.log(`[SMS] ✅ Sent to ${contact} — request_id: ${smsJson.request_id || 'n/a'}`);        
+        // Also try WhatsApp delivery if configured (as backup/primary)
+        const waKey = process.env.FAST2SMS_API_KEY;
+        const waEnabled = process.env.FAST2SMS_WHATSAPP === 'true';
+        if (waEnabled && waKey) {
+          try {
+            const waMsg = `Your FuelBunk Pro OTP is *${otp}*. Valid for 10 minutes.`;
+            const waRes = await fetch(
+              `https://www.fast2sms.com/dev/whatsapp?authorization=${waKey}&to=${contact}&type=text&body=${encodeURIComponent(waMsg)}`,
+              { method: 'GET', headers: { 'cache-control': 'no-cache' } }
+            );
+            const waJson = await waRes.json();
+            console.log(`[WhatsApp] Fast2SMS WA response:`, JSON.stringify(waJson));
+          } catch(waErr) {
+            console.log(`[WhatsApp] Delivery failed (non-fatal):`, waErr.message);
+          }
+        }
       } else {
         console.log(`[OTP DEV SMS] Phone: ${contact}, OTP: ${otp} (set FAST2SMS_API_KEY in Railway to enable SMS)`);
       }
@@ -351,10 +373,17 @@ function authRoutes(db) {
         ? contact.replace(/(.{2}).*(@.*)/, '$1***$2')
         : '+91 XXXXX' + contact.slice(5);
 
-      res.json({ success: true, contactType, contact, maskedContact, message: `OTP sent to ${maskedContact}` });
+      res.json({ 
+        success: true, 
+        contactType, 
+        contact, 
+        maskedContact, 
+        message: `OTP sent to ${maskedContact}`,
+        note: 'If SMS not received in 30 seconds, check Railway logs or use email OTP'
+      });
     } catch(e) {
       console.error('[forgot-password]', e.message);
-      res.status(500).json({ error: 'Failed to send OTP. Try the other method.' });
+      res.status(500).json({ error: 'OTP delivery failed. Please try with your email address instead.' });
     }
   });
 

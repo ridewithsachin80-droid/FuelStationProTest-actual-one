@@ -78,12 +78,12 @@ class AlertSystem {
   async checkLowFuel(tenantId) {
     try {
       const result = await pool.query(`
-        SELECT tank_id, fuel_type, current_level, capacity,
-               (current_level::float / capacity * 100) as percentage
+        SELECT id, fuel_type, current_level, capacity,
+               CASE WHEN capacity > 0 THEN (current_level::float / capacity * 100) ELSE 0 END as percentage
         FROM tanks
         WHERE tenant_id = $1
           AND active = true
-          AND current_level < 500
+          AND current_level < COALESCE(low_alert, 500)
         ORDER BY percentage ASC
       `, [tenantId]);
 
@@ -92,8 +92,8 @@ class AlertSystem {
           type: 'low_fuel',
           severity: tank.percentage < 10 ? 'critical' : 'warning',
           title: `Low fuel in ${tank.fuel_type} tank`,
-          message: `Tank ${tank.tank_id} (${tank.fuel_type}) is at ${Math.round(tank.percentage)}% (${tank.current_level}L remaining)`,
-          data: { tank_id: tank.tank_id, level: tank.current_level, percentage: tank.percentage }
+          message: `Tank ${tank.id} (${tank.fuel_type}) is at ${Math.round(tank.percentage)}% (${tank.current_level}L remaining)`,
+          data: { tank_id: tank.id, level: tank.current_level, percentage: tank.percentage }
         });
       }
     } catch (error) {

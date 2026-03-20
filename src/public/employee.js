@@ -3587,6 +3587,7 @@ function showForgotPassword(step, data) {
         '</div>' +
         '<button class="btn btn-accent btn-block" style="padding:14px;font-size:14px;margin-top:6px" onclick="doForgotStep2(\'' + (data.contact||'') + '\')">Verify OTP</button>' +
         '<div style="text-align:center;margin-top:12px"><button onclick="showForgotPassword(\'contact\')" style="background:none;border:none;color:var(--text-3);font-size:11px;cursor:pointer;font-family:var(--font)">&#8592; Try different contact</button></div>' +
+      '<div style="text-align:center;margin-top:8px;font-size:10px;color:var(--text-3);font-family:var(--font);line-height:1.6">Not received? SMS can take 1–2 min.<br>Or try again using your email address.</div>' +
       '</div>' + backBtn +
       '</div></div>';
     setTimeout(function() { var u = document.getElementById('fpOtp'); if (u) u.focus(); }, 100);
