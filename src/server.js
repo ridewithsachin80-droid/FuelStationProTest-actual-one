@@ -1222,6 +1222,40 @@ async function startServer() {
         }
       }
 
+      // BUG-04 FIX: UR-05 requirement — one sale entry per employee per day.
+      // Block a second submission from the same employee on the same date (IST).
+      // Idempotency keys handle exact retries; this handles genuinely new duplicate entries.
+      // A setting 'allow_multi_sale_per_day' can be set to '1' in tenant settings to opt out
+      // (for stations with multiple shifts where the same employee legitimately sells twice).
+      if (sale.employeeId || sale.employee) {
+        const saleDate = (sale.date || istDate()).slice(0, 10);
+        const empId = String(sale.employeeId || '');
+        const empName = String(sale.employee || sale.employeeName || '');
+        // Check opt-out setting first
+        const optOutRow = await client.query(
+          "SELECT value FROM settings WHERE tenant_id=$1 AND key='allow_multi_sale_per_day'",
+          [tenantId]
+        );
+        const optOut = optOutRow.rows[0]?.value === '1';
+        if (!optOut) {
+          const dupCheck = await client.query(
+            `SELECT id FROM sales
+             WHERE tenant_id=$1 AND date=$2
+               AND (employee_id=$3 OR employee_name=$4)
+               AND (idempotency_key IS NULL OR idempotency_key != $5)
+             LIMIT 1`,
+            [tenantId, saleDate, empId || null, empName || null, sale.idempotencyKey || '']
+          );
+          if (dupCheck.rows.length > 0) {
+            client.release();
+            return res.status(409).json({
+              error: 'Duplicate entry: this employee has already submitted a sale for today. Contact your admin if this is a new shift.',
+              code: 'DUPLICATE_DAILY_SALE',
+            });
+          }
+        }
+      }
+
       await client.query('BEGIN');
 
       // BUG-B FIX: Credit limit enforcement INSIDE a transaction with SELECT FOR UPDATE
