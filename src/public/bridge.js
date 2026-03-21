@@ -158,9 +158,11 @@
     clearAuth();
     if (typeof APP !== 'undefined') { APP.tenant = null; APP.loggedIn = false; APP.role = null; APP.adminUser = null; }
     // Remove selector overlay from DOM so showLoginScreen renders cleanly
-    var sel = document.getElementById('stationSelectorOverlay') || document.querySelector('.selector-overlay') || document.querySelector('[id*="selector"]');
-    if (sel) sel.remove();
-    if (typeof showLoginScreen === 'function') showLoginScreen();
+    // LOGOUT FIX: Call mt_showSelector() — re-renders the selector with isSuperLoggedIn=false
+    // (shows the login form). showLoginScreen() was wrong: it renders the employee/admin portal
+    // landing page. That page, appended into #app while the old fixed-position selector was
+    // still there, was invisible — making the logout button appear to do nothing.
+    if (typeof mt_showSelector === 'function') mt_showSelector();
     else window.location.reload();
   };
 
@@ -707,9 +709,12 @@
       document.cookie = 'sa_entry=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/; SameSite=Strict';
       clearAuth();
       if (typeof APP !== 'undefined') { APP.tenant = null; APP.loggedIn = false; APP.role = null; APP.adminUser = null; }
-      // Remove all overlays so login screen renders on clean DOM
+      // Remove all overlays so selector renders on clean DOM
       document.querySelectorAll('[id*="Overlay"],[id*="overlay"],[id*="selector"]').forEach(function(el){ el.remove(); });
-      if (typeof showLoginScreen === 'function') showLoginScreen();
+      // LOGOUT FIX: Call mt_showSelector() — re-renders the selector with isSuperLoggedIn=false
+      // (shows the login form). showLoginScreen() was wrong: it renders the employee/admin portal
+      // landing page which is invisible behind the still-mounted fixed-position selector div.
+      if (typeof mt_showSelector === 'function') mt_showSelector();
       else window.location.reload();
     };
 
