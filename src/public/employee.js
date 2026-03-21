@@ -3376,21 +3376,46 @@ async function fetchPublicEmployees() {
   } catch {}
 }
 
-// mt_doSuperLoginLanding: shim that reads from the landing-page super admin form
-// (ids: superUserLanding / superPassLanding) then delegates to mt_doSuperLogin.
-// Needed because the selector form uses ids superUser/superPass — using the same ids
-// in the landing form caused a "Duplicate form field id" browser issue + wrong element
-// returned by getElementById when both forms existed in the DOM simultaneously.
-function mt_doSuperLoginLanding() {
+// mt_doSuperLoginLanding: standalone login handler for the landing-page super admin form.
+// Does NOT delegate to mt_doSuperLogin (which reads from #superUser/#superPass — those
+// don't exist on the landing page, causing silent early return). Calls AuthAPI directly.
+async function mt_doSuperLoginLanding() {
   var uEl = document.getElementById('superUserLanding');
   var pEl = document.getElementById('superPassLanding');
-  if (!uEl || !pEl) { if (typeof mt_doSuperLogin === 'function') mt_doSuperLogin(); return; }
-  // Temporarily copy values into the ids that mt_doSuperLogin reads
-  var sU = document.getElementById('superUser');
-  var sP = document.getElementById('superPass');
-  if (sU) sU.value = uEl.value;
-  if (sP) sP.value = pEl.value;
-  if (typeof mt_doSuperLogin === 'function') mt_doSuperLogin();
+  if (!uEl || !pEl) { if (typeof mt_doSuperLogin === 'function') { mt_doSuperLogin(); return; } }
+  var username = (uEl ? uEl.value.trim() : '');
+  var password = (pEl ? pEl.value : '');
+  if (!username || !password) {
+    if (typeof toast === 'function') toast('Enter username and password', 'error');
+    else if (typeof mt_toast === 'function') mt_toast('Enter username and password', 'error');
+    return;
+  }
+  var btn = document.querySelector('[onclick*="mt_doSuperLoginLanding"]');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Logging in…'; }
+  try {
+    var result = await AuthAPI.superLogin(username, password);
+    if (result && result.success) {
+      sessionStorage.setItem('fb_super_token', result.token);
+      sessionStorage.setItem('fb_super_session', JSON.stringify({ loggedIn: true, at: Date.now() }));
+      if (typeof setAuthToken === 'function') setAuthToken(result.token);
+      if (typeof startSuperSessionHeartbeat === 'function') startSuperSessionHeartbeat();
+      if (typeof mt_getTenants_async === 'function') await mt_getTenants_async().catch(function(){});
+      if (typeof mt_toast === 'function') mt_toast('Super Admin logged in', 'success');
+      // Show the full station selector (original mt_showSelector, not bridge override)
+      var origSel = window._origShowSelectorForLanding;
+      if (typeof origSel === 'function') origSel();
+      else if (typeof mt_showSelector === 'function') mt_showSelector();
+    } else {
+      if (typeof mt_toast === 'function') mt_toast('Invalid credentials', 'error');
+      else if (typeof toast === 'function') toast('Invalid credentials', 'error');
+    }
+  } catch(e) {
+    var msg = (e && e.message) ? e.message : 'Login failed';
+    if (typeof mt_toast === 'function') mt_toast(msg, 'error');
+    else if (typeof toast === 'function') toast(msg, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '\uD83D\uDD12 Login as Super Admin'; }
+  }
 }
 window.mt_doSuperLoginLanding = mt_doSuperLoginLanding;
 
