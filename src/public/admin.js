@@ -483,7 +483,7 @@ function renderTanks(D) {
     const diff = r.reading - r.calculated;
     const diffHtml = diff === 0 ? `<span style="color:var(--green)" class="fw-700">OK</span>` :
       `<span style="color:${diff < 0 ? 'var(--red)' : 'var(--orange)'}" class="fw-700">${diff > 0 ? '+' : ''}${fmt(diff)} L</span>`;
-    const dipTank = D.tanks.find(t => parseInt(t.id) === parseInt(r.tankId));
+    const dipTank = D.tanks.find(t => String(t.id) === String(r.tankId));
     const dipFuel = dipTank ? getFuel(dipTank.fuelType) : null;
     const tankLabel = dipTank ? `Tank ${r.tankId} <span style="font-size:10px;color:${dipFuel?.color||'var(--text-3)'}">${dipFuel?.short||''}</span>` : `Tank ${r.tankId}`;
     return `<tr><td>${r.date}</td><td class="mono">${r.time}</td><td>${tankLabel}</td><td class="r mono fw-700" style="color:var(--accent-light)">${fmt(r.reading)}</td><td class="r mono" style="color:var(--text-3)">${fmt(r.calculated)}</td><td class="r">${diffHtml}</td></tr>`;
@@ -8130,7 +8130,7 @@ async function saveNewTank() {
 }
 
 function openEditTankModal(tankId) {
-  const tank = APP.data.tanks.find(t => parseInt(t.id) === parseInt(tankId));
+  const tank = APP.data.tanks.find(t => String(t.id) === String(tankId));
   if (!tank) return;
   const fuel = getFuel(tank.fuelType);
 
@@ -8219,14 +8219,14 @@ async function saveEditTank(tankId) {
   if (!capacity) { toast('Please select a tank capacity', 'error'); return; }
   if (current > capacity) { toast(`Current level (${fmt(current)}L) exceeds new capacity (${fmt(capacity)}L). Reduce current level first.`, 'error'); return; }
 
-  const updatedTank = { id: parseInt(tankId), fuelType, capacity, current, lastDip: APP.data.tanks.find(t=>parseInt(t.id)===parseInt(tankId))?.lastDip || '' };
+  const updatedTank = { id: String(tankId), fuelType, capacity, current, lastDip: APP.data.tanks.find(t=>String(t.id)===String(tankId))?.lastDip || '' };
 
   try {
     await db.put('tanks', _tankForPut(updatedTank));
     const freshEdited = await db.getAll('tanks');
     APP.data.tanks = freshEdited.map(_normTank);
   } catch(e) {
-    const idx = APP.data.tanks.findIndex(t => parseInt(t.id) === parseInt(tankId));
+    const idx = APP.data.tanks.findIndex(t => String(t.id) === String(tankId));
     if (idx >= 0) APP.data.tanks[idx] = _normTank(updatedTank);
   }
   closeModal();
@@ -8235,7 +8235,7 @@ async function saveEditTank(tankId) {
 }
 
 function confirmDeleteTank(tankId) {
-  const tank = APP.data.tanks.find(t => parseInt(t.id) === parseInt(tankId));
+  const tank = APP.data.tanks.find(t => String(t.id) === String(tankId));
   if (!tank) return;
   const fuel = getFuel(tank.fuelType);
   openModal('🗑 Delete Tank',
@@ -8256,13 +8256,13 @@ function confirmDeleteTank(tankId) {
 async function deleteTank(tankId) {
   try {
     await db.delete('tanks', tankId);
-    const tid = parseInt(tankId);
+    const tid = String(tankId); // PERMANENT FIX: tanks.id is TEXT
     const freshDeleted = await db.getAll('tanks');
     APP.data.tanks = freshDeleted.map(_normTank);
     APP.data.dipReadings = (APP.data.dipReadings || []).filter(d => parseInt(d.tankId) !== tid);
   } catch(e) {
-    const tid = parseInt(tankId);
-    APP.data.tanks = APP.data.tanks.filter(t => parseInt(t.id) !== tid);
+    const tid = String(tankId); // PERMANENT FIX: tanks.id is TEXT
+    APP.data.tanks = APP.data.tanks.filter(t => String(t.id) !== String(tid));
     APP.data.dipReadings = (APP.data.dipReadings || []).filter(d => parseInt(d.tankId) !== tid);
   }
   closeModal();
@@ -8275,7 +8275,12 @@ async function deleteTank(tankId) {
 // ── Normalize a tank object from server (fixes type mismatches) ──
 function _normTank(t) {
   if (!t) return t;
-  t.id       = parseInt(t.id)       || 0;
+  // PERMANENT FIX: tanks.id is TEXT in PostgreSQL (PRIMARY KEY(id, tenant_id) both TEXT).
+  // parseInt() was converting "1" → 1 (integer). The upsert ON CONFLICT (id, tenant_id)
+  // never matched because TEXT '1' != INTEGER 1 in PostgreSQL — it inserted a phantom row
+  // instead of updating current_level, leaving the real tank row at 0L permanently.
+  // This caused "Cannot sell — only 0L available" even with a full physical tank.
+  t.id       = t.id !== undefined && t.id !== null ? String(t.id) : '';
   t.capacity = parseInt(t.capacity) || 0;
   t.current  = parseFloat(t.current  !== undefined ? t.current  : (t.current_level  || 0));
   t.fuelType = t.fuelType || t.fuel_type || '';
@@ -8288,7 +8293,7 @@ function _normTank(t) {
 // overwriting the correctly aliased camelCase value in upsertRow
 function _tankForPut(t) {
   return {
-    id:          t.id,
+    id:          String(t.id),  // PERMANENT FIX: tanks.id is TEXT — always send as string
     fuelType:    t.fuelType,
     capacity:    t.capacity,
     current:     t.current,
@@ -8482,7 +8487,7 @@ function openDipModal(preselect) {
 
 function onDipTankChange() {
   const tankId = parseInt(document.getElementById('dipTank')?.value);
-  const tank = APP.data.tanks.find(t => parseInt(t.id) === tankId);
+  const tank = APP.data.tanks.find(t => String(t.id) === String(tankId));
   const ct = _tankChartType(tank);
   const useChart = !!ct;
   const cmR = _cmRange(ct) || { min:1, max:999 };
@@ -8518,7 +8523,7 @@ function updateDipPreview() {
   if (!preview || !volEl) return;
 
   const tankId = parseInt(document.getElementById('dipTank')?.value);
-  const tank = APP.data.tanks.find(t => parseInt(t.id) === tankId);
+  const tank = APP.data.tanks.find(t => String(t.id) === String(tankId));
   const ct = _tankChartType(tank);
   const capacity = parseInt(tank?.capacity) || 10000;
 
@@ -8576,7 +8581,7 @@ function updateDipPreview() {
 
 async function saveDip() {
   const tankId = parseInt(document.getElementById('dipTank').value);
-  const tank = APP.data.tanks.find(t => parseInt(t.id) === tankId);
+  const tank = APP.data.tanks.find(t => String(t.id) === String(tankId));
   const ct = _tankChartType(tank);
 
   let reading;
@@ -8623,10 +8628,13 @@ async function saveDip() {
     tank.lastDipSource = 'admin_dip'; // FA-04: marks that a physical dip was done — takes precedence over shift-close deductions
     try {
       await db.put('tanks', _tankForPut(tank));
-      // Reload tanks from server to confirm persistence
+    } catch(e) { console.warn('[Tank dip] db.put failed:', e.message); }
+
+    // Reload tanks from server to confirm persistence
+    try {
       const freshTanks = await db.getAll('tanks');
       if (freshTanks && freshTanks.length) APP.data.tanks = freshTanks.map(_normTank);
-    } catch(e) { console.warn('[Tank dip]', e.message); }
+    } catch(e) { console.warn('[Tank dip] reload failed:', e.message); }
   }
   auditLog('dip_reading', { tankId, reading, method });
   closeModal();
