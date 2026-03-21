@@ -146,25 +146,10 @@
     }
   };
 
-  // Override super logout
-  const _origSuperLogout = window.mt_superLogout;
-  window.mt_superLogout = async function() {
-    try { await AuthAPI.logout(); } catch {}
-    sessionStorage.removeItem('fb_super_token');
-    sessionStorage.removeItem('fb_super_session');
-    sessionStorage.removeItem('fb_session');
-    // Clear sa_entry cookie so mt_showSelector doesn't re-trigger the selector
-    document.cookie = 'sa_entry=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/; SameSite=Strict';
-    clearAuth();
-    if (typeof APP !== 'undefined') { APP.tenant = null; APP.loggedIn = false; APP.role = null; APP.adminUser = null; }
-    // Remove selector overlay from DOM so showLoginScreen renders cleanly
-    // LOGOUT FIX: Call mt_showSelector() — re-renders the selector with isSuperLoggedIn=false
-    // (shows the login form). showLoginScreen() was wrong: it renders the employee/admin portal
-    // landing page. That page, appended into #app while the old fixed-position selector was
-    // still there, was invisible — making the logout button appear to do nothing.
-    if (typeof mt_showSelector === 'function') mt_showSelector();
-    else window.location.reload();
-  };
+  // BUG-06 FIX: Removed dead first mt_superLogout override that was here.
+  // The definitive override is set inside DOMContentLoaded below (re-applies after
+  // index.html resets window globals). This early module-scope assignment was
+  // immediately overwritten and served no purpose — it was just dead code.
 
   // Override mt_isSuperLoggedIn — check sessionStorage only (clears on tab close)
   const _origIsSuperLoggedIn = window.mt_isSuperLoggedIn;
