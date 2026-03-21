@@ -18,6 +18,39 @@
 (function() {
   'use strict';
 
+  // ── Startup: retry any blocked IndexedDB deletions from previous session ──
+  // When mt_deleteTenant fires while the IDB is still open (onblocked event),
+  // it writes fb_idb_delete_pending_{tenantId} to localStorage and proceeds.
+  // On the very next page load (this IIFE runs before any IDB connections open),
+  // we pick up those pending deletions and complete them.
+  (function _retryPendingIdbDeletes() {
+    try {
+      var toDelete = [];
+      for (var i = 0; i < localStorage.length; i++) {
+        var k = localStorage.key(i);
+        if (k && k.startsWith('fb_idb_delete_pending_')) {
+          toDelete.push(k);
+        }
+      }
+      toDelete.forEach(function(k) {
+        var tenantId = k.replace('fb_idb_delete_pending_', '');
+        var dbName   = 'FuelBunkPro_' + tenantId;
+        try {
+          var req = indexedDB.deleteDatabase(dbName);
+          req.onsuccess = function() {
+            localStorage.removeItem(k);
+            console.log('[Bridge] Deferred IDB delete completed:', dbName);
+          };
+          req.onerror = function() { localStorage.removeItem(k); };
+          req.onblocked = function() {
+            console.warn('[Bridge] IDB delete still blocked on load:', dbName);
+            // Leave the key — will retry next load
+          };
+        } catch(e) { localStorage.removeItem(k); }
+      });
+    } catch(e) { /* localStorage unavailable — non-fatal */ }
+  })();
+
   // ═══════════════════════════════════════════
   // TENANT REGISTRY — API-backed with localStorage cache
   // ═══════════════════════════════════════════
@@ -716,17 +749,61 @@
       setAuthToken(superToken);
       try {
         await TenantAPI.remove(id);
-        // ROOT-CAUSE FIX: Delete the IndexedDB database for this station.
-        // The original multitenant.js mt_deleteTenant called indexedDB.deleteDatabase() but
-        // bridge.js's override did NOT — leaving stale lubes_sales, lubes_products, sales etc
-        // in IndexedDB. On station recreate with the same tenant_id, loadData() read the old
-        // IndexedDB data and wrote it back to the server settings table, making old March 16
-        // lube sales reappear in a freshly created station.
+        // ROOT-CAUSE FIX: Await IndexedDB deletion before proceeding.
+        // The previous fire-and-forget indexedDB.deleteDatabase() returned immediately
+        // without waiting for the actual deletion to complete. If the DB was still open
+        // (e.g. another tab, or the current page still held a connection), the request
+        // would fire the 'onblocked' event and the database would remain intact until
+        // all connections closed. On station recreate with the same tenant_id, loadData()
+        // then read the old IDB data (employees, lubes_products, lubes_sales from March 16)
+        // and wrote it back to the server settings table — making stale data reappear.
+        //
+        // Fix: wrap in a Promise that resolves on success, error, OR blocked (blocked means
+        // the current page holds a connection — we still proceed; the IDB will be deleted
+        // once the page reloads and the connection is released).
         try {
           const dbName = 'FuelBunkPro_' + id;
-          indexedDB.deleteDatabase(dbName);
-          console.log('[mt_deleteTenant] Deleted IndexedDB:', dbName);
-        } catch(e) { console.warn('[mt_deleteTenant] IndexedDB delete failed:', e.message); }
+          await new Promise(function(resolve) {
+            try {
+              const req = indexedDB.deleteDatabase(dbName);
+              req.onsuccess = function() {
+                console.log('[mt_deleteTenant] IndexedDB deleted:', dbName);
+                resolve();
+              };
+              req.onerror = function(ev) {
+                console.warn('[mt_deleteTenant] IndexedDB delete error:', ev.target?.error?.message);
+                resolve(); // non-fatal — proceed with deletion
+              };
+              req.onblocked = function() {
+                // DB still open in this tab — will be deleted on next page load.
+                // Mark it for cleanup so the next loadData() skips it.
+                console.warn('[mt_deleteTenant] IndexedDB delete blocked (open connections) — will complete on reload:', dbName);
+                try { localStorage.setItem('fb_idb_delete_pending_' + id, '1'); } catch(e) {}
+                resolve(); // proceed — IDB cleanup happens on reload
+              };
+            } catch(e) {
+              console.warn('[mt_deleteTenant] indexedDB.deleteDatabase threw:', e.message);
+              resolve();
+            }
+          });
+        } catch(e) { console.warn('[mt_deleteTenant] IndexedDB cleanup error:', e.message); }
+
+        // Clear ALL in-memory window state for the deleted station so stale data
+        // cannot survive in the current page session. This prevents employees,
+        // lube products, roster, attendance etc. from the old station appearing
+        // if the super admin navigates to a newly recreated station in the same session.
+        try {
+          window._lubesProducts   = [];
+          window._lubesSales      = [];
+          window._rosterData      = {};
+          window._attendanceData  = {};
+          window._payrollSaved    = {};
+          window._billingData     = null;
+          window._nozzleMeterLog  = [];
+          window._bankReconData   = {};
+          if (typeof APP !== 'undefined') APP.data = null;
+          console.log('[mt_deleteTenant] Cleared in-memory window state for station:', id);
+        } catch(e) { /* non-fatal */ }
 
         const active = (typeof mt_getActiveTenant === 'function') ? mt_getActiveTenant() : null;
         if (active && active.id === id) {

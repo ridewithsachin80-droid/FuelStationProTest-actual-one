@@ -1217,7 +1217,7 @@ async function mt_subSettingsFromBilling(tenantId, stationName) {
       + '<button onclick="event.stopPropagation();mt_ssTrialAdj(-5)" style="width:32px;height:32px;border-radius:6px;border:1px solid var(--border);background:var(--bg-2);color:var(--text-1);font-size:16px;font-weight:700;cursor:pointer;flex-shrink:0">-</button>'
       + '<button onclick="event.stopPropagation();mt_ssTrialAdj(-1)" style="width:32px;height:32px;border-radius:6px;border:1px solid var(--border);background:var(--bg-2);color:var(--text-1);font-size:16px;font-weight:700;cursor:pointer;flex-shrink:0">\u2212</button>'
       + '<div style="flex:1;text-align:center">'
-        + '<input id="ss_trial" type="number" value="'+trialDays+'" min="1" max="365" oninput="mt_ssUpdateEndDate()" style="width:80px;padding:6px;background:transparent;border:none;color:var(--accent-light);font-size:20px;font-weight:800;font-family:monospace;text-align:center;outline:none" />'
+        + '<input id="ss_trial_paid" type="number" value="'+trialDays+'" min="1" max="365" oninput="mt_ssUpdateEndDate()" style="width:80px;padding:6px;background:transparent;border:none;color:var(--accent-light);font-size:20px;font-weight:800;font-family:monospace;text-align:center;outline:none" />'
         + '<div style="font-size:10px;color:var(--text-3);margin-top:2px">trial days</div>'
       + '</div>'
       + '<button onclick="event.stopPropagation();mt_ssTrialAdj(1)" style="width:32px;height:32px;border-radius:6px;border:1px solid var(--border);background:var(--bg-2);color:var(--text-1);font-size:16px;font-weight:700;cursor:pointer;flex-shrink:0">+</button>'
@@ -1347,8 +1347,13 @@ function mt_ssToggleTrial() {
 })();
 
 // ── +/- buttons for trial days ─────────────────────────────────────────────
+// FIX: Read from the correct input — ss_trial_paid for paid plans with trial toggle,
+// ss_trial for Trial Only plan. The two inputs used to share id="ss_trial" which
+// caused DevTools duplicate-ID errors and wrong-value reads.
 function mt_ssTrialAdj(delta) {
-  var inp = document.getElementById('ss_trial');
+  var planId = document.getElementById('ss_plan')?.value || 'trial';
+  var inputId = (planId === 'trial') ? 'ss_trial' : 'ss_trial_paid';
+  var inp = document.getElementById(inputId);
   if (!inp) return;
   var v = (parseInt(inp.value) || 1) + delta;
   inp.value = Math.max(1, Math.min(365, v));
@@ -1389,7 +1394,9 @@ function mt_ssUpdateEndDate() {
   var grace     = parseInt(document.getElementById('ss_grace')?.value) || 0;
   var trialCard = document.getElementById('ss_trial_card');
   var trialOn   = trialCard && trialCard.getAttribute('data-trial-on') === '1';
-  var trialDays = parseInt(document.getElementById('ss_trial')?.value) || 30;
+  // FIX: read from ss_trial_paid (paid plan + trial toggle) or ss_trial (Trial Only)
+  var trialInputId = (planId === 'trial') ? 'ss_trial' : 'ss_trial_paid';
+  var trialDays = parseInt(document.getElementById(trialInputId)?.value) || 30;
   var hidden    = document.getElementById('ss_subend');
   var display   = document.getElementById('ss_end_display');
   if (!hidden || !display) return;
@@ -1439,8 +1446,10 @@ async function mt_ssDoSave(tenantId) {
   var plan      = document.getElementById('ss_plan')?.value || 'trial';
   var trialCard = document.getElementById('ss_trial_card');
   var trialOn   = trialCard && trialCard.getAttribute('data-trial-on') === '1';
-  var trial     = trialOn ? (parseInt(document.getElementById('ss_trial')?.value) || 0) : 0;
-  // For Trial Only plan, always save trial days from input
+  // FIX: read from the correct input — ss_trial_paid for paid+trial-toggle, ss_trial for Trial Only
+  var trialInputId = (plan === 'trial') ? 'ss_trial' : 'ss_trial_paid';
+  var trial     = trialOn ? (parseInt(document.getElementById(trialInputId)?.value) || 0) : 0;
+  // For Trial Only plan, always save trial days from ss_trial input
   if (plan === 'trial') trial = parseInt(document.getElementById('ss_trial')?.value) || 30;
   var grace  = parseInt(document.getElementById('ss_grace')?.value) || 3;
   var phone  = document.getElementById('ss_phone')?.value?.trim() || '';
