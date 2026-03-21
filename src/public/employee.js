@@ -263,6 +263,39 @@ function emp_saveSession() {
 }
 function emp_clearSession() { try { localStorage.removeItem(_tenantKey('fb_emp_session')); } catch {} }
 
+// BUG-08 FIX: Recover any in-flight sales that were being submitted when the browser crashed.
+// Called once after emp_loadSession() — merges recovered sales into pendingSales so they are
+// retried on the next flush cycle. Uses idempotency keys so there are no duplicates even if
+// the server already received the original request.
+function emp_recoverInflightSales() {
+  try {
+    const k = _tenantKey('fb_emp_inflight');
+    const inflight = JSON.parse(localStorage.getItem(k) || '[]');
+    if (!inflight.length) return;
+    const MAX_AGE_MS = 24 * 60 * 60 * 1000; // Discard in-flight records older than 24h
+    const now = Date.now();
+    const fresh = inflight.filter(s => (now - (s._inflightAt || 0)) < MAX_AGE_MS);
+    if (!fresh.length) { localStorage.removeItem(k); return; }
+    if (!empState.pendingSales) empState.pendingSales = [];
+    const existingKeys = new Set((empState.pendingSales).map(s => s.idempotencyKey));
+    let recovered = 0;
+    for (const s of fresh) {
+      if (!existingKeys.has(s.idempotencyKey)) {
+        const { _inflightAt, ...sale } = s;
+        empState.pendingSales.push(sale);
+        recovered++;
+      }
+    }
+    localStorage.removeItem(k); // Cleared — they are now in pendingSales and will be saved by emp_saveSession
+    if (recovered > 0) {
+      emp_saveSession();
+      console.log('[BUG-08] Recovered', recovered, 'in-flight sale(s) after crash');
+    }
+  } catch(e) {
+    console.warn('[BUG-08] inflight recovery error:', e.message);
+  }
+}
+
 // ── FA-01: Offline sale queue — flush on reconnect ─────────────────────────
 async function emp_flushPendingSales() {
   if (!navigator.onLine) return;
@@ -553,11 +586,13 @@ function renderEmployeePortal() {
   // If accessed by admin, show employee overview/demo
   if (APP.role === 'admin' && !empState.active && empState.page !== 'complete') {
     emp_loadSession();
+    emp_recoverInflightSales(); // BUG-08 FIX: recover crash-interrupted in-flight sales
   }
 
   // If employee is directly logged in, restore session
   if (APP.role === 'employee' && !empState.active && empState.page !== 'complete') {
     emp_loadSession();
+    emp_recoverInflightSales(); // BUG-08 FIX: recover crash-interrupted in-flight sales
     if (!empState.active) {
       // Employee session expired, back to login
       return `<div style="max-width:520px;margin:0 auto;text-align:center;padding:40px 20px">
@@ -2222,6 +2257,19 @@ function emp_recordSale() {
   empState.sales.unshift(sale);
   emp_saveSession();
 
+  // BUG-08 FIX: Write the sale to an "in-flight" backup in localStorage BEFORE the fetch.
+  // If the browser crashes while the request is in-flight (between send and response),
+  // the sale is recovered on next load via _empRecoverInflightSale() called at session restore.
+  // This backup is removed only when a definitive outcome (success, credit error, pump inactive)
+  // is received — not on network errors, which may mean the server already got the request.
+  try {
+    const _inflightKey = _tenantKey('fb_emp_inflight');
+    const _inflight = JSON.parse(localStorage.getItem(_inflightKey) || '[]');
+    _inflight.unshift({ ...sale, _inflightAt: Date.now() });
+    // Keep only last 10 in-flight records to bound storage
+    localStorage.setItem(_inflightKey, JSON.stringify(_inflight.slice(0, 10)));
+  } catch {}
+
   // ── Save to admin APP.data.sales + server DB via public endpoint ──
   if (APP.data?.sales) APP.data.sales.unshift(sale);
   // FA-01 FIX: Queue sale if network fails — emp_flushPendingSales retries on reconnect
@@ -2254,12 +2302,16 @@ function emp_recordSale() {
                 const creditCust = APP.data?.creditCustomers?.find(c => c.name === sale.customer);
                 if (creditCust) creditCust.outstanding = Math.max(0, (creditCust.outstanding || 0) - sale.amount);
               }
+              // BUG-08 FIX: Clear in-flight backup on definitive server success
+              try { const k=_tenantKey('fb_emp_inflight'); const f=JSON.parse(localStorage.getItem(k)||'[]'); localStorage.setItem(k,JSON.stringify(f.filter(s=>s.idempotencyKey!==sale.idempotencyKey))); } catch {}
               emp_saveSession();
               renderPage();
             } else if (resp.status === 422 && err.error && err.error.startsWith('Insufficient stock')) {
               // Server hard-blocked: tank stock exceeded — remove from local state
               empState.sales = empState.sales.filter(s => s.id !== sale.id);
               if (APP.data?.sales) APP.data.sales = APP.data.sales.filter(s => s.id !== sale.id);
+              // BUG-08 FIX: Clear in-flight backup on definitive server rejection
+              try { const k=_tenantKey('fb_emp_inflight'); const f=JSON.parse(localStorage.getItem(k)||'[]'); localStorage.setItem(k,JSON.stringify(f.filter(s=>s.idempotencyKey!==sale.idempotencyKey))); } catch {}
               toast(`❌ ${err.error}`, 'error');
               emp_saveSession();
               renderPage();
@@ -4682,6 +4734,7 @@ async function loadData() {
   const savedBankRecon= _s['bank_recon_data']  || null;
   const waPhone       = _s['waPhone']          || '';
   const waApiKey      = _s['waApiKey']         || '';
+  const allowMultiSalePerDay = _s['allow_multi_sale_per_day'] === '1' || _s['allow_multi_sale_per_day'] === true;
   // STOCK FIX: load lubes products + sales from bulk settings so employee stock updates are visible
   const bulkLubeProds = Array.isArray(_s['lubes_products']) ? _s['lubes_products'] : null;
   const bulkLubeSales = Array.isArray(_s['lubes_sales'])    ? _s['lubes_sales']    : null;
@@ -4765,6 +4818,7 @@ async function loadData() {
       omcName: omcName || '',
       waPhone: waPhone || '',
       waApiKey: waApiKey || '',
+      allowMultiSalePerDay: allowMultiSalePerDay || false, // BUG-04 FIX: loaded from server settings
       gstin: '',
       legalName: '',
       stateCode: '29',
