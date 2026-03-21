@@ -1465,6 +1465,21 @@ async function startServer() {
       }
       await auLog(req, 'CREATE_TENANT', 'tenants', tenantId, name);
 
+      // STALE DATA FIX: On station creation, explicitly purge any settings rows that may
+      // have survived from a previous station with the same tenant_id (deleted + recreated).
+      // This prevents old lubes_sales, lubes_products, prices etc from reappearing.
+      // Server delete cascade removes settings rows, but if the client wrote stale
+      // IndexedDB data back to the server before the station was marked deleted, orphaned
+      // rows may exist. Clear them all here so the new station starts completely clean.
+      try {
+        await pool.query("DELETE FROM settings WHERE tenant_id = $1", [tenantId]);
+        await pool.query("DELETE FROM lubes_sales WHERE tenant_id = $1", [tenantId]);
+        await pool.query("DELETE FROM lubes_products WHERE tenant_id = $1", [tenantId]);
+        console.log('[Tenant] Cleared stale data for new station:', tenantId);
+      } catch(cleanErr) {
+        console.warn('[Tenant] Stale data cleanup failed (non-fatal):', cleanErr.message);
+      }
+
       // ── Auto-seed lube catalog based on OMC ────────────────────────────────
       // Pre-loads the correct brand's products (SERVO/MAK/HP/APSARA) into the
       // station's lubes_products table with price=0 and stock=0.
