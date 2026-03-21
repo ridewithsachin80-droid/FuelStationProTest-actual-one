@@ -1187,9 +1187,13 @@ async function startServer() {
       const tenantCheck = await client.query('SELECT id FROM tenants WHERE id = $1', [tenantId]);
       if (!tenantCheck.rows.length) { client.release(); return res.status(404).json({ error: 'Tenant not found' }); }
 
-      // TC-019: Server-side tank stock enforcement — prevents overselling even if client check is bypassed.
-      // Hard block at actual tank level — no tolerance.
-      // Only enforces when tank data exists AND tank has been filled (current_level > 5% capacity).
+      // TC-019: Server-side tank stock enforcement — prevents overselling.
+      // PERMANENT FIX: The root cause of false blocks was _normTank() in admin.js calling
+      // parseInt(t.id) on a TEXT primary key. PostgreSQL ON CONFLICT (id, tenant_id) never
+      // matched because TEXT '1' != INTEGER 1 — every db.put('tanks') silently inserted a
+      // phantom row instead of updating current_level. Now _normTank uses String(t.id) and
+      // _tankForPut sends String(t.id), so ON CONFLICT correctly updates current_level.
+      // This check is now reliable and can safely hard-block overselling again.
       if (sale.fuelType && liters > 0) {
         const tankRow = await client.query(
           'SELECT current_level, capacity FROM tanks WHERE tenant_id=$1 AND LOWER(fuel_type)=LOWER($2)',
