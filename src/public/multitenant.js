@@ -1475,8 +1475,6 @@ async function mt_ssDoSave(tenantId) {
 }
 
 
-
-
 function mt_confirmDialog(title, bodyHtml, confirmLabel) {
   return new Promise(function(resolve) {
     // Remove any stale dialog left over from a previous call that never resolved
