@@ -694,12 +694,16 @@
       document.cookie = 'sa_entry=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/; SameSite=Strict';
       clearAuth();
       if (typeof APP !== 'undefined') { APP.tenant = null; APP.loggedIn = false; APP.role = null; APP.adminUser = null; }
-      // Remove all overlays so selector renders on clean DOM
-      document.querySelectorAll('[id*="Overlay"],[id*="overlay"],[id*="selector"]').forEach(function(el){ el.remove(); });
-      // LOGOUT FIX: Call mt_showSelector() — re-renders the selector with isSuperLoggedIn=false
-      // (shows the login form). showLoginScreen() was wrong: it renders the employee/admin portal
-      // landing page which is invisible behind the still-mounted fixed-position selector div.
-      if (typeof mt_showSelector === 'function') mt_showSelector();
+      // Remove the fixed selector panel + all overlays
+      var _sp = document.getElementById('stationSelectorPanel');
+      if (_sp) _sp.remove();
+      document.querySelectorAll('[id*="Overlay"],[id*="overlay"],[id*="Modal"],[id*="billing"],[id*="compare"]')
+        .forEach(function(el){ el.remove(); });
+      // Call the original mt_showSelector directly — re-renders app.innerHTML fresh.
+      // With tokens cleared, isSuperLoggedIn()=false → shows login form (not logout button).
+      var _origSel = window._origShowSelectorForLanding;
+      if (typeof _origSel === 'function') _origSel();
+      else if (typeof mt_showSelector === 'function') mt_showSelector();
       else window.location.reload();
     };
 
