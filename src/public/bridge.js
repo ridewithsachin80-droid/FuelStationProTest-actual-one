@@ -719,15 +719,33 @@
       setAuthToken(superToken);
       try {
         await TenantAPI.remove(id);
+        // ROOT-CAUSE FIX: Delete the IndexedDB database for this station.
+        // The original multitenant.js mt_deleteTenant called indexedDB.deleteDatabase() but
+        // bridge.js's override did NOT — leaving stale lubes_sales, lubes_products, sales etc
+        // in IndexedDB. On station recreate with the same tenant_id, loadData() read the old
+        // IndexedDB data and wrote it back to the server settings table, making old March 16
+        // lube sales reappear in a freshly created station.
+        try {
+          const dbName = 'FuelBunkPro_' + id;
+          indexedDB.deleteDatabase(dbName);
+          console.log('[mt_deleteTenant] Deleted IndexedDB:', dbName);
+        } catch(e) { console.warn('[mt_deleteTenant] IndexedDB delete failed:', e.message); }
+
         const active = (typeof mt_getActiveTenant === 'function') ? mt_getActiveTenant() : null;
         if (active && active.id === id) {
           if (typeof mt_clearActiveTenant === 'function') mt_clearActiveTenant();
-          // FIX: Clear ALL stale data for this station from localStorage.
-          // Otherwise deleted station's employees/data reappear next time any station is opened.
-          try { localStorage.removeItem('fb_data_snapshot'); } catch(e) {}
-          try { localStorage.removeItem('fb_api_cache'); } catch(e) {}
-          try { localStorage.removeItem('fb_emp_pins'); } catch(e) {}
+          // Clear ALL stale localStorage data for this station
+          const keySuffixes = ['fb_emp_cache', 'fb_emp_pins', 'fb_emp_session', 'fb_emp_history',
+                               'fb_data_snapshot', 'fb_api_cache', 'fb_active_tenant_id'];
+          keySuffixes.forEach(function(key) {
+            try { localStorage.removeItem(key); } catch(e) {}
+            try { localStorage.removeItem(key + '_' + id); } catch(e) {}
+          });
         }
+        // Also clear the global tenant_id cache if it matches deleted station
+        const cachedId = localStorage.getItem('fb_active_tenant_id');
+        if (cachedId === id) localStorage.removeItem('fb_active_tenant_id');
+
         await mt_getTenants_async();
         if (typeof mt_toast === 'function') mt_toast('Station deleted', 'success');
         if (typeof mt_showSelector === 'function') mt_showSelector();
