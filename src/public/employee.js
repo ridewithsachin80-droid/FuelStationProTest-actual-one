@@ -2282,7 +2282,7 @@ function emp_recordSale() {
 
   // BUG-08 FIX: Write the sale to an "in-flight" backup in localStorage BEFORE the fetch.
   // If the browser crashes while the request is in-flight (between send and response),
-  // the sale is recovered on next load via _empRecoverInflightSale() called at session restore.
+  // the sale is recovered on next load via emp_recoverInflightSales() called at session restore.
   // This backup is removed only when a definitive outcome (success, credit error, pump inactive)
   // is received — not on network errors, which may mean the server already got the request.
   try {
@@ -3414,7 +3414,7 @@ async function mt_doSuperLoginLanding() {
     if (typeof mt_toast === 'function') mt_toast(msg, 'error');
     else if (typeof toast === 'function') toast(msg, 'error');
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = '\uD83D\uDD12 Login as Super Admin'; }
+    if (btn) { btn.disabled = false; btn.textContent = '🔒 Login as Super Admin'; }
   }
 }
 window.mt_doSuperLoginLanding = mt_doSuperLoginLanding;
@@ -5108,7 +5108,6 @@ async function loadData() {
     }
   }
 }
-
 
 
 // ═══════════════════════════════════════════════════════════════════════
