@@ -2235,7 +2235,18 @@ function emp_recordSale() {
   if (empPayMode !== 'cash') {
     if (!v || v.length < 2) { toast('Enter valid vehicle number','error'); return; }
   }
-  if (v && v.length > 0 && !/^[A-Z0-9\s\-\.]+$/i.test(v)) { toast('Vehicle number has invalid characters','error'); return; }
+  // BUG-010 FIX: Validate Indian vehicle number format client-side using the same
+  // regex the server uses. Strip spaces/hyphens before testing (same as server).
+  // Regex: 2 state-code letters + 1-2 district digits + 1-3 series letters + 1-4 serial digits
+  // Examples: KA04AB1234, MH12CD567, DL3CAF1234, TN01A1234, BH01AA1234
+  if (v && v.length > 0) {
+    const cleanV = v.trim().replace(/[\s\-]/g, '').toUpperCase();
+    const vehicleRegex = /^[A-Z]{2}[0-9]{1,2}[A-Z]{1,3}[0-9]{1,4}$/;
+    if (!vehicleRegex.test(cleanV)) {
+      toast('Invalid vehicle number — use format: KA04AB1234 (state code + district + series + number)', 'error');
+      return;
+    }
+  }
   const amt = isNaN(a) || a <= 0 ? l * (EMP_PRICES[empSaleFuel] || 0) : a;
   if (isNaN(amt) || amt <= 0) { toast('Invalid amount','error'); return; }
 
@@ -2661,7 +2672,16 @@ function emp_recordDip() {
   const tankId = String(document.getElementById('empDipTank')?.value || '');
   const r = parseFloat(document.getElementById('empDipVal')?.value);
   if (isNaN(r)||r<=0) { toast('Enter valid dip reading','error'); return; }
-  if (r > 30000) { toast('Dip reading exceeds tank capacity limit','error'); return; }
+  // BUG-004 FIX: Use actual tank capacity instead of hardcoded 30,000 L.
+  // The old constant was chosen arbitrarily and accepted readings for a 10,000 L tank
+  // up to 30,000 L — 3× the physical volume — causing corrupted tank levels and
+  // a broken oversell guard. Look up the tank being measured and enforce its capacity.
+  const _dipTank = APP.data?.tanks?.find(t => String(t.id) === String(tankId));
+  const _dipTankCap = parseInt(_dipTank?.capacity) || 0;
+  if (_dipTankCap > 0 && r > _dipTankCap) {
+    toast(`Dip reading ${r.toLocaleString('en-IN')} L exceeds Tank ${tankId} capacity (${_dipTankCap.toLocaleString('en-IN')} L) — please re-measure`, 'error'); return;
+  }
+  if (!_dipTankCap && r > 50000) { toast('Dip reading exceeds maximum allowed value', 'error'); return; }
 
   const dip = { id: _genId(), tankId, reading: r, time: emp_time(), date: emp_today(), method: 'direct', employee: empState.user?.name || 'Employee' };
 

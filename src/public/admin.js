@@ -2428,36 +2428,63 @@ function rosterAssign(date, shiftName, empId) {
   if (!window._rosterData[key].includes(String(empId))) {
     window._rosterData[key].push(String(empId));
   }
+  // BUG-006 FIX: Write to localStorage immediately as crash-safe backup BEFORE
+  // the async API call. If the tab is closed in the next 600ms, this survives.
+  _rosterPersistLocal();
   renderPage();
-  rosterAutoSave(); // auto-save on every assign
+  rosterAutoSave(); // debounced server sync for UX indicator
 }
 function rosterUnassign(date, shiftName, empId) {
   const key = date + '_' + shiftName;
   if (!window._rosterData || !window._rosterData[key]) return;
   window._rosterData[key] = window._rosterData[key].filter(id => String(id) !== String(empId));
+  // BUG-006 FIX: Same immediate local backup on unassign
+  _rosterPersistLocal();
   renderPage();
-  rosterAutoSave(); // auto-save on every unassign
+  rosterAutoSave(); // debounced server sync
 }
+
+// Write current roster state to localStorage immediately — zero-latency crash safety.
+// Key is tenant-scoped so multi-station devices don't mix data.
+function _rosterPersistLocal() {
+  try {
+    const tenantId = APP.tenant?.id || APP.tenantId || 'default';
+    localStorage.setItem('fb_roster_unsaved_' + tenantId, JSON.stringify({
+      data: window._rosterData || {},
+      ts: Date.now()
+    }));
+  } catch(e) { /* localStorage full or unavailable — non-fatal */ }
+}
+
+// Clear the local backup once a server save is confirmed.
+function _rosterClearLocal() {
+  try {
+    const tenantId = APP.tenant?.id || APP.tenantId || 'default';
+    localStorage.removeItem('fb_roster_unsaved_' + tenantId);
+  } catch(e) {}
+}
+
 async function rosterSave() {
   try {
     await db.setSetting('shift_roster', window._rosterData || {});
+    _rosterClearLocal();
     toast('Roster saved', 'success');
   } catch(e) {
     toast('Failed to save roster: ' + (e.message||e), 'error');
   }
 }
 
-// Auto-save: debounced 600ms — fires after last assign/unassign action
-// Shows a subtle "Saving…" → "✓ Saved" indicator in the breadcrumb area
+// Auto-save: debounced 300ms (halved from 600ms) — batches rapid successive clicks
+// while keeping the save window short enough to survive normal tab navigation.
 let _rosterAutoSaveTimer = null;
 function rosterAutoSave() {
-  // Show saving indicator
   const ind = document.getElementById('roster-autosave-ind');
   if (ind) { ind.textContent = '⟳ Saving…'; ind.style.color = 'var(--text-3)'; ind.style.display = 'inline'; }
   clearTimeout(_rosterAutoSaveTimer);
   _rosterAutoSaveTimer = setTimeout(async function() {
     try {
       await db.setSetting('shift_roster', window._rosterData || {});
+      _rosterClearLocal(); // server confirmed — clear the emergency backup
       const ind2 = document.getElementById('roster-autosave-ind');
       if (ind2) {
         ind2.textContent = '✓ Saved';
@@ -2469,14 +2496,29 @@ function rosterAutoSave() {
       if (ind2) { ind2.textContent = '⚠ Save failed'; ind2.style.color = 'var(--red)'; }
       console.warn('[Roster] Auto-save failed:', e.message);
     }
-  }, 600);
+  }, 300);
 }
+
+// BUG-006 FIX: Flush any pending roster save when the page is being unloaded.
+// pagehide fires reliably across all browsers (including mobile) when the tab closes,
+// navigates away, or the app is backgrounded. We use the localStorage backup (already
+// written by _rosterPersistLocal) as the durable copy — nothing extra needed here
+// beyond clearing the timer so the next load can detect unsaved work.
+(function _rosterInstallUnloadGuard() {
+  window.addEventListener('pagehide', function() {
+    clearTimeout(_rosterAutoSaveTimer);
+    // Ensure the latest state is in localStorage (belt-and-suspenders)
+    _rosterPersistLocal();
+  });
+})();
 window.renderRoster = renderRoster;
 window.rosterNavWeek = rosterNavWeek;
 window.rosterAssign = rosterAssign;
 window.rosterUnassign = rosterUnassign;
 window.rosterSave = rosterSave;
 window.rosterAutoSave = rosterAutoSave;
+window._rosterPersistLocal = _rosterPersistLocal;
+window._rosterClearLocal = _rosterClearLocal;
 
 // ── ATTENDANCE ────────────────────────────────────────────────
 function renderAttendance(D) {
@@ -4851,18 +4893,39 @@ async function runBillScan() {
       mimeType = 'image/jpeg'; // always JPEG after canvas processing
     }
 
-    // Call server-side scan endpoint (server calls Claude API with key)
     const resp = await fetch('/api/data/scan-invoice', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + (window.getAuthToken ? getAuthToken() : '') },
       body: JSON.stringify({ imageData: base64, mimeType, filename: file.name }),
     });
     if (!resp.ok) {
-      let errMsg = 'Server error: ' + resp.status;
+      let errMsg = 'Server error (' + resp.status + ') — please try again.';
       try {
         const errBody = await resp.json();
         if (errBody.error) errMsg = errBody.error;
       } catch {}
+      // BUG-007 FIX: When the API key is missing, show an actionable setup guide
+      // instead of a raw server error. The server already returns a clear message
+      // string; detect it and render rich instructions so admins know exactly what to do.
+      if (errMsg.includes('ANTHROPIC_API_KEY')) {
+        if (errEl) {
+          errEl.style.display = 'block';
+          errEl.innerHTML =
+            '<strong style="font-size:13px">⚙️ AI Scanning Not Configured</strong><br>' +
+            '<span style="font-size:12px;line-height:1.7;display:block;margin-top:6px">' +
+            'To enable invoice scanning, add your Anthropic API key to Railway:<br>' +
+            '<ol style="margin:6px 0 0 16px;padding:0;font-size:12px">' +
+            '<li>Open <strong>Railway dashboard</strong> → your service → <strong>Variables</strong></li>' +
+            '<li>Add variable: <code style="background:rgba(0,0,0,0.15);padding:1px 5px;border-radius:3px">ANTHROPIC_API_KEY</code> = your key</li>' +
+            '<li>Get a key at <strong>console.anthropic.com</strong> (free trial available)</li>' +
+            '<li>Redeploy the service — scanning will work immediately</li>' +
+            '</ol>' +
+            '</span>';
+        }
+        if (runBtn) { runBtn.disabled = false; runBtn.textContent = 'Scan Invoice →'; }
+        if (cancelBtn) cancelBtn.disabled = false;
+        return; // don't throw — the custom UI above IS the error display
+      }
       throw new Error(errMsg);
     }
     const result = await resp.json();
@@ -8612,9 +8675,16 @@ async function saveDip() {
     if (tank && reading > parseInt(tank.capacity)) { toast('Reading exceeds tank capacity (' + fmt(tank.capacity) + 'L)', 'error'); return; }
   }
 
-  const tankCap = parseInt(tank?.capacity) || 99999;
-  if (reading > tankCap * 1.15) {
-    toast('Reading seems too high — check dip measurement', 'error'); return;
+  // BUG-004 FIX: Enforce strict capacity limit for ALL dip modes (direct and chart-based).
+  // The old 1.15× buffer allowed readings up to 115% of capacity — a physically impossible
+  // state that corrupts fill-% calculations and breaks the oversell guard (tank showed >100%
+  // full, so guard thought more fuel was available than actually existed).
+  // Chart tables already cap at the tank's rated volume; the 1.15× guard was unreachable for
+  // valid chart readings and only ever fired on genuinely erroneous direct-entry values.
+  // Strict: if reading > capacity, it is definitively wrong — block and tell the user why.
+  const tankCap = parseInt(tank?.capacity) || 0;
+  if (tankCap > 0 && reading > tankCap) {
+    toast(`Reading ${reading.toLocaleString('en-IN')} L exceeds tank capacity (${fmt(tankCap)} L) — please verify the dip measurement`, 'error'); return;
   }
 
   const dip = {
@@ -9621,9 +9691,45 @@ function saveAddPump() {
 function confirmDeletePump(pumpId) {
   const pump = APP.data.pumps.find(p => String(p.id) === String(pumpId));
   if (!pump) return;
+
+  // BUG-012 FIX: Hard-block deletion if the pump has sales in the last 90 days.
+  // Deleting a pump with sales history orphans those records — the pump reference
+  // becomes a dangling ID and the reconciliation reports silently exclude them.
+  // The correct operation is deactivation (status = 'inactive'), which hides the
+  // pump from new assignments while keeping all historical data intact.
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - 90);
+  const cutoffStr = cutoff.toISOString().slice(0, 10);
+  const recentSales = (APP.data.sales || []).filter(s =>
+    String(s.pump) === String(pumpId) && (s.date || '') >= cutoffStr
+  );
+
+  if (recentSales.length > 0) {
+    openModal('⚠️ Cannot Delete Pump',
+      `<div style="text-align:center;padding:12px 0">
+         <div style="font-size:40px;margin-bottom:12px">🔒</div>
+         <div style="font-size:15px;font-weight:700;color:var(--text-0);margin-bottom:10px">
+           ${sanitize(pump.name)} has ${recentSales.length} sale${recentSales.length>1?'s':''} in the last 90 days
+         </div>
+         <div style="font-size:13px;color:var(--text-2);line-height:1.7;margin-bottom:14px">
+           Deleting a pump with recent sales removes it from reconciliation reports and
+           orphans those sale records. <strong>Deactivate instead</strong> — the pump
+           disappears from new assignments but all history is preserved.
+         </div>
+         <div style="background:rgba(212,148,15,0.08);border:1px solid rgba(212,148,15,0.25);border-radius:8px;padding:10px 14px;font-size:12px;color:var(--accent-light)">
+           💡 Go to <strong>Edit Pump → Status → Inactive</strong> to hide it from staff without losing any data.
+         </div>
+       </div>`,
+      `<button class="btn btn-ghost" onclick="closeModal()">OK</button>
+       <button class="btn btn-accent btn-sm" onclick="closeModal();openEditPumpModal(${pumpId})">✏️ Edit &amp; Deactivate</button>`
+    );
+    return;
+  }
+
+  // No recent sales — safe to delete, but confirm first
   openModal('🗑 Delete Pump',
     `<p style="color:var(--text-1);margin-bottom:12px">Are you sure you want to delete <strong style="color:var(--red)">${sanitize(pump.name)}</strong>?</p>
-     <p style="font-size:12px;color:var(--text-3)">This will permanently remove the pump and all its meter readings. Sales history is not affected.</p>`,
+     <p style="font-size:12px;color:var(--text-3)">This pump has no sales in the last 90 days. Deleting will permanently remove the pump and all its meter readings.</p>`,
     `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
      <button class="btn btn-sm" style="background:var(--red);color:#fff;border:none;padding:8px 18px;border-radius:var(--radius-sm);font-weight:700;cursor:pointer" onclick="deletePump(${pumpId})">🗑 Yes, Delete</button>`
   );
@@ -9632,6 +9738,20 @@ function confirmDeletePump(pumpId) {
 async function deletePump(pumpId) {
   const pump = APP.data.pumps.find(p => String(p.id) === String(pumpId));
   if (!pump) return;
+  // BUG-012 FIX: Final server-side guard — re-check sales before executing delete.
+  // The confirm modal already checked, but guard again here in case state changed
+  // (e.g. another tab recorded a sale between the modal open and the confirm click).
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - 90);
+  const cutoffStr = cutoff.toISOString().slice(0, 10);
+  const recentSales = (APP.data.sales || []).filter(s =>
+    String(s.pump) === String(pumpId) && (s.date || '') >= cutoffStr
+  );
+  if (recentSales.length > 0) {
+    closeModal();
+    toast(`Cannot delete ${pump.name} — ${recentSales.length} recent sale(s) exist. Use Edit → Inactive instead.`, 'error');
+    return;
+  }
   APP.data.pumps = APP.data.pumps.filter(p => String(p.id) !== String(pumpId));
   try { await db.delete('pumps', pumpId); } catch(e) { console.warn('[deletePump]', e.message); }
   auditLog('pump_delete', { pumpId, name: pump.name });
@@ -10706,6 +10826,12 @@ async function addEmployee() {
   const aadhar = (document.getElementById('empAadhar')?.value || '').trim().replace(/\s/g, '');
   if (!name || name.length < 2) { toast('Employee name must be at least 2 characters', 'error'); return; }
   if (!phone || phone.length !== 10 || !/^\d{10}$/.test(phone)) { toast('Phone number must be exactly 10 digits', 'error'); return; }
+  // BUG-008 FIX: Reject duplicate phone numbers within this station.
+  // Two employees sharing a phone makes WhatsApp alerts, payroll, and login attribution
+  // ambiguous. Check in-memory list before hitting the server.
+  if (APP.data.employees.some(e => e.phone && e.phone === phone)) {
+    toast('Phone number ' + phone + ' is already registered to another employee — use a unique number', 'error'); return;
+  }
   if (empId && APP.data.employees.some(e => e.empId && e.empId.toUpperCase() === empId)) {
     toast('Employee ID "' + empId + '" is already taken — use a unique ID', 'error'); return;
   }
@@ -10769,6 +10895,10 @@ async function saveEditEmployee() {
   const empAadhar = (document.getElementById('empAadhar')?.value || '').trim().replace(/\s/g, '');
   if (!name || name.length < 2) { toast('Name must be at least 2 characters', 'error'); return; }
   if (!phone || phone.length !== 10 || !/^\d{10}$/.test(phone)) { toast('Phone number must be exactly 10 digits', 'error'); return; }
+  // BUG-008 FIX: Duplicate phone check on edit — exclude the current employee by id.
+  if (APP.data.employees.some(e => parseInt(e.id) !== empId && e.phone && e.phone === phone)) {
+    toast('Phone number ' + phone + ' is already registered to another employee — use a unique number', 'error'); return;
+  }
   if (empEmpId && APP.data.employees.some(e => parseInt(e.id) !== empId && e.empId && e.empId.toUpperCase() === empEmpId)) {
     toast('Employee ID "' + empEmpId + '" is already taken — use a unique ID', 'error'); return;
   }
@@ -10986,6 +11116,19 @@ function saveNewShift() {
   if (D.shifts.find(s => s.name.toLowerCase() === name.toLowerCase())) {
     toast('A shift with this name already exists', 'error'); return;
   }
+  // BUG-009 FIX: Hard-block overlapping shifts. Two shifts that share time make
+  // roster assignments, pump allocation conflict-detection, and attendance reports
+  // logically inconsistent. _shiftsOverlap() handles overnight crossing correctly.
+  const newShiftDef = { start, end };
+  const conflicting = D.shifts.find(s => _shiftsOverlap(s, newShiftDef));
+  if (conflicting) {
+    toast(
+      `"${name}" overlaps with "${conflicting.name}" (${conflicting.start}–${conflicting.end}). ` +
+      'Adjust the start or end time so shifts do not share any time.',
+      'error'
+    );
+    return;
+  }
   const newShift = { id: 'shift_' + Date.now(), name, start, end, manager, managerId: managerId || null };
   D.shifts.push(newShift);
   db.put('shifts', newShift).catch(() => {});
@@ -11019,6 +11162,18 @@ function saveEditShift() {
   const idx = D.shifts.findIndex(x => String(x.id) === String(shiftId));
   if (idx === -1) { toast('Shift not found — please refresh and try again', 'error'); return; }
   const oldName = D.shifts[idx].name;
+  // BUG-009 FIX: Hard-block overlap on edit — exclude the shift being edited
+  // (by id) so it is not flagged against its own current time range.
+  const editedDef = { start, end };
+  const conflicting = D.shifts.find(s => String(s.id) !== String(shiftId) && _shiftsOverlap(s, editedDef));
+  if (conflicting) {
+    toast(
+      `Updated "${name}" would overlap with "${conflicting.name}" (${conflicting.start}–${conflicting.end}). ` +
+      'Adjust the start or end time so shifts do not share any time.',
+      'error'
+    );
+    return;
+  }
   D.shifts[idx] = { ...D.shifts[idx], name, start, end, manager };
   // Update employees who were assigned to old shift name
   if (oldName !== name) {

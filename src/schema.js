@@ -763,6 +763,15 @@ async function initDatabase() {
       notes TEXT DEFAULT '',
       created_at TIMESTAMPTZ DEFAULT NOW()
     )`,
+
+    // BUG-008 FIX: Enforce phone uniqueness per tenant at the database level.
+    // Partial index (WHERE phone != '') preserves backward compatibility —
+    // employees created without a phone are not affected, but any two active employees
+    // at the same station cannot share a non-empty phone number.
+    // This is the authoritative server-side guard; the client-side check provides UX.
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_employees_phone_unique
+       ON employees(tenant_id, phone)
+       WHERE phone IS NOT NULL AND phone != ''`,
   ];
   for (const sql of safeAlters) {
     try { await pool.query(sql); } catch(e) {
