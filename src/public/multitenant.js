@@ -181,8 +181,12 @@ async function mt_showSelector() {
     return (t.name||'').toLowerCase().includes(s) || (t.location||'').toLowerCase().includes(s);
   });
 
+  // Remove old panel before re-rendering to prevent stacked fixed divs
+  var _oldPanel = document.getElementById('stationSelectorPanel');
+  if (_oldPanel) _oldPanel.remove();
+
   app.innerHTML = `
-    <div style="position:fixed;inset:0;background:var(--bg-0);overflow-y:auto;z-index:9999">
+    <div id="stationSelectorPanel" style="position:fixed;inset:0;background:var(--bg-0);overflow-y:auto;z-index:9999">
       <div style="max-width:720px;margin:0 auto;padding:28px 20px 60px">
 
         <!-- Header -->
@@ -273,8 +277,8 @@ async function mt_showSelector() {
               <button class="btn btn-ghost btn-sm btn-block" onclick="mt_superLogout()" style="font-size:11px;color:var(--red)">⏻ Logout Super Admin</button>
             ` : `
               <div style="display:flex;gap:8px;margin-bottom:10px">
-                <input class="form-input" id="superUser" placeholder="Username" style="flex:1;font-size:13px" autocomplete="off" />
-                <input class="form-input" id="superPass" type="password" placeholder="Password" style="flex:1;font-size:13px" onkeydown="if(event.key==='Enter')mt_doSuperLogin()" />
+                <input class="form-input" id="superUser" placeholder="Username" style="flex:1;font-size:13px" autocomplete="off" aria-label="Super admin username" />
+                <input class="form-input" id="superPass" type="password" placeholder="Password" style="flex:1;font-size:13px" onkeydown="if(event.key==='Enter')mt_doSuperLogin()" aria-label="Super admin password" />
               </div>
               <button class="btn btn-ghost btn-sm btn-block" onclick="mt_doSuperLogin()" style="font-size:12px">🔐 Super Admin Login</button>
             `}
