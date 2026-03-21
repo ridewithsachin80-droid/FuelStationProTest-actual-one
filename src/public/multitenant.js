@@ -40,19 +40,34 @@ function mt_getActiveTenant() {
   try {
     const raw = localStorage.getItem(MT_ACTIVE_KEY);
     if (!raw) return null;
-    return JSON.parse(raw);
+    const tenant = JSON.parse(raw);
+    if (!tenant || !tenant.id) return null;
+    // BUG-FIX: Detect mismatch between fb_active_tenant.id and fb_active_tenant_id.
+    // If these diverge (stale data from a previous station visit), clear both keys
+    // so the user is forced to re-select their station — prevents cross-tenant employee leak.
+    const cachedId = localStorage.getItem('fb_active_tenant_id');
+    if (cachedId && String(cachedId) !== String(tenant.id)) {
+      console.warn('[MT] Stale tenant ID mismatch — clearing to prevent cross-tenant leak. cached:', cachedId, 'stored:', tenant.id);
+      localStorage.removeItem(MT_ACTIVE_KEY);
+      localStorage.removeItem('fb_active_tenant_id');
+      return null;
+    }
+    return tenant;
   } catch { return null; }
 }
 function mt_setActiveTenant(tenant) {
+  // BUG-FIX: Validate tenant has an id before storing — prevents a null/empty
+  // tenant object from being saved, which caused the wrong station's employees
+  // to appear on the login screen when localStorage held a stale tenant record.
+  if (!tenant || !tenant.id) {
+    console.warn('[MT] mt_setActiveTenant called with missing id — ignored to prevent cross-tenant data leak');
+    return;
+  }
   localStorage.setItem(MT_ACTIVE_KEY, JSON.stringify(tenant));
   // CROSS-TENANT FIX: Cache tenant ID in a simple flat key so all modules
   // (_tenantKey in employee.js, _scopedKey in api-client.js, _tenantPrefix in autosave.js)
   // can scope their localStorage keys without needing to parse the full tenant JSON.
-  if (tenant && tenant.id) {
-    localStorage.setItem('fb_active_tenant_id', String(tenant.id));
-  } else {
-    localStorage.removeItem('fb_active_tenant_id');
-  }
+  localStorage.setItem('fb_active_tenant_id', String(tenant.id));
 }
 function mt_clearActiveTenant() {
   localStorage.removeItem(MT_ACTIVE_KEY);
