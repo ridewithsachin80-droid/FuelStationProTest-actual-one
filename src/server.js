@@ -1765,9 +1765,10 @@ Pack decoding: "300x40ML-POU"=packQty:300,packSize:"40ml",packType:"Pouch",isCar
       // No FK constraints exist, so manual cleanup is required.
       const tid = req.params.id;
       const TENANT_TABLES = [
-        'sales', 'tanks', 'pumps', 'dip_readings', 'expenses', 'fuel_purchases',
-        'credit_customers', 'credit_transactions', 'employees', 'shifts', 'settings',
-        'audit_log', 'lubes_products', 'lubes_sales',
+        'sales', 'tanks', 'pumps', 'dip_readings', 'meter_readings', 'pump_readings',
+        'expenses', 'fuel_purchases', 'credit_customers', 'credit_transactions',
+        'employees', 'shifts', 'settings', 'audit_log', 'lubes_products', 'lubes_sales',
+        'alerts', 'push_subscriptions', 'dms_transactions', 'subscriptions', 'subscription_payments',
       ];
       for (const tbl of TENANT_TABLES) {
         await client.query(`DELETE FROM ${tbl} WHERE tenant_id = $1`, [tid]);
@@ -2216,16 +2217,16 @@ Pack decoding: "300x40ML-POU"=packQty:300,packSize:"40ml",packType:"Pouch",isCar
       );
       console.log(`[tank-deduct] Found ${tankCheck.rows.length} tanks: ${tankCheck.rows.map(t => t.fuel_type + '=' + t.current_level).join(', ')}`);
 
-      const client37 = await pool.connect();
+      const clientTankDeduct = await pool.connect();
       try {
-        await client37.query('BEGIN');
+        await clientTankDeduct.query('BEGIN');
 
         for (const [rawFuelType, liters] of Object.entries(deductions)) {
           if (!liters || liters <= 0) continue;
 
           // FUEL TYPE FIX: Use LOWER() for case-insensitive matching
           // Handles 'petrol' vs 'Petrol', 'premium_petrol' vs 'Premium_Petrol', etc.
-          const tankRow = await client37.query(
+          const tankRow = await clientTankDeduct.query(
             'SELECT id, fuel_type, last_dip, last_dip_source, current_level, capacity FROM tanks WHERE tenant_id = $1 AND LOWER(fuel_type) = LOWER($2) FOR UPDATE',
             [tenantId, rawFuelType]
           );
@@ -2241,7 +2242,7 @@ Pack decoding: "300x40ML-POU"=packQty:300,packSize:"40ml",packType:"Pouch",isCar
           const after = Math.max(0, before - liters);
           console.log(`[tank-deduct] ${tank.fuel_type}: ${before}L - ${liters}L = ${after}L`);
 
-          await client37.query(
+          await clientTankDeduct.query(
             `UPDATE tanks
              SET current_level = GREATEST(0, COALESCE(current_level, 0) - $1),
                  last_dip = $2,
@@ -2253,15 +2254,15 @@ Pack decoding: "300x40ML-POU"=packQty:300,packSize:"40ml",packType:"Pouch",isCar
           results.push({ fuelType: tank.fuel_type, before, deducted: liters, after });
         }
 
-        await client37.query('COMMIT');
+        await clientTankDeduct.query('COMMIT');
         console.log(`[tank-deduct] COMMIT success. Results: ${JSON.stringify(results)}`);
       } catch (txErr) {
-        await client37.query('ROLLBACK').catch(() => {});
-        client37.release();
+        await clientTankDeduct.query('ROLLBACK').catch(() => {});
+        clientTankDeduct.release();
         console.error(`[tank-deduct] ROLLBACK: ${txErr.message}`);
         throw txErr;
       }
-      client37.release();
+      clientTankDeduct.release();
 
       // Save idempotency key to prevent retries
       if (idempotencyKey) {
