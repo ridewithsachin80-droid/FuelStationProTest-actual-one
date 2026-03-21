@@ -2054,6 +2054,23 @@ function renderSettings(D) {
       })()}
     </div>
 
+    <div class="card card-pad mt-16" style="border:1px solid rgba(59,130,246,0.25);background:rgba(59,130,246,0.03)">
+      <h4 class="mb-10 fw-700" style="color:var(--text-0);font-size:13px">⚙️ Sale Entry Rules</h4>
+      <div style="display:flex;align-items:flex-start;gap:12px">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+          <input type="checkbox" id="multiSaleToggle"
+            ${D.allowMultiSalePerDay ? 'checked' : ''}
+            onchange="toggleMultiSalePerDay(this.checked)"
+            style="width:16px;height:16px;cursor:pointer" />
+          <span style="font-size:13px;font-weight:600;color:var(--text-0)">Allow multiple sale entries per employee per day</span>
+        </label>
+      </div>
+      <div style="font-size:11px;color:var(--text-3);margin-top:6px;line-height:1.6">
+        When <strong>OFF</strong> (default): each employee can submit only one sale entry per day — blocks accidental double submissions (UR-05).<br>
+        When <strong>ON</strong>: employees on multiple shifts or working late-night crossover days can submit more than once.
+      </div>
+    </div>
+
     <div class="card card-pad mt-16" style="border:1px solid rgba(212,148,15,0.25);background:rgba(212,148,15,0.04)">
       <h4 class="mb-14 fw-700" style="color:var(--text-0);font-size:13px">🗺️ Suggested Build Order — Roadmap</h4>
       <div style="display:flex;flex-direction:column;gap:8px">
@@ -5513,7 +5530,13 @@ function renderGSTTab(D) {
         </div>
         <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border-light)">
           <div style="font-size:12px;font-weight:700;color:var(--text-1);margin-bottom:6px">🔄 Tally Direct Sync</div>
-          <p style="font-size:11px;color:var(--text-3);margin-bottom:8px">Push vouchers directly to Tally running on this machine (requires Tally HTTP server on port 9000).</p>
+          <p style="font-size:11px;color:var(--text-3);margin-bottom:6px">Push vouchers directly to Tally. Requires Tally HTTP server enabled (F12 → Config → Advanced → Enable HTTP Server).</p>
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px">
+            <label style="font-size:11px;color:var(--text-2);white-space:nowrap">Tally URL</label>
+            <input class="form-input" id="tallyUrlInput" value="${D.tallyServerUrl || 'http://localhost:9000'}"
+              placeholder="http://localhost:9000" style="flex:1;font-size:11px;font-family:var(--mono);padding:4px 8px;height:28px"
+              oninput="saveTallyUrl(this.value)" />
+          </div>
           <div style="display:flex;gap:8px">
             <button class="btn btn-accent btn-sm" style="flex:1" onclick="syncToTally()">🔄 Sync to Tally</button>
             <button class="btn btn-ghost btn-sm" style="flex:1" onclick="testTallyConnection()">🔌 Test Connection</button>
@@ -6138,9 +6161,16 @@ function _buildGSTSummaryItems(month, year) {
 
 function exportGSTR1JSON(month, year) {
   const D = APP.data;
+  // BUG-07 FIX: Validate GSTIN before exporting — a filing with NOT_SET or invalid GSTIN
+  // will be rejected by the GST portal. Block the export and prompt the user to set it first.
+  const gstin = (D.gstin || '').trim().toUpperCase();
+  if (!gstin || !validateGSTIN(gstin)) {
+    toast('⚠️ GSTIN not set or invalid. Please set a valid GSTIN in GST Settings before exporting.', 'error');
+    if (typeof openGSTINModal === 'function') openGSTINModal();
+    return;
+  }
   const items = _buildGSTSummaryItems(month, year);
   const monthName = new Date(year,month-1).toLocaleString('en-IN',{month:'long'});
-  const gstin = D.gstin || 'NOT_SET';
   const fp    = String(month).padStart(2,'0') + year;
   const gstr1 = {
     gstin, fp,
@@ -6183,6 +6213,14 @@ function exportGSTR1JSON(month, year) {
 window.exportGSTR1JSON = exportGSTR1JSON;
 
 function exportGSTR1CSV(month, year) {
+  // BUG-07 FIX: Validate GSTIN before CSV export too — CSV is often uploaded to the portal.
+  const D = APP.data;
+  const gstin = (D.gstin || '').trim().toUpperCase();
+  if (!gstin || !validateGSTIN(gstin)) {
+    toast('⚠️ GSTIN not set or invalid. Please set a valid GSTIN in GST Settings before exporting.', 'error');
+    if (typeof openGSTINModal === 'function') openGSTINModal();
+    return;
+  }
   const items = _buildGSTSummaryItems(month, year);
   const monthName = new Date(year,month-1).toLocaleString('en-IN',{month:'long'});
   exportCSV(`GSTR1-${monthName}-${year}.csv`,
@@ -7233,6 +7271,31 @@ async function dayLockPickerAction() {
   else await closeDayLock(date);
 }
 window.dayLockPickerAction = dayLockPickerAction;
+
+// BUG-04 FIX: Toggle one-sale-per-employee-per-day rule from admin settings UI.
+// Saves to server settings table AND local APP.data for immediate UI update.
+async function toggleMultiSalePerDay(enabled) {
+  try {
+    const val = enabled ? '1' : '0';
+    if (!APP.data) APP.data = {};
+    APP.data.allowMultiSalePerDay = enabled;
+    await db.setSetting('allow_multi_sale_per_day', val);
+    // Also push to server settings via data API so the sale endpoint reads it
+    const token = typeof getAuthToken === 'function' ? getAuthToken() : '';
+    await fetch('/api/data/settings/key/allow_multi_sale_per_day', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+      body: JSON.stringify({ value: val }),
+    }).catch(() => {});
+    toast(enabled
+      ? '✅ Multiple sales per employee per day allowed'
+      : '✅ One sale per employee per day enforced',
+      'success');
+  } catch(e) {
+    toast('Failed to save setting: ' + e.message, 'error');
+  }
+}
+window.toggleMultiSalePerDay = toggleMultiSalePerDay;
 
 // ── Day-Lock check helper used by api-client.js ─────────────────────────────
 // Returns true if the given date (YYYY-MM-DD) is locked
@@ -12537,9 +12600,23 @@ if (window.db && typeof window.db.getSetting === 'function') {
 // ═══════════════════════════════════════════════════════════════════════════════
 // FEATURE 10 — TALLY NATIVE SYNC
 // ═══════════════════════════════════════════════════════════════════════════════
+// BUG-09 FIX: Save Tally server URL from the inline input field in the GST tab.
+// Previously the URL was hardcoded to localhost:9000 with no way to change it from the UI.
+function saveTallyUrl(url) {
+  if (!url || !url.trim()) return;
+  if (!APP.data) APP.data = {};
+  APP.data.tallyServerUrl = url.trim();
+  if (typeof db !== 'undefined' && db && typeof db.setSetting === 'function') {
+    db.setSetting('tallyServerUrl', url.trim()).catch(() => {});
+  }
+}
+window.saveTallyUrl = saveTallyUrl;
+
 async function syncToTally() {
   const D = APP.data;
-  const tallyUrl = D.tallyServerUrl || 'http://localhost:9000';
+  // BUG-09 FIX: Read URL from the visible input field if present, else from settings
+  const inputEl = document.getElementById('tallyUrlInput');
+  const tallyUrl = (inputEl && inputEl.value.trim()) || D.tallyServerUrl || 'http://localhost:9000';
   const now4 = new Date();
   const month = window._gstMonth || (now4.getMonth()+1);
   const year  = window._gstYear  || now4.getFullYear();
@@ -12641,7 +12718,9 @@ window.buildTallySyncXML = buildTallySyncXML;
 
 async function testTallyConnection() {
   const D = APP.data;
-  const tallyUrl = D.tallyServerUrl || 'http://localhost:9000';
+  // BUG-09 FIX: Read from live input field if available
+  const inputEl = document.getElementById('tallyUrlInput');
+  const tallyUrl = (inputEl && inputEl.value.trim()) || D.tallyServerUrl || 'http://localhost:9000';
   try {
     await fetch(tallyUrl, { method: 'GET', signal: AbortSignal.timeout(3000) });
     toast('✅ Tally is reachable at ' + tallyUrl, 'success');
@@ -12694,4 +12773,3 @@ async function saveChangeMyPassword() {
   }
 }
 window.saveChangeMyPassword = saveChangeMyPassword;
-
