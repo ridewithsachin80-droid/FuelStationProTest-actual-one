@@ -146,10 +146,7 @@
     }
   };
 
-  // BUG-06 FIX: Removed dead first mt_superLogout override that was here.
-  // The definitive override is set inside DOMContentLoaded below (re-applies after
-  // index.html resets window globals). This early module-scope assignment was
-  // immediately overwritten and served no purpose — it was just dead code.
+
 
   // Override mt_isSuperLoggedIn — check sessionStorage only (clears on tab close)
   const _origIsSuperLoggedIn = window.mt_isSuperLoggedIn;
