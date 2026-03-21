@@ -2658,7 +2658,7 @@ window.emp_applyVoiceParsed = emp_applyVoiceParsed;
 
 
 function emp_recordDip() {
-  const tankId = parseInt(document.getElementById('empDipTank')?.value);
+  const tankId = String(document.getElementById('empDipTank')?.value || '');
   const r = parseFloat(document.getElementById('empDipVal')?.value);
   if (isNaN(r)||r<=0) { toast('Enter valid dip reading','error'); return; }
   if (r > 30000) { toast('Dip reading exceeds tank capacity limit','error'); return; }
@@ -2672,7 +2672,7 @@ function emp_recordDip() {
   // Save to admin dip store + update tank level
   APP.data?.dipReadings?.unshift(dip);
   db.add('dipReadings', dip).catch(() => {});
-  const tank = APP.data?.tanks?.find(t => parseInt(t.id) === parseInt(tankId));
+  const tank = APP.data?.tanks?.find(t => String(t.id) === String(tankId));
   if (tank) { tank.current = r; tank.lastDip = emp_today() + ' ' + emp_time(); db.put('tanks', _tankForPut(tank)).catch(() => {}); }
 
   toast(`✅ Dip saved: Tank ${tankId} = ${fmt(r)} L`, 'success');
