@@ -3376,6 +3376,24 @@ async function fetchPublicEmployees() {
   } catch {}
 }
 
+// mt_doSuperLoginLanding: shim that reads from the landing-page super admin form
+// (ids: superUserLanding / superPassLanding) then delegates to mt_doSuperLogin.
+// Needed because the selector form uses ids superUser/superPass — using the same ids
+// in the landing form caused a "Duplicate form field id" browser issue + wrong element
+// returned by getElementById when both forms existed in the DOM simultaneously.
+function mt_doSuperLoginLanding() {
+  var uEl = document.getElementById('superUserLanding');
+  var pEl = document.getElementById('superPassLanding');
+  if (!uEl || !pEl) { if (typeof mt_doSuperLogin === 'function') mt_doSuperLogin(); return; }
+  // Temporarily copy values into the ids that mt_doSuperLogin reads
+  var sU = document.getElementById('superUser');
+  var sP = document.getElementById('superPass');
+  if (sU) sU.value = uEl.value;
+  if (sP) sP.value = pEl.value;
+  if (typeof mt_doSuperLogin === 'function') mt_doSuperLogin();
+}
+window.mt_doSuperLoginLanding = mt_doSuperLoginLanding;
+
 function showLoginScreen() {
   // Clean ALL body-level overlays — they intercept clicks if left in DOM
   document.querySelectorAll(
@@ -3552,18 +3570,18 @@ function landingShowLogin(type) {
           '<div style="font-size:11px;color:var(--text-3)">Platform management</div></div>' +
         '</div>' +
         '<div class="form-group"><label class="form-label">Username</label>' +
-          '<input class="form-input" id="superUser" placeholder="Super admin username" autocomplete="off" ' +
+          '<input class="form-input" id="superUserLanding" placeholder="Super admin username" autocomplete="off" ' +
           'onkeydown="if(event.key===\'Enter\')mt_doSuperLogin()" /></div>' +
         '<div class="form-group"><label class="form-label">Password</label>' +
-          '<input class="form-input" id="superPass" type="password" placeholder="Enter password" ' +
+          '<input class="form-input" id="superPassLanding" type="password" placeholder="Enter password" ' +
           'onkeydown="if(event.key===\'Enter\')mt_doSuperLogin()" /></div>' +
         '<button class="btn btn-block" style="padding:14px;font-size:14px;margin-top:6px;background:var(--bg-2);' +
-          'border:1px solid var(--border);color:var(--text-1)" onclick="mt_doSuperLogin()">&#128274; Login as Super Admin</button>' +
+          'border:1px solid var(--border);color:var(--text-1)" onclick="mt_doSuperLoginLanding()">&#128274; Login as Super Admin</button>' +
       '</div>' +
       '<div class="login-footer" style="margin-top:16px">' +
         '<button onclick="showLoginScreen()" style="background:none;border:none;color:var(--text-3);font-size:10px;cursor:pointer;font-family:var(--font)">&#8592; Back to menu</button>' +
       '</div></div></div>';
-    setTimeout(function() { var u = document.getElementById('superUser'); if (u) u.focus(); }, 100);
+    setTimeout(function() { var u = document.getElementById('superUserLanding'); if (u) u.focus(); }, 100);
     return;
   }
   if (type === 'employee') {
