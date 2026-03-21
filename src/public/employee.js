@@ -319,8 +319,21 @@ async function emp_flushPendingSales() {
       if (resp.ok) {
         // FIX 33c: server returns { duplicate: true } for idempotent retries — still a success
         savedCount++;
+      } else {
+        // BUG-04 FIX: 409 DUPLICATE_DAILY_SALE is a permanent rejection — drop from queue.
+        // All other non-OK responses are transient failures that should be re-queued for retry.
+        let isDuplicate = false;
+        if (resp.status === 409) {
+          try {
+            const errBody = await resp.clone().json();
+            if (errBody.code === 'DUPLICATE_DAILY_SALE') {
+              isDuplicate = true;
+              toast('⚠️ A queued sale was rejected as a duplicate daily entry and has been removed.', 'info');
+            }
+          } catch {}
+        }
+        if (!isDuplicate) { empState.pendingSales.push(sale); failedCount++; }
       }
-      else { empState.pendingSales.push(sale); failedCount++; }
     } catch {
       empState.pendingSales.push(sale);
       failedCount++;
@@ -2313,6 +2326,16 @@ function emp_recordSale() {
               // BUG-08 FIX: Clear in-flight backup on definitive server rejection
               try { const k=_tenantKey('fb_emp_inflight'); const f=JSON.parse(localStorage.getItem(k)||'[]'); localStorage.setItem(k,JSON.stringify(f.filter(s=>s.idempotencyKey!==sale.idempotencyKey))); } catch {}
               toast(`❌ ${err.error}`, 'error');
+              emp_saveSession();
+              renderPage();
+            } else if (resp.status === 409 && err.code === 'DUPLICATE_DAILY_SALE') {
+              // BUG-04 FIX: Server blocked this as a duplicate daily sale entry.
+              // This is a permanent rejection — do NOT queue for retry (it will keep failing).
+              // Remove from local state, clear in-flight backup, show a clear user message.
+              empState.sales = empState.sales.filter(s => s.id !== sale.id);
+              if (APP.data?.sales) APP.data.sales = APP.data.sales.filter(s => s.id !== sale.id);
+              try { const k=_tenantKey('fb_emp_inflight'); const f=JSON.parse(localStorage.getItem(k)||'[]'); localStorage.setItem(k,JSON.stringify(f.filter(s=>s.idempotencyKey!==sale.idempotencyKey))); } catch {}
+              toast('⚠️ You have already submitted a sale for today. If you are on a second shift, ask your admin to enable multiple entries per day in Settings.', 'error');
               emp_saveSession();
               renderPage();
             } else {
@@ -5015,9 +5038,31 @@ async function loadData() {
         try { renderPage(); } catch(e) {}
       }
     }
+
+    // STUCK-LOADING FIX: When an admin session is restored via initApp() (page refresh or
+    // direct URL like /#sales), enterApp() fires renderPage() BEFORE loadData() resolves —
+    // showing the "Loading data..." spinner. loadData() only re-rendered for employees.
+    // Now we also re-render for admins once data is ready, clearing the stuck spinner.
+    // Guard: only re-render if admin is already in the app (loggedIn=true, data was null
+    // when enterApp fired). Do NOT re-render during the normal login flow — doAdminLogin
+    // awaits loadData() first, so APP.data is set before enterApp() calls renderPage().
+    if (APP.role === 'admin' && APP.loggedIn && typeof renderPage === 'function') {
+      try {
+        const contentEl = document.getElementById('content');
+        // Only re-render if the content area is currently showing the loading spinner
+        // (avoids a redundant re-render during fresh login where data was already ready)
+        if (contentEl && contentEl.innerHTML && contentEl.innerHTML.includes('Loading data...')) {
+          renderPage();
+        }
+      } catch(e) {}
+    }
   } catch (e) {
     console.error('Data load failed, using seed data:', e);
     APP.data = { ...SEED };
+    // Even on error, clear the stuck spinner for admins
+    if (APP.role === 'admin' && APP.loggedIn && typeof renderPage === 'function') {
+      try { renderPage(); } catch(e2) {}
+    }
   }
 }
 
