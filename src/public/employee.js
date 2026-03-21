@@ -25,7 +25,12 @@
 function _tenantKey(base) {
   try {
     const t = (typeof mt_getActiveTenant === 'function') ? mt_getActiveTenant() : null;
-    const tid = t?.id || localStorage.getItem('fb_active_tenant_id') || '';
+    // BUG-FIX: Only fall back to fb_active_tenant_id if mt_getActiveTenant() returned
+    // nothing (e.g. not yet loaded). Do NOT fall back when mt_getActiveTenant cleared
+    // a stale record and returned null — that null is intentional and means no valid tenant.
+    // Using a stale fb_active_tenant_id as fallback was the root cause of cross-tenant
+    // employee cache reads (Station A employees showing on Station B login screen).
+    const tid = t?.id || (t === null && typeof mt_getActiveTenant === 'function' ? '' : localStorage.getItem('fb_active_tenant_id')) || '';
     return tid ? base + '_' + tid : base;
   } catch { return base; }
 }
@@ -3233,6 +3238,17 @@ async function fetchPublicEmployees() {
   try {
     const tenant = (typeof mt_getActiveTenant === 'function') ? mt_getActiveTenant() : null;
     if (!tenant || !tenant.id) return;
+
+    // BUG-FIX: Double-check tenant ID consistency before making the API call.
+    // mt_getActiveTenant() already clears a mismatch, but guard here too in case
+    // fb_active_tenant_id was written without fb_active_tenant (or vice-versa).
+    // Prevents fetching employees from the wrong station entirely.
+    const cachedTenantId = localStorage.getItem('fb_active_tenant_id');
+    if (cachedTenantId && String(cachedTenantId) !== String(tenant.id)) {
+      console.warn('[fetchPublicEmployees] tenant ID mismatch — aborting fetch to prevent cross-tenant employee list. cached:', cachedTenantId, 'active:', tenant.id);
+      return;
+    }
+
     const resp = await fetch('/api/public/employees/' + encodeURIComponent(tenant.id));
     if (!resp.ok) return;
     const emps = await resp.json();
