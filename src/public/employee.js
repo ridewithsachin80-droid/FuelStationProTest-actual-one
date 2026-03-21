@@ -319,20 +319,20 @@ async function emp_flushPendingSales() {
       if (resp.ok) {
         // FIX 33c: server returns { duplicate: true } for idempotent retries — still a success
         savedCount++;
+      } else if (resp.status === 409) {
+        // 409 from pump-inactive check — permanent rejection, drop from queue with message
+        try {
+          const errBody = await resp.clone().json();
+          if (errBody.error && errBody.error.includes('inactive')) {
+            toast(`❌ Queued sale dropped: pump was inactive when the sale was recorded.`, 'error');
+          } else {
+            // Any other 409 (e.g. idempotency collision) — count as saved (already exists)
+            savedCount++;
+          }
+        } catch { savedCount++; } // can't parse body — treat as already saved
       } else {
-        // BUG-04 FIX: 409 DUPLICATE_DAILY_SALE is a permanent rejection — drop from queue.
-        // All other non-OK responses are transient failures that should be re-queued for retry.
-        let isDuplicate = false;
-        if (resp.status === 409) {
-          try {
-            const errBody = await resp.clone().json();
-            if (errBody.code === 'DUPLICATE_DAILY_SALE') {
-              isDuplicate = true;
-              toast('⚠️ A queued sale was rejected as a duplicate daily entry and has been removed.', 'info');
-            }
-          } catch {}
-        }
-        if (!isDuplicate) { empState.pendingSales.push(sale); failedCount++; }
+        // All other non-OK responses are transient failures — re-queue for retry
+        empState.pendingSales.push(sale); failedCount++;
       }
     } catch {
       empState.pendingSales.push(sale);
@@ -1670,8 +1670,18 @@ async function emp_completeLogin(emp, isPinLogin) {
   if (allAllocFuels.length > 0) empSaleFuel = allAllocFuels[0];
 
   emp_saveSession(); auditLog('login', { employee: emp.name });
+
+  // REVERT-BUG-04 FIX: Flush any pending sales immediately on login.
+  // After the BUG-04 per-day block was removed from the server, sales that were
+  // blocked and queued in pendingSales will now succeed. Flush immediately so they
+  // are recorded right away rather than waiting for the next online event.
+  const _pendingCount = (empState.pendingSales || []).length;
+  if (_pendingCount > 0 && navigator.onLine) {
+    setTimeout(() => emp_flushPendingSales().catch(() => {}), 1000);
+  }
+
   toast((inAppRestored && empState.sales.length > 0)
-    ? `Welcome back ${sanitize(emp.name)}! ${empState.sales.length} sale(s) restored.`
+    ? `Welcome back ${sanitize(emp.name)}! ${empState.sales.length} sale(s) restored${_pendingCount > 0 ? `, syncing ${_pendingCount} queued sale(s)…` : '.'}`
     : `Welcome ${sanitize(emp.name)}!`, 'success');
   renderPage();
 }
@@ -2326,16 +2336,6 @@ function emp_recordSale() {
               // BUG-08 FIX: Clear in-flight backup on definitive server rejection
               try { const k=_tenantKey('fb_emp_inflight'); const f=JSON.parse(localStorage.getItem(k)||'[]'); localStorage.setItem(k,JSON.stringify(f.filter(s=>s.idempotencyKey!==sale.idempotencyKey))); } catch {}
               toast(`❌ ${err.error}`, 'error');
-              emp_saveSession();
-              renderPage();
-            } else if (resp.status === 409 && err.code === 'DUPLICATE_DAILY_SALE') {
-              // BUG-04 FIX: Server blocked this as a duplicate daily sale entry.
-              // This is a permanent rejection — do NOT queue for retry (it will keep failing).
-              // Remove from local state, clear in-flight backup, show a clear user message.
-              empState.sales = empState.sales.filter(s => s.id !== sale.id);
-              if (APP.data?.sales) APP.data.sales = APP.data.sales.filter(s => s.id !== sale.id);
-              try { const k=_tenantKey('fb_emp_inflight'); const f=JSON.parse(localStorage.getItem(k)||'[]'); localStorage.setItem(k,JSON.stringify(f.filter(s=>s.idempotencyKey!==sale.idempotencyKey))); } catch {}
-              toast('⚠️ You have already submitted a sale for today. If you are on a second shift, ask your admin to enable multiple entries per day in Settings.', 'error');
               emp_saveSession();
               renderPage();
             } else {
