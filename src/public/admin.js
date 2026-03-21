@@ -2658,29 +2658,62 @@ window.mt_doSuperLogin = mt_doSuperLogin;
 // version because admin.js script-level code runs after DOMContentLoaded.
 // Fix: define the full logout inline here so it is never overwritten.
 window.mt_superLogout = async function() {
-  // Stop heartbeat timer so it doesn't fire after logout
+  // ── ROOT CAUSE FIX ───────────────────────────────────────────────────────────
+  // The station selector is rendered as app.innerHTML with a position:fixed div
+  // that has NO id. Previous cleanup selectors ('[id*="Overlay"]' etc) never matched
+  // it, so the old selector stayed visible showing "LOGGED IN" even after tokens
+  // were cleared. Additionally, bridge.js's mt_showSelector gate redirected to
+  // showLoginScreen() for non-super paths — appending behind the still-visible fixed div.
+  //
+  // Fix:
+  // 1. Stop heartbeat, clear all session tokens/storage, reset APP state
+  // 2. Explicitly remove #stationSelectorPanel (now has an ID) + any other overlays
+  // 3. Call _origShowSelectorForLanding() DIRECTLY — this is the original multitenant.js
+  //    mt_showSelector which sets app.innerHTML fresh. With isSuperLoggedIn()=false,
+  //    it renders the super admin LOGIN FORM instead of the logout button.
+  //    Bypasses bridge.js's gate that wrongly routes to showLoginScreen() after logout.
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  // 1. Stop session heartbeat
   if (typeof stopSuperSessionHeartbeat === 'function') stopSuperSessionHeartbeat();
-  // Invalidate server session token
+
+  // 2. Invalidate server session
   try { if (typeof AuthAPI !== 'undefined') await AuthAPI.logout(); } catch {}
-  // Clear all super admin session state from storage
+
+  // 3. Clear ALL super admin storage
   sessionStorage.removeItem('fb_super_token');
   sessionStorage.removeItem('fb_super_session');
   sessionStorage.removeItem('fb_session');
-  // Clear the one-time entry cookie
   document.cookie = 'sa_entry=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/; SameSite=Strict';
-  // Clear in-memory auth token
   if (typeof clearAuth === 'function') clearAuth();
-  // Reset APP state
+
+  // 4. Reset app state
   if (typeof APP !== 'undefined') {
     APP.tenant = null; APP.loggedIn = false; APP.role = null; APP.adminUser = null;
   }
-  // Remove all modal/overlay DOM nodes that would sit above the selector
-  document.querySelectorAll('[id*="Overlay"],[id*="overlay"],[id*="selector"]')
+
+  // 5. Remove the fixed-position selector panel (now has #stationSelectorPanel id)
+  //    and any other overlays that sit above it
+  var panelEl = document.getElementById('stationSelectorPanel');
+  if (panelEl) panelEl.remove();
+  document.querySelectorAll('[id*="Overlay"],[id*="overlay"],[id*="Modal"],[id*="billing"],[id*="compare"]')
     .forEach(function(el) { el.remove(); });
-  // Show the station selector — which now renders with isSuperLoggedIn()=false
-  // (sessionStorage cleared above) so the login form is shown instead of the logout button
-  if (typeof mt_showSelector === 'function') mt_showSelector();
-  else window.location.reload();
+
+  // 6. Re-render the station selector directly using the original multitenant.js function.
+  //    _origShowSelectorForLanding is set by bridge.js to point to the original
+  //    mt_showSelector (pre-bridge-override). It calls app.innerHTML = full selector HTML.
+  //    With all tokens cleared, isSuperLoggedIn()=false, so it renders the login form.
+  var _origSel = window._origShowSelectorForLanding;
+  if (typeof _origSel === 'function') {
+    _origSel();
+  } else if (typeof mt_showSelector === 'function') {
+    // Fallback: clear app manually then call mt_showSelector
+    var appEl = document.getElementById('app');
+    if (appEl) appEl.innerHTML = '';
+    mt_showSelector();
+  } else {
+    window.location.reload();
+  }
 };
 window.mt_openAddTenant = mt_openAddTenant;
 window.mt_openEditTenant = mt_openEditTenant;
