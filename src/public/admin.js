@@ -2642,7 +2642,11 @@ window.attSetNote = attSetNote;
 window.attMarkAllPresent = attMarkAllPresent;
 window.attSave = attSave;
 window.attAutoSave = attAutoSave;
-window.mt_showSelector = mt_showSelector;
+// mt_showSelector, mt_doSuperLogin, and mt_deleteTenant are intentionally NOT assigned here.
+// bridge.js DOMContentLoaded is the authoritative source for those three — it wraps them
+// with server-backed logic (API login, IndexedDB delete, full selector re-render).
+// Assigning the plain stubs from multitenant.js here then having bridge.js re-override them
+// created a brief race window and caused the logout/login bugs.
 window.mt_toggleStation = mt_toggleStation;
 window.mt_viewStationData = mt_viewStationData;
 window.mt_manageStationAdmins = mt_manageStationAdmins;
@@ -2651,7 +2655,6 @@ window.mt_resetStationAdminPass = mt_resetStationAdminPass;
 window.mt_deleteStationAdmin = mt_deleteStationAdmin;
 window.mt_changeSupercreds = mt_changeSupercreds;
 window.mt_saveSupercreds = mt_saveSupercreds;
-window.mt_doSuperLogin = mt_doSuperLogin;
 // LOGOUT FIX (core): admin.js was overwriting window.mt_superLogout with the stub from
 // multitenant.js (only calls mt_clearSuperSession + mt_showSelector — no server logout,
 // no heartbeat stop, no sessionStorage cleanup). This overwrote bridge.js's correct async
@@ -2719,7 +2722,7 @@ window.mt_openAddTenant = mt_openAddTenant;
 window.mt_openEditTenant = mt_openEditTenant;
 window.mt_saveTenant = mt_saveTenant;
 window.mt_confirmDeleteTenant = mt_confirmDeleteTenant;
-window.mt_deleteTenant = mt_deleteTenant;
+// mt_deleteTenant — bridge.js DOMContentLoaded provides the real implementation
 window.mt_selectTenant = mt_selectTenant;
 window.openEditEmployeeModal = openEditEmployeeModal;
 window.saveEditEmployee = saveEditEmployee;
@@ -8104,7 +8107,7 @@ async function saveNewTank() {
 
   try {
     const tanks = await db.getAll('tanks');
-    const newId = tanks.length > 0 ? Math.max(...tanks.map(t => t.id)) + 1 : 1;
+    const newId = tanks.length > 0 ? Math.max(...tanks.map(t => parseInt(t.id) || 0)) + 1 : 1;
     const newTank = {
       id: newId,
       fuelType,
@@ -8121,7 +8124,7 @@ async function saveNewTank() {
   } catch(e) {
     // Fallback: update in-memory only
     const tanks = APP.data.tanks;
-    const newId = tanks.length > 0 ? Math.max(...tanks.map(t => t.id)) + 1 : 1;
+    const newId = tanks.length > 0 ? Math.max(...tanks.map(t => parseInt(t.id) || 0)) + 1 : 1;
     APP.data.tanks.push({ id: newId, fuelType, capacity, current, lastDip: (()=>{const _d=new Date();return _d.getFullYear()+'-'+String(_d.getMonth()+1).padStart(2,'0')+'-'+String(_d.getDate()).padStart(2,'0');})() });
     closeModal();
     toast(`Tank ${newId} added`, 'success');
@@ -8259,11 +8262,11 @@ async function deleteTank(tankId) {
     const tid = String(tankId); // PERMANENT FIX: tanks.id is TEXT
     const freshDeleted = await db.getAll('tanks');
     APP.data.tanks = freshDeleted.map(_normTank);
-    APP.data.dipReadings = (APP.data.dipReadings || []).filter(d => parseInt(d.tankId) !== tid);
+    APP.data.dipReadings = (APP.data.dipReadings || []).filter(d => String(d.tankId) !== String(tid));
   } catch(e) {
     const tid = String(tankId); // PERMANENT FIX: tanks.id is TEXT
     APP.data.tanks = APP.data.tanks.filter(t => String(t.id) !== String(tid));
-    APP.data.dipReadings = (APP.data.dipReadings || []).filter(d => parseInt(d.tankId) !== tid);
+    APP.data.dipReadings = (APP.data.dipReadings || []).filter(d => String(d.tankId) !== String(tid));
   }
   closeModal();
   toast(`Tank ${tankId} deleted`, 'success');
@@ -8486,7 +8489,7 @@ function openDipModal(preselect) {
 
 
 function onDipTankChange() {
-  const tankId = parseInt(document.getElementById('dipTank')?.value);
+  const tankId = String(document.getElementById('dipTank')?.value || '');
   const tank = APP.data.tanks.find(t => String(t.id) === String(tankId));
   const ct = _tankChartType(tank);
   const useChart = !!ct;
@@ -8522,7 +8525,7 @@ function updateDipPreview() {
 
   if (!preview || !volEl) return;
 
-  const tankId = parseInt(document.getElementById('dipTank')?.value);
+  const tankId = String(document.getElementById('dipTank')?.value || '');
   const tank = APP.data.tanks.find(t => String(t.id) === String(tankId));
   const ct = _tankChartType(tank);
   const capacity = parseInt(tank?.capacity) || 10000;
@@ -8580,7 +8583,7 @@ function updateDipPreview() {
 }
 
 async function saveDip() {
-  const tankId = parseInt(document.getElementById('dipTank').value);
+  const tankId = String(document.getElementById('dipTank').value || '');
   const tank = APP.data.tanks.find(t => String(t.id) === String(tankId));
   const ct = _tankChartType(tank);
 
@@ -8616,7 +8619,8 @@ async function saveDip() {
 
   const dip = {
     id: _genId(), date: today(), time: now(),
-    tankId, reading,
+    tankId: String(tankId),
+    reading,
     calculated: tank ? tank.current : reading,
     method
   };
@@ -12041,7 +12045,7 @@ function generateBPCLDSR(D, date) {
 
   // Tank dip section
   const dipRows = tanks.map(t => {
-    const dipEntries = (D.dipReadings||[]).filter(d=>d.tankId===t.id&&(d.date||'').slice(0,10)===date).sort((a,b)=>a.id-b.id);
+    const dipEntries = (D.dipReadings||[]).filter(d=>String(d.tankId)===String(t.id)&&(d.date||'').slice(0,10)===date).sort((a,b)=>a.id-b.id);
     const open  = dipEntries[0]?.level || '—';
     const close = dipEntries[dipEntries.length-1]?.level || t.current || '—';
     const diff  = (typeof open==='number'&&typeof close==='number') ? (open-close).toFixed(1) : '—';
@@ -12103,7 +12107,7 @@ function generateIOCLDSR(D, date) {
   const stationCode = D.stationCode || APP.tenant?.stationCode || '';
 
   const tankRows = tanks.map(t => {
-    const dipE = (D.dipReadings||[]).filter(d=>d.tankId===t.id&&(d.date||'').slice(0,10)===date).sort((a,b)=>a.id-b.id);
+    const dipE = (D.dipReadings||[]).filter(d=>String(d.tankId)===String(t.id)&&(d.date||'').slice(0,10)===date).sort((a,b)=>a.id-b.id);
     const opDip = dipE[0]?.level;
     const clDip = dipE[dipE.length-1]?.level ?? t.current;
     const receipt = purchases.filter(p=>(p.fuelType||'').toLowerCase()===(t.fuelType||'').toLowerCase()).reduce((a,p)=>a+(p.liters||0),0);
