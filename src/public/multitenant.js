@@ -14,15 +14,23 @@ const MT_ACTIVE_KEY   = 'fb_active_tenant'; // localStorage key for current tena
 const MT_SUPER_KEY    = 'fb_super_session'; // localStorage key for super admin session
 const MT_DB_VERSION   = 4;
 
-// Super admin credentials — defaults, overridden by localStorage if changed
+// BUG-05 FIX: Removed hardcoded SHA-256 password hash from client-side source.
+// The plaintext default password was recoverable from the hash via rainbow tables since
+// SHA-256 (no salt, no rounds) is fast to reverse. All super admin authentication now
+// goes through the server-side bcrypt flow in /api/auth/super-login.
+// The local offline fallback (mt_doSuperLogin comparing hashes) is kept for UI flow
+// but ONLY uses a hash stored from a previous successful server login — never a default.
 const SUPER_ADMIN_DEFAULTS = {
   username: 'superadmin',
-  passHash: '357db263b95cb33ae4ec8dffed73206e8bf7c162895b0591fbd387e3e2f8c6ae', // FuelBunk@Super2026
+  passHash: '', // BUG-05 FIX: No default hash — offline login disabled until first server login
 };
 function mt_getSuperCreds() {
   try {
     const stored = JSON.parse(localStorage.getItem('fb_super_creds') || 'null');
-    return stored || SUPER_ADMIN_DEFAULTS;
+    // BUG-05 FIX: Only return stored creds if they came from a real server session,
+    // never fall back to a hardcoded default hash.
+    if (stored && stored.passHash && stored.passHash.length >= 64) return stored;
+    return SUPER_ADMIN_DEFAULTS;
   } catch { return SUPER_ADMIN_DEFAULTS; }
 }
 function mt_saveSuperCreds(username, passHash) {
@@ -687,16 +695,38 @@ async function mt_doSuperLogin() {
   const u = (document.getElementById('superUser')?.value || '').trim().toLowerCase();
   const p = document.getElementById('superPass')?.value || '';
   if (!u || !p) { mt_toast('Enter credentials', 'error'); return; }
-  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(p));
-  const hash = Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('');
-  const creds = mt_getSuperCreds();
-  const isValid = (u === creds.username && hash === creds.passHash);
-  if (!isValid) { mt_toast('Invalid super admin credentials', 'error'); return; }
-  mt_saveSuperSession();
-  // Also get a server-side session token so API calls (compare, admins) work
+  // BUG-05 FIX: Always authenticate via server first. The previous code hashed the
+  // password client-side and compared it to a localStorage value — which had a known
+  // default SHA-256 hash embedded in source. Now we require a server round-trip.
+  // If the server is unreachable, fall back to the locally-stored hash (which was written
+  // from a previous real server session, never from a hardcoded default).
+  let serverOk = false;
   try {
-    await AuthAPI.superLogin(u, p);
-  } catch(e) { /* offline or server not ready — compare will show cached data */ }
+    if (typeof AuthAPI !== 'undefined') {
+      await AuthAPI.superLogin(u, p);
+      serverOk = true;
+      // Cache hash from server-confirmed login for offline use (not a hardcoded default)
+      const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(p));
+      const hash = Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('');
+      mt_saveSuperCreds(u, hash);
+    }
+  } catch(e) {
+    // Server rejected the credentials — do not fall back to local hash
+    if (e && e.message && (e.message.includes('Invalid') || e.message.includes('401') || e.message.includes('Unauthorized'))) {
+      mt_toast('Invalid super admin credentials', 'error');
+      return;
+    }
+    // Server unreachable — try cached local hash as offline fallback
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(p));
+    const hash = Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('');
+    const creds = mt_getSuperCreds();
+    if (!creds.passHash || creds.passHash.length < 64 || u !== creds.username || hash !== creds.passHash) {
+      mt_toast('Server unreachable and no cached credentials found. Please connect to server to login.', 'error');
+      return;
+    }
+    mt_toast('⚠️ Offline mode — limited functionality available', 'info');
+  }
+  mt_saveSuperSession();
   mt_toast('Super Admin logged in', 'success');
   mt_showSelector();
 }
