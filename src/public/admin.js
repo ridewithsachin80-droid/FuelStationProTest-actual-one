@@ -2652,7 +2652,36 @@ window.mt_deleteStationAdmin = mt_deleteStationAdmin;
 window.mt_changeSupercreds = mt_changeSupercreds;
 window.mt_saveSupercreds = mt_saveSupercreds;
 window.mt_doSuperLogin = mt_doSuperLogin;
-window.mt_superLogout = mt_superLogout;
+// LOGOUT FIX (core): admin.js was overwriting window.mt_superLogout with the stub from
+// multitenant.js (only calls mt_clearSuperSession + mt_showSelector — no server logout,
+// no heartbeat stop, no sessionStorage cleanup). This overwrote bridge.js's correct async
+// version because admin.js script-level code runs after DOMContentLoaded.
+// Fix: define the full logout inline here so it is never overwritten.
+window.mt_superLogout = async function() {
+  // Stop heartbeat timer so it doesn't fire after logout
+  if (typeof stopSuperSessionHeartbeat === 'function') stopSuperSessionHeartbeat();
+  // Invalidate server session token
+  try { if (typeof AuthAPI !== 'undefined') await AuthAPI.logout(); } catch {}
+  // Clear all super admin session state from storage
+  sessionStorage.removeItem('fb_super_token');
+  sessionStorage.removeItem('fb_super_session');
+  sessionStorage.removeItem('fb_session');
+  // Clear the one-time entry cookie
+  document.cookie = 'sa_entry=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/; SameSite=Strict';
+  // Clear in-memory auth token
+  if (typeof clearAuth === 'function') clearAuth();
+  // Reset APP state
+  if (typeof APP !== 'undefined') {
+    APP.tenant = null; APP.loggedIn = false; APP.role = null; APP.adminUser = null;
+  }
+  // Remove all modal/overlay DOM nodes that would sit above the selector
+  document.querySelectorAll('[id*="Overlay"],[id*="overlay"],[id*="selector"]')
+    .forEach(function(el) { el.remove(); });
+  // Show the station selector — which now renders with isSuperLoggedIn()=false
+  // (sessionStorage cleared above) so the login form is shown instead of the logout button
+  if (typeof mt_showSelector === 'function') mt_showSelector();
+  else window.location.reload();
+};
 window.mt_openAddTenant = mt_openAddTenant;
 window.mt_openEditTenant = mt_openEditTenant;
 window.mt_saveTenant = mt_saveTenant;
