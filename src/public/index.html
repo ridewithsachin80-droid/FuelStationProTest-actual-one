@@ -142,6 +142,19 @@
 
   // Register service worker v12 — works on any HTTPS or localhost origin
   if ('serviceWorker' in navigator) {
+    // FIX: Register controllerchange reload UNCONDITIONALLY — outside promptUpdate.
+    // clients.claim() in the SW activate event fires controllerchange immediately when
+    // a new SW takes over, even without user action. If we only register this listener
+    // inside promptUpdate() (which requires user click), the auto-claim causes the page
+    // to get stuck mid-load because loadData() fetch requests are dropped when the new
+    // SW takes control. Registering here ensures any controller change = clean reload.
+    var _reloadOnce = false;
+    navigator.serviceWorker.addEventListener('controllerchange', function() {
+      if (_reloadOnce) return; // guard against double-fire
+      _reloadOnce = true;
+      window.location.reload();
+    });
+
     navigator.serviceWorker.register('/sw.js?v=55.0', { scope: '/' })  // FIX F-08: version matches sw.js
       .then(function(reg) {
         reg.update(); // check for updates on every load
@@ -184,11 +197,6 @@
             };
           };
           showBanner();
-
-          // Reload once new SW takes control
-          navigator.serviceWorker.addEventListener('controllerchange', function() {
-            window.location.reload();
-          });
         }
 
         // New SW already waiting (user revisiting tab)
@@ -986,6 +994,6 @@ window.APP = window.APP || {
 <script src="/app.js?v=55"></script>
 <script src="/bridge.js?v=55"></script>
 <!-- FIX BUG-05: autosave.js loaded last — after utils.js so toast() and other helpers exist -->
-<script src="/autosave.js"></script>
+<script src="/autosave.js?v=55"></script>
 </body>
 </html>
