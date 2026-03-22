@@ -117,6 +117,56 @@
       if (tenants.length > 0) {
         // SERVER HAS DATA — authoritative, sync to localStorage cache
         localStorage.setItem('fb_tenants', JSON.stringify(tenants));
+
+        // PERMANENT FIX: Validate the currently cached active tenant still exists
+        // in the server's authoritative list. If the station was deleted and recreated
+        // with the same name, a different tenant_id is generated. The browser's
+        // localStorage still holds the OLD tenant_id → fetchPublicEmployees() fetches
+        // employees from the old (deleted) station's DB rows — showing stale employees
+        // even after clearing browser cache (cache clears cookies/files, NOT localStorage).
+        //
+        // Fix: if the cached active tenant_id is not in the server's list, it means
+        // that station no longer exists. Wipe all localStorage state for it so the
+        // user must re-select a valid station.
+        try {
+          const cachedActiveTenantId = localStorage.getItem('fb_active_tenant_id');
+          if (cachedActiveTenantId) {
+            const stillExists = tenants.some(t => String(t.id) === String(cachedActiveTenantId));
+            if (!stillExists) {
+              console.warn('[Bridge] Active tenant', cachedActiveTenantId, 'no longer exists on server — clearing stale localStorage state');
+              // Remove all keys related to the deleted station
+              const keysToRemove = [];
+              for (var i = 0; i < localStorage.length; i++) {
+                var k = localStorage.key(i);
+                if (k && (
+                  k === 'fb_active_tenant' ||
+                  k === 'fb_active_tenant_id' ||
+                  k.endsWith('_' + cachedActiveTenantId) ||
+                  k.includes('_' + cachedActiveTenantId + '_')
+                )) {
+                  keysToRemove.push(k);
+                }
+              }
+              keysToRemove.forEach(function(k) {
+                try { localStorage.removeItem(k); } catch(e) {}
+              });
+              // Also clear window state so stale employee/lube data doesn't survive
+              try {
+                window._lubesProducts  = [];
+                window._lubesSales     = [];
+                window._rosterData     = {};
+                window._attendanceData = {};
+                if (typeof APP !== 'undefined') { APP.tenant = null; APP.data = null; }
+              } catch(e) {}
+              // Also delete the stale IndexedDB for this station
+              try {
+                var req = indexedDB.deleteDatabase('FuelBunkPro_' + cachedActiveTenantId);
+                req.onsuccess = function() { console.log('[Bridge] Deleted stale IDB for:', cachedActiveTenantId); };
+              } catch(e) {}
+            }
+          }
+        } catch(e) { /* non-fatal — stale check failure should not break tenant load */ }
+
         return tenants;
       } else {
         // SERVER IS EMPTY — do NOT overwrite localStorage with [].

@@ -758,7 +758,7 @@ function emp_renderLogin() {
     </div>
   </div>
   <div class="card"><div class="card-head"><h4>Login</h4>${badge(emp_today(),'badge-accent')}</div><div class="card-body">
-    <div class="form-group"><label class="form-label">Select Your Name</label>
+    <div class="form-group"><label class="form-label" for="empLoginName">Select Your Name</label>
       <select class="form-input" id="empLoginName" ${hasEmployees ? '' : 'disabled'} onchange="emp_loginNameChanged()">${empOpts}</select>
     </div>
     ${bioSupported ? `<div id="empBioSection">
@@ -2217,17 +2217,31 @@ function emp_recordSale() {
 
   // ── TANK STOCK ENFORCEMENT ────────────────────────────────────────────────
   // Hard block if sale > available stock. No tolerance — any overage is blocked.
-  // Employee can fetch fresh tank data by logging out and back in.
+  // CRITICAL FIX: Use ALL today's sales from APP.data.sales (all employees, all shifts)
+  // rather than just empState.sales (only this employee's current session).
+  // This matches the server-side guard which SUMs the full sales table for today.
+  // Previous code used only empState.sales which was empty after a logout/re-login,
+  // allowing the same employee (or a second employee) to sell the full tank level again.
   const _saleNozzleFuels = (APP.data?.pumps||[]).find(pm=>String(pm.id)===p)?.nozzleFuels || {};
   const _saleFuel = _saleNozzleFuels[document.querySelector('[data-pumpbtn].btn-accent')?.dataset?.nozzlebtn||'A'] || empSaleFuel;
   const _saleTank = (APP.data?.tanks||[]).find(t => (t.fuelType||'').toLowerCase() === (_saleFuel||'').toLowerCase());
   if (_saleTank) {
-    // Subtract what this employee has already sold this shift
-    const _soldThisShift = empState.sales.filter(s=>s.fuelType===_saleFuel).reduce((a,s)=>a+(s.liters||0),0);
-    const _available = Math.max(0, (_saleTank.current||0) - _soldThisShift);
+    const _todayIso = emp_today();
+    // Sum ALL sales today for this fuel type across all employees (full-station view)
+    const _allSoldToday = (APP.data?.sales||[])
+      .filter(s => (s.fuelType||s.fuel_type||'').toLowerCase() === (_saleFuel||'').toLowerCase()
+                && (s.date||'').slice(0,10) === _todayIso)
+      .reduce((a,s) => a + (s.liters||s.quantity||0), 0);
+    // Also include any sales this employee recorded this session that may not yet be in APP.data.sales
+    const _sessionSoldNotInData = empState.sales
+      .filter(s => s.fuelType === _saleFuel && (s.date||'').slice(0,10) === _todayIso
+                && !(APP.data?.sales||[]).some(ds => ds.idempotencyKey && ds.idempotencyKey === s.idempotencyKey))
+      .reduce((a,s) => a + (s.liters||0), 0);
+    const _totalSoldToday = _allSoldToday + _sessionSoldNotInData;
+    const _available = Math.max(0, (_saleTank.current||0) - _totalSoldToday);
     if (l > _available) {
       // HARD BLOCK: any overage is rejected — no tolerance
-      toast(`❌ Cannot sell ${fmt(l)}L — only ${fmt(_available)}L ${getFuel(_saleFuel).short} available in tank. Ask admin to record a fuel purchase first.`, 'error');
+      toast(`❌ Cannot sell ${fmt(l)}L — only ${fmt(_available)}L ${getFuel(_saleFuel).short} available (${fmt(_saleTank.current||0)}L tank − ${fmt(_totalSoldToday)}L sold today). Ask admin to record a fuel purchase or dip.`, 'error');
       return;
     }
   }
@@ -3554,8 +3568,8 @@ function showLoginScreen() {
         '<div style="width:42px;height:42px;border-radius:10px;background:linear-gradient(135deg,var(--accent),var(--accent-light));display:grid;place-items:center;font-size:18px">\uD83D\uDD11</div>' +
         '<div><div class="fw-800" style="color:var(--text-0);font-size:16px">Admin / Owner Login</div><div style="font-size:11px;color:var(--text-3)">Full access to management dashboard</div></div>' +
       '</div>' +
-      '<div class="form-group"><label class="form-label">Username</label><input class="form-input" id="adminUser" placeholder="Enter username" autocomplete="off" /></div>' +
-      '<div class="form-group"><label class="form-label">Password</label><input class="form-input" id="adminPass" type="password" placeholder="Enter password" autocomplete="new-password" onkeydown="if(event.key===\'Enter\')doAdminLogin()" /></div>' +
+      '<div class="form-group"><label class="form-label" for="adminUser">Username</label><input class="form-input" id="adminUser" placeholder="Enter username" autocomplete="off" /></div>' +
+      '<div class="form-group"><label class="form-label" for="adminPass">Password</label><input class="form-input" id="adminPass" type="password" placeholder="Enter password" autocomplete="new-password" onkeydown="if(event.key===\'Enter\')doAdminLogin()" /></div>' +
       '<button class="btn btn-accent btn-block" style="padding:14px;font-size:14px;margin-top:6px" onclick="doAdminLogin()">\uD83D\uDD10 Login as Admin</button>' +
     '</div>' +
     '<div id="empLoginForm" class="login-card" style="display:none">' +
@@ -3563,8 +3577,8 @@ function showLoginScreen() {
         '<div style="width:42px;height:42px;border-radius:10px;background:linear-gradient(135deg,var(--green),#34d399);display:grid;place-items:center;font-size:18px">\uD83E\uDDD1\u200D\uD83D\uDD27</div>' +
         '<div><div class="fw-800" style="color:var(--text-0);font-size:16px">Employee Login</div><div style="font-size:11px;color:var(--text-3)">Enter meter readings &amp; record sales</div></div>' +
       '</div>' +
-      '<div class="form-group"><label class="form-label">Select Your Name</label><select class="form-input" id="empLoginName2"' + (hasEmployees ? '' : ' disabled') + '>' + empOpts + '</select></div>' +
-      '<div class="form-group"><label class="form-label">PIN (Last 4 digits of phone)</label><input class="form-input" id="empLoginPin2" type="password" maxlength="4" placeholder="Enter 4-digit PIN" inputmode="numeric" autocomplete="off" onkeydown="if(event.key===\'Enter\')doEmpLogin()" /></div>' +
+      '<div class="form-group"><label class="form-label" for="empLoginName2">Select Your Name</label><select class="form-input" id="empLoginName2"' + (hasEmployees ? '' : ' disabled') + '>' + empOpts + '</select></div>' +
+      '<div class="form-group"><label class="form-label" for="empLoginPin2">PIN (Last 4 digits of phone)</label><input class="form-input" id="empLoginPin2" type="password" maxlength="4" placeholder="Enter 4-digit PIN" inputmode="numeric" autocomplete="off" onkeydown="if(event.key===\'Enter\')doEmpLogin()" /></div>' +
       '<button class="btn btn-block" style="background:var(--green);color:#fff;padding:14px;font-size:14px;margin-top:6px' + (hasEmployees ? '' : ';opacity:0.6;cursor:not-allowed') + '" onclick="doEmpLogin()"' + (hasEmployees ? '' : ' disabled') + '>\uD83E\uDDD1\u200D\uD83D\uDD27 Login</button>' +
       (hasEmployees ? '' : '<div style="font-size:11px;color:var(--red);margin-top:8px">No employees with PIN set. Ask admin to set PINs in Staff &amp; Allocation.</div>') +
     '</div>' +

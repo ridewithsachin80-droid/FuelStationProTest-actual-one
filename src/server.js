@@ -360,6 +360,44 @@ async function startServer() {
     }
   });
 
+  // ── ONE-TIME CLEANUP: Wipe all lubes products + sales for a tenant ────────────
+  // Use when stale lube data (from a deleted station) reappears after station recreate.
+  // Visit: /api/cleanup/wipe-lubes?secret=YOUR_SECRET&tenantId=stn_xxx
+  // This deletes lubes_products and lubes_sales settings rows AND the lubes_sales table rows.
+  // The admin will need to re-add their lube catalogue from scratch.
+  app.get('/api/cleanup/wipe-lubes', async (req, res) => {
+    if (req.query.secret !== CLEANUP_SECRET) return res.status(403).json({ error: 'Forbidden' });
+    const tenantId = req.query.tenantId;
+    if (!tenantId) return res.status(400).json({ error: 'tenantId required' });
+    try {
+      // Delete from settings table (lubes_products and lubes_sales are stored as JSON here)
+      const delSettings = await pool.query(
+        "DELETE FROM settings WHERE tenant_id = $1 AND key IN ('lubes_products','lubes_sales')",
+        [tenantId]
+      );
+      // Delete from dedicated lubes_sales table (used by the lube-sale endpoint)
+      const delSalesTable = await pool.query(
+        'DELETE FROM lubes_sales WHERE tenant_id = $1',
+        [tenantId]
+      );
+      // Delete from lubes_products table if it exists
+      const delProdsTable = await pool.query(
+        'DELETE FROM lubes_products WHERE tenant_id = $1',
+        [tenantId]
+      ).catch(() => ({ rowCount: 0 }));
+      res.json({
+        success: true,
+        tenantId,
+        deletedSettingsRows: delSettings.rowCount,
+        deletedSalesTableRows: delSalesTable.rowCount,
+        deletedProductsTableRows: delProdsTable.rowCount,
+        message: 'Lube catalogue and sales wiped. Reload the admin app to see the clean state.',
+      });
+    } catch(e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // ── ONE-TIME CLEANUP: Unlock super admin (clear login_attempts lockout) ──
   // Visit /api/cleanup/unlock-admin?secret=YOUR_CLEANUP_SECRET to clear lockout instantly.
   app.get('/api/cleanup/unlock-admin', async (req, res) => {
@@ -1193,13 +1231,17 @@ async function startServer() {
       //   • last_dip is EMPTY  → tank has never been measured (brand-new station setup)
       //                          → allow sale so staff can test the system before first dip
       //   • last_dip is SET    → admin has physically measured this tank at least once
-      //                          → current_level is a real reading — enforce strictly
-      //                          → even 0L blocks sales (correct: tank is genuinely empty)
+      //                          → enforce strictly against REAL available stock
       //
-      // This replaces the old "tankLevel > capacity * 0.05" heuristic which had a fatal
-      // flaw: when current_level was stuck at 0 (e.g. due to the parseInt tank-ID bug),
-      // 0 > capacity*0.05 was always false — guard never fired — overselling was unlimited.
-      // A station sold 6,500L against a 3,500L physical stock because of this bypass.
+      // CRITICAL FIX: The original guard compared `liters > current_level` directly
+      // against the DB value. Tank deduction (tank-deduct endpoint) only fires at
+      // SHIFT CLOSE — so during an active shift, current_level in the DB is never
+      // reduced between sales. This meant an employee could sell 10,000 L three times
+      // in a row against a 15,000 L tank because every check saw the same 15,000 L.
+      //
+      // Fix: subtract today's already-recorded sales for this fuel type from
+      // current_level to get the true in-shift available stock before comparing.
+      // Uses IST date to match the same timezone logic as the rest of the app.
       if (sale.fuelType && liters > 0) {
         const tankRow = await client.query(
           'SELECT current_level, capacity, last_dip FROM tanks WHERE tenant_id=$1 AND LOWER(fuel_type)=LOWER($2)',
@@ -1209,13 +1251,32 @@ async function startServer() {
           const tankLevel = parseFloat(tankRow.rows[0].current_level) || 0;
           const lastDip   = tankRow.rows[0].last_dip || '';
           // Only enforce when a dip has been recorded — skips brand-new unfilled tanks
-          if (lastDip && liters > tankLevel) {
-            client.release();
-            return res.status(422).json({
-              error: `Insufficient stock: ${sale.fuelType} tank has ${tankLevel.toFixed(0)}L available, sale requires ${liters}L. Ask admin to record a dip reading first.`,
-              available: tankLevel,
-              requested: liters,
-            });
+          if (lastDip) {
+            // Sum all sales recorded today for this fuel type that have not yet been
+            // deducted from the tank (tank deduction happens at shift close, not per-sale).
+            // This gives us the TRUE available stock mid-shift.
+            const todayIst = istDate();
+            const soldTodayRow = await client.query(
+              `SELECT COALESCE(SUM(liters), 0) AS sold
+               FROM sales
+               WHERE tenant_id = $1
+                 AND LOWER(fuel_type) = LOWER($2)
+                 AND date = $3`,
+              [tenantId, sale.fuelType, todayIst]
+            );
+            const soldToday  = parseFloat(soldTodayRow.rows[0]?.sold) || 0;
+            const available  = Math.max(0, tankLevel - soldToday);
+
+            if (liters > available) {
+              client.release();
+              return res.status(422).json({
+                error: `Insufficient stock: ${sale.fuelType} tank has ${available.toFixed(0)}L available (${tankLevel.toFixed(0)}L physical − ${soldToday.toFixed(0)}L sold today), sale requires ${liters}L.`,
+                available,
+                tankLevel,
+                soldToday,
+                requested: liters,
+              });
+            }
           }
         }
       }
