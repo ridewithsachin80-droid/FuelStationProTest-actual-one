@@ -3562,8 +3562,8 @@ function showLoginScreen() {
       '<button class="login-tab" id="ltEmp" onclick="switchLoginTab(\'employee\')">\uD83E\uDDD1\u200D\uD83D\uDD27 Employee Login</button>' +
     '</div>' +
     '<div id="adminLoginForm" class="login-card">' +
-      '<input type="text" style="display:none" aria-hidden="true" />' +
-      '<input type="password" style="display:none" aria-hidden="true" />' +
+      '<input type="text" name="username_fake" style="display:none" aria-hidden="true" />' +
+      '<input type="password" name="password_fake" style="display:none" aria-hidden="true" />' +
       '<div style="display:flex;align-items:center;gap:10px;margin-bottom:18px">' +
         '<div style="width:42px;height:42px;border-radius:10px;background:linear-gradient(135deg,var(--accent),var(--accent-light));display:grid;place-items:center;font-size:18px">\uD83D\uDD11</div>' +
         '<div><div class="fw-800" style="color:var(--text-0);font-size:16px">Admin / Owner Login</div><div style="font-size:11px;color:var(--text-3)">Full access to management dashboard</div></div>' +
