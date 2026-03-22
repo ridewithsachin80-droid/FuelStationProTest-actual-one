@@ -378,7 +378,7 @@ async function saveAdminPassword() {
   toast('Password updated', 'success');
 }
 
-// Hash change
+// Hash change — user navigated via back/forward or typed a hash
 window.addEventListener('hashchange', () => {
   if (!APP.loggedIn) return;
   const hash = window.location.hash.replace('#', '');

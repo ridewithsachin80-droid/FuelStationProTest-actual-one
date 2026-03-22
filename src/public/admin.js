@@ -7583,7 +7583,7 @@ function updateStationBreadcrumb() {
   }
 }
 
-function navigate(pageId) {
+function navigate(pageId, _isInitialRestore) {
   // RBAC: block pages the current role can't see
   // FIX: If pageId is not in PAGES at all (sub-page like 'balsheet'), never block it —
   // sub-pages are only reachable via explicit button clicks, not the nav menu.
@@ -7593,7 +7593,12 @@ function navigate(pageId) {
     // instead of showing an error toast (confuses users on reload)
     if (APP.page === pageId || !APP.page) {
       APP.page = 'dashboard';
-      window.location.hash = 'dashboard';
+      // Use replaceState on initial restore to avoid skippable-history-item warning
+      if (_isInitialRestore) {
+        try { history.replaceState(null, '', '#dashboard'); } catch(e) { window.location.hash = 'dashboard'; }
+      } else {
+        window.location.hash = 'dashboard';
+      }
       renderPage();
     } else {
       toast('Access denied — your role does not have permission for this', 'error');
@@ -7604,7 +7609,15 @@ function navigate(pageId) {
   APP.salesFilter = 'all';
   APP.salesDate = (typeof window.today === 'function') ? window.today() : new Date().toLocaleString('en-CA', { timeZone: 'Asia/Kolkata' }).slice(0, 10); // FIX 31: IST
   APP.salesEmpFilter = 'all';
-  window.location.hash = pageId;
+  // FIX: On initial page restore from URL hash, use replaceState (modifies existing
+  // history entry) instead of setting location.hash (creates a new entry).
+  // Creating a programmatic history entry without user interaction triggers Chrome's
+  // "Session History Item Has Been Marked Skippable" DevTools warning.
+  if (_isInitialRestore) {
+    try { history.replaceState(null, '', '#' + pageId); } catch(e) { window.location.hash = pageId; }
+  } else {
+    window.location.hash = pageId;
+  }
   const _pt = document.getElementById('pageTitle'); if (_pt) _pt.textContent = PAGES.find(p => p.id === pageId)?.label || '';
   updateStationBreadcrumb();
   buildNav();

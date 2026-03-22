@@ -4148,7 +4148,12 @@ function enterApp() {
     document.getElementById('avatarEl').textContent = ini;
     // Always start at dashboard on admin login — ignore any stale hash/page from employee session
     APP.page = 'dashboard';
-    window.location.hash = '';
+    // FIX: Use replaceState instead of location.hash = '' to avoid creating a new
+    // history entry without user interaction. Setting location.hash programmatically
+    // pushes a new entry; Chrome then marks the previous entry (#lubes etc.) as
+    // "skippable" — causing the DevTools "Session History Item Has Been Marked Skippable"
+    // warning. replaceState modifies the current entry in-place, no new push, no warning.
+    try { history.replaceState(null, '', window.location.pathname); } catch(e) { window.location.hash = ''; }
     if (typeof updateStationBreadcrumb === 'function') updateStationBreadcrumb();
     // Clear stale subscription cache so dashboard always fetches fresh on login
     window._subStatus = null;
@@ -4179,7 +4184,8 @@ function appLogout() {
     empState.page = 'login';
   }
   clearSession();
-  window.location.hash = '';
+  // FIX: Use replaceState to clear the hash without pushing a new skippable history entry
+  try { history.replaceState(null, '', window.location.pathname); } catch(e) { window.location.hash = ''; }
   // Clear tenant from APP so showLoginScreen() shows the landing page,
   // not the station login screen (which would skip the back-to-menu option)
   if (typeof APP !== 'undefined') {
