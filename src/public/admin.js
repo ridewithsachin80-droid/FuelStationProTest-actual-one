@@ -7679,9 +7679,26 @@ function renderPage() {
   if (!el) { console.error('No #content element'); return; }
   el.className = 'content';
 
-  // Guard: if data not loaded yet, show loading state
+  // Guard: if data not loaded yet, show loading state with auto-retry
   if (!D && APP.page !== 'employee') {
-    el.innerHTML = '<div style="text-align:center;padding:60px 20px;color:var(--text-3)"><div style="font-size:40px;margin-bottom:16px">⏳</div><div class="fw-700">Loading data...</div><div style="font-size:12px;margin-top:8px">If this persists, try refreshing the page.</div></div>';
+    el.innerHTML = '<div style="text-align:center;padding:60px 20px;color:var(--text-3)"><div style="font-size:40px;margin-bottom:16px">⏳</div><div class="fw-700">Loading data...</div><div style="font-size:12px;margin-top:8px">Connecting to server. Please wait.</div><div style="margin-top:16px"><button onclick="location.reload()" style="background:var(--bg-2);border:1px solid var(--border);color:var(--text-1);padding:8px 18px;border-radius:8px;font-size:12px;cursor:pointer">↺ Reload</button></div></div>';
+    // Auto-retry: attempt loadData() again after 5s if still no data
+    if (!window._renderPageRetryTimer) {
+      window._renderPageRetryTimer = setTimeout(async function() {
+        window._renderPageRetryTimer = null;
+        if (APP.data && APP.data !== SEED) return; // data arrived via other path
+        try {
+          const token = typeof getAuthToken === 'function' ? getAuthToken() : null;
+          if (!token) return; // no session — don't retry
+          await Promise.race([
+            loadData(),
+            new Promise((_, rej) => setTimeout(() => rej(new Error('retry timeout')), 15000))
+          ]);
+          if (typeof saveDataSnapshot === 'function' && APP.data) saveDataSnapshot(APP.data);
+        } catch(e) { console.warn('[renderPage retry]', e.message); }
+        renderPage(); // re-render now that data may be loaded
+      }, 5000);
+    }
     return;
   }
 

@@ -1027,7 +1027,14 @@
           sessionStorage.setItem('fb_session', JSON.stringify({ loggedIn:true, role:'admin', adminUser:{name:result.userName, username:user, role:result.userRole}, tenant, token:result.token }));
           if (typeof APP !== 'undefined') { APP.loggedIn=true; APP.role='admin'; APP.adminUser={name:result.userName, username:user, role:result.userRole}; APP.tenant=tenant; }
           window.db = new FuelDB('FuelBunkPro_' + tenant.id);
-          if (typeof loadData === 'function') { try { await loadData(); } catch(e) { console.warn('[Bridge] loadData:', e.message); } }
+          if (typeof loadData === 'function') {
+            try {
+              await Promise.race([
+                loadData(),
+                new Promise((_, rej) => setTimeout(() => rej(new Error('loadData timeout 20s')), 20000))
+              ]);
+            } catch(e) { console.warn('[Bridge] loadData:', e.message); }
+          }
           if (typeof enterApp === 'function') enterApp();
           if (typeof toast === 'function') toast('Welcome, ' + result.userName, 'success');
         }

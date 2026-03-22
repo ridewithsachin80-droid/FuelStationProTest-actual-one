@@ -186,24 +186,53 @@ async function initApp() {
   if (sessionOk) {
     if (APP.role === 'employee') { emp_loadSession(); if (!empState.active) { empState.page = 'login'; } }
     // Load data WITH token now set by loadSession — ensures correct server data on every refresh
-    try {
-      await Promise.race([
-        loadData(),
-        new Promise((_, rej) => setTimeout(() => rej(new Error('DB timeout 5s')), 5000))
-      ]);
-      // Snapshot data for offline use
-      if (typeof saveDataSnapshot === 'function' && APP.data) saveDataSnapshot(APP.data);
-    } catch (e) {
-      console.warn('DB load failed:', e.message);
-      // Offline fallback — restore from last snapshot
+    // FIX: Increased timeout from 5s → 20s. Railway free tier has cold-start latency of 8-15s.
+    // The bulk-load endpoint fires 11 parallel PostgreSQL queries — on cold start this reliably
+    // exceeded the old 5s limit, leaving APP.data as empty SEED and showing "Loading data..." forever.
+    // Added retry: if first attempt times out, wait 2s and try once more with a 15s window.
+    const _doLoadData = async () => {
+      try {
+        await Promise.race([
+          loadData(),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('DB timeout 20s')), 20000))
+        ]);
+        if (typeof saveDataSnapshot === 'function' && APP.data) saveDataSnapshot(APP.data);
+        return true; // success
+      } catch (e) {
+        console.warn('[initApp] loadData attempt failed:', e.message);
+        return false;
+      }
+    };
+
+    let _loaded = await _doLoadData();
+
+    if (!_loaded) {
+      // First attempt failed — update splash and retry once with a fresh 15s window
+      _splashProgress(88, 'Connecting to server...');
+      await new Promise(r => setTimeout(r, 2000)); // brief pause before retry
+      _loaded = await (async () => {
+        try {
+          await Promise.race([
+            loadData(),
+            new Promise((_, rej) => setTimeout(() => rej(new Error('DB timeout retry 15s')), 15000))
+          ]);
+          if (typeof saveDataSnapshot === 'function' && APP.data) saveDataSnapshot(APP.data);
+          return true;
+        } catch(e) {
+          console.warn('[initApp] loadData retry failed:', e.message);
+          return false;
+        }
+      })();
+    }
+
+    if (!_loaded) {
+      // Both attempts failed — try offline snapshot fallback
       if (!navigator.onLine && typeof loadDataSnapshot === 'function') {
         const snap = loadDataSnapshot();
         if (snap) {
           APP.data = snap;
-          // FIX F-04: Show stale warning if snapshot is older than 24h
           if (window._snapshotIsStale && window._snapshotAgeHours) {
             if (typeof toast === 'function') toast('📴 Offline — showing data from ' + window._snapshotAgeHours + 'h ago. Prices may be outdated.', 'warning');
-            // Show persistent stale banner in the offline bar
             const bar = document.getElementById('offlineBar');
             if (bar) {
               bar.textContent = '⚡ Offline — showing data from ' + window._snapshotAgeHours + 'h ago. Fuel prices may be stale.';
@@ -214,6 +243,13 @@ async function initApp() {
           } else {
             if (typeof toast === 'function') toast('📴 Offline — showing last saved data', 'info');
           }
+        }
+      } else if (navigator.onLine && typeof loadDataSnapshot === 'function') {
+        // Online but server slow/unreachable — load snapshot and show retry button
+        const snap = loadDataSnapshot();
+        if (snap) {
+          APP.data = snap;
+          if (typeof toast === 'function') toast('⚠️ Server slow — showing cached data. Tap refresh to retry.', 'warning');
         }
       }
     }
