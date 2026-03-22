@@ -1351,7 +1351,9 @@ function renderFinance(D) {
   const lubesRevenue = (window._lubesSales || []).reduce((a, s) => a + (s.amount||0), 0);
   const lubesCost    = (window._lubesProducts || []).reduce((a, p) => {
     const sold = (window._lubesSales || []).filter(s => s.productId === p.id).reduce((x,s) => x + s.qty, 0);
-    return a + sold * (p.costPrice || 0);
+    // FIX: for carton products, COGS is per-piece cost (costPrice ÷ qtyPerCarton), not full carton price
+    const costPc = (p.isCartonPacked && p.qtyPerCarton > 1) ? (p.costPrice||0) / p.qtyPerCarton : (p.costPrice||0);
+    return a + sold * costPc;
   }, 0);
   const gross = totalRevenue + lubesRevenue; // Revenue is gross before fuel purchase cost
 
@@ -4789,7 +4791,11 @@ function openEditLubeModal(id) {
     <div id="lp_margin_box" style="display:none;padding:8px 12px;background:var(--bg-0);border-radius:var(--radius-sm);border:1px solid var(--border-light);font-size:12px;margin-bottom:8px"><span id="lp_margin_text"></span></div>
     <div class="g g-2 gap-12">
       <div class="form-group" id="lp_stock_group" style="display:${isCarton?'none':''}"><label class="form-label" for="lp_stock">Current Stock (pieces)</label><input class="form-input" type="number" id="lp_stock" value="${p.stock||0}" /></div>
-      <div class="form-group" id="lp_cartons_group" style="display:${isCarton?'':'none'}"><label class="form-label" for="lp_cartons">Current Stock (cartons, approx)</label><input class="form-input" type="number" id="lp_cartons" value="${p.qtyPerCarton > 0 ? Math.floor((p.stock||0)/p.qtyPerCarton) : 0}" placeholder="0" min="0" oninput="calcLpCarton()" /></div>
+      <div class="form-group" id="lp_cartons_group" style="display:${isCarton?'':'none'}">
+        <label class="form-label" for="lp_cartons">Current Stock (cartons, approx)</label>
+        <input class="form-input" type="number" id="lp_cartons" value="${p.qtyPerCarton > 0 ? Math.floor((p.stock||0)/p.qtyPerCarton) : 0}" placeholder="0" min="0" oninput="calcLpCarton()" />
+        ${(p.stock||0) % (p.qtyPerCarton||1) > 0 ? `<div style="font-size:10px;color:var(--accent-light);margin-top:3px">⚠️ Actual: ${p.stock} pieces (${Math.floor((p.stock||0)/(p.qtyPerCarton||1))} full cartons + ${(p.stock||0) % (p.qtyPerCarton||1)} loose). Saving resets to full cartons only.</div>` : ''}
+      </div>
       <div class="form-group"><label class="form-label" for="lp_minstock">Min Stock Alert (pieces)</label><input class="form-input" type="number" id="lp_minstock" value="${p.minStock||5}" /></div>
     </div>
     <div id="lp_stock_calc" style="display:none;padding:8px 12px;background:var(--bg-0);border-radius:var(--radius-sm);border:1px solid var(--border-light);font-size:12px;margin-bottom:8px"><span id="lp_stock_text"></span></div>
@@ -4847,7 +4853,9 @@ function saveLubeProduct(editId) {
     if (dup) { toast(`"${name}" already exists in catalogue`,'error'); return; }
   }
   if (!window._lubesProducts) window._lubesProducts = [];
-  const pd = { name, brand, sku, category, unit, costPrice, mrp, sellingPrice, stock, minStock, hsn, gstPct, expiryDate, active:true, isCartonPacked, qtyPerCarton, indSize, packType };
+  const pd = { name, brand, sku, category, unit, costPrice, mrp, sellingPrice, stock, minStock, hsn, gstPct, expiryDate, active:true, isCartonPacked, qtyPerCarton, indSize, packType,
+    _stockChanged: true   // FIX: tell lubes_save this is an intentional stock change — don't revert to DB value
+  };
   if (editId) {
     const idx = window._lubesProducts.findIndex(p=>p.id===editId);
     if (idx >= 0) window._lubesProducts[idx] = { ...window._lubesProducts[idx], ...pd };
@@ -4986,12 +4994,38 @@ function openLubeSaleModal(productId) {
     </div>
     <div id="ls_total_preview" style="padding:12px;background:rgba(212,148,15,0.08);border-radius:8px;text-align:center;margin-bottom:12px;font-size:11px;color:var(--text-3)">Enter quantity to see total</div>
     <div class="g g-2 gap-12">
-      <div class="form-group"><label class="form-label" for="ls_mode">Payment Mode</label><select class="form-input" id="ls_mode">${modeOpts}</select></div>
-      <div class="form-group"><label class="form-label" for="ls_customer">Customer (optional)</label><input class="form-input" id="ls_customer" placeholder="Name / Vehicle" /></div>
+      <div class="form-group"><label class="form-label" for="ls_mode">Payment Mode</label><select class="form-input" id="ls_mode" onchange="toggleLubeSaleCustomer(this.value)">${modeOpts}</select></div>
+      <div class="form-group" id="ls_customer_wrap">
+        <label class="form-label" for="ls_customer" id="ls_customer_label">Customer (optional)</label>
+        <input class="form-input" id="ls_customer" placeholder="Name / Vehicle" />
+      </div>
+      <div class="form-group" id="ls_credit_wrap" style="display:none">
+        <label class="form-label" for="ls_credit_customer">Credit Customer *</label>
+        <select class="form-input" id="ls_credit_customer">
+          <option value="">— Select Credit Customer —</option>
+          ${(APP.data?.creditCustomers||[]).filter(c=>c.active!==false&&c.active!==0).map(c=>`<option value="${sanitize(c.name)}">${sanitize(c.name)}</option>`).join('')}
+        </select>
+      </div>
     </div>
   `, `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-accent" onclick="saveLubeSale(${productId})">💰 Record Sale</button>`);
 }
 window.openLubeSaleModal = openLubeSaleModal;
+
+function toggleLubeSaleCustomer(mode) {
+  const wrap    = document.getElementById('ls_customer_wrap');
+  const cWrap   = document.getElementById('ls_credit_wrap');
+  const label   = document.getElementById('ls_customer_label');
+  if (!wrap) return;
+  if (mode === 'credit') {
+    wrap.style.display = 'none';
+    if (cWrap) cWrap.style.display = '';
+  } else {
+    wrap.style.display = '';
+    if (cWrap) cWrap.style.display = 'none';
+    if (label) label.textContent = 'Customer (optional)';
+  }
+}
+window.toggleLubeSaleCustomer = toggleLubeSaleCustomer;
 
 function calcLubeSaleTotal(defaultRate) {
   const qty  = parseFloat(document.getElementById('ls_qty')?.value)||0;
@@ -5009,9 +5043,12 @@ async function saveLubeSale(productId) {
   const qty      = parseFloat(document.getElementById('ls_qty')?.value);
   const rate     = parseFloat(document.getElementById('ls_rate')?.value);
   const mode     = document.getElementById('ls_mode')?.value||'cash';
-  const customer = (document.getElementById('ls_customer')?.value||'').trim();
+  const customer = mode === 'credit'
+    ? (document.getElementById('ls_credit_customer')?.value||'').trim()
+    : (document.getElementById('ls_customer')?.value||'').trim();
   if (isNaN(qty)||qty<=0) { toast('Enter valid quantity','error'); return; }
   if (isNaN(rate)||rate<=0) { toast('Enter valid rate','error'); return; }
+  if (mode === 'credit' && !customer) { toast('Select a credit customer for credit sale','error'); return; }
   const p = (window._lubesProducts||[]).find(x=>String(x.id)===String(productId));
   if (!p) { toast('Product not found — please refresh','error'); return; }
   if (p.active === false) { toast('This product is inactive','error'); return; }
