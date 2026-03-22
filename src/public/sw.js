@@ -1,6 +1,6 @@
 /**
  * FuelBunk Pro — Service Worker v12
- * Cache v59 — loaded stuck-loading fix, DUPLICATE_DAILY_SALE handler,
+ * Cache v61 — loaded stuck-loading fix, DUPLICATE_DAILY_SALE handler,
  *   GSTIN validation on export, Tally URL config, in-flight sale backup,
  *   SHA-256 hash removed from super admin, dead logout override removed
  * Strategy:
@@ -13,7 +13,7 @@
  *   - Push notifications: Fully wired — requires VAPID subscription from server
  */
 
-const CACHE_VERSION = 'v59';
+const CACHE_VERSION = 'v61';
 const CACHE_NAME    = `fuelbunk-${CACHE_VERSION}`;
 const SHELL_CACHE   = `fuelbunk-shell-${CACHE_VERSION}`;
 const API_CACHE     = `fuelbunk-api-${CACHE_VERSION}`;
@@ -27,14 +27,14 @@ const API_CACHE     = `fuelbunk-api-${CACHE_VERSION}`;
 // handler below will cache it on first successful network fetch instead.
 const SHELL_ASSETS = [
   '/',
-  '/multitenant.js?v=59',
-  '/utils.js?v=59',
-  '/admin.js?v=59',
-  '/employee.js?v=59',
-  '/app.js?v=59',
-  '/api-client.js?v=59',
-  '/bridge.js?v=59',
-  '/autosave.js?v=59',
+  '/multitenant.js?v=61',
+  '/utils.js?v=61',
+  '/admin.js?v=61',
+  '/employee.js?v=61',
+  '/app.js?v=61',
+  '/api-client.js?v=61',
+  '/bridge.js?v=61',
+  '/autosave.js?v=61',
   '/manifest.json',
   '/icon-192.png',
   '/icon-512.png',

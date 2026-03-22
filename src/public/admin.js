@@ -4685,7 +4685,11 @@ function openAddLubeModal(prefill) {
   const gstOpts  = LUBES_GST_RATES.map(r=>`<option value="${r}" ${r===(pf.gstPct||18)?'selected':''}>${r}%</option>`).join('');
   const ptOpts   = ['Pouch','Bottle','Can','Sachet','Jar','Pack'].map(t=>`<option value="${t}" ${t===(pf.packType||'Pouch')?'selected':''}>${t}</option>`).join('');
   const isCarton = !!(pf.qtyPerCarton > 0);
-  openModal('📦 Add Product', `
+  // Show queue progress when bulk-adding from invoice scan
+  const modalTitle = (pf._queueRemaining > 1)
+    ? `📦 Add Product — ${pf._queueRemaining} remaining`
+    : '📦 Add Product';
+  openModal(modalTitle, `
     <div class="g g-2 gap-12">
       <div class="form-group" style="grid-column:1/-1"><label class="form-label" for="lp_name">Product Name *</label><input class="form-input" id="lp_name" value="${sanitize(pf.name||'')}" placeholder="e.g. Servo 2T Supreme(JFC)" /></div>
       <div class="form-group"><label class="form-label" for="lp_brand">Brand</label><input class="form-input" id="lp_brand" value="${sanitize(pf.brand||'')}" placeholder="e.g. Indian Oil / Servo" /></div>
@@ -4843,7 +4847,24 @@ function saveLubeProduct(editId) {
   lubes_save();
   closeModal();
   toast(editId ? '✅ Product updated' : '✅ Product added', 'success');
-  renderPage();
+
+  // ── Bill scan queue: open next new product automatically ──────────────────
+  if (!editId && window._billAddQueue && window._billAddQueue.length > 0) {
+    const next = window._billAddQueue.shift();
+    const remaining = window._billAddQueue.length + 1;
+    setTimeout(() => openAddLubeModal({
+      name: next.name||'', brand: 'Indian Oil / Servo',
+      sku: next.sku||'', hsn: next.hsn||'',
+      gstPct: next.gstPct||18, costPrice: next.ratePerCarton||0, mrp: next.mrp||0,
+      isCartonPacked: next.isCartonPacked, qtyPerCarton: next.packQty||0,
+      indSize: next.packSize||'', packType: next.packType||'Pouch',
+      cartons: next.cartonsOrdered||0, category: 'Engine Oil', unit: 'Nos',
+      _queueRemaining: remaining,
+    }), 150);
+  } else {
+    if (!editId) window._billAddQueue = [];
+    renderPage();
+  }
 }
 window.saveLubeProduct = saveLubeProduct;
 
@@ -5263,10 +5284,9 @@ function renderBillScanResults(data) {
   const prods = data.products || [];
   if (!prods.length) { area.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-3)">No products found in this invoice</div>'; area.style.display='block'; return; }
 
-  // Store globally for confirmBillItem to access
   window._billScanData = data;
 
-  const existingSkus = new Set((window._lubesProducts||[]).map(p=>p.sku).filter(Boolean));
+  const existingSkus  = new Set((window._lubesProducts||[]).map(p=>p.sku).filter(Boolean));
   const existingNames = new Map((window._lubesProducts||[]).map(p=>[p.name.toLowerCase(), p]));
 
   let html = `<div style="padding:8px 12px;background:rgba(55,138,221,0.08);border-radius:var(--radius-sm);font-size:12px;margin-bottom:12px">
@@ -5275,91 +5295,142 @@ function renderBillScanResults(data) {
     &nbsp;·&nbsp; ${sanitize(data.invoiceDate||'')}
     &nbsp;·&nbsp; Total: ₹${(data.totalAmount||0).toLocaleString('en-IN')}
   </div>
-  <div style="font-size:12px;color:var(--text-2);margin-bottom:8px;font-weight:700">${prods.length} product${prods.length!==1?'s':''} found:</div>`;
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+    <div style="font-size:12px;color:var(--text-2);font-weight:700">${prods.length} product${prods.length!==1?'s':''} found:</div>
+    <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:var(--text-2)">
+      <input type="checkbox" id="billSelectAll" checked
+        style="width:15px;height:15px;accent-color:var(--accent);cursor:pointer"
+        onchange="billToggleAll(this.checked)" />
+      Select All
+    </label>
+  </div>`;
 
   prods.forEach((prod, idx) => {
     const matchBySkuProd = prod.sku ? (window._lubesProducts||[]).find(p=>p.sku === prod.sku) : null;
-    const matchByName = existingNames.get((prod.name||'').toLowerCase());
-    const match = matchBySkuProd || matchByName;
-    const pieces = prod.isCartonPacked ? (prod.cartonsOrdered||0)*(prod.packQty||1) : (prod.cartonsOrdered||0);
-    const packStr = prod.isCartonPacked && prod.packQty > 1 ? `${prod.packQty}×${prod.packSize} ${prod.packType}` : (prod.packSize || prod.packType || '');
+    const matchByName    = existingNames.get((prod.name||'').toLowerCase());
+    const match          = matchBySkuProd || matchByName;
+    const pieces  = prod.isCartonPacked ? (prod.cartonsOrdered||0)*(prod.packQty||1) : (prod.cartonsOrdered||0);
+    const packStr = prod.isCartonPacked && prod.packQty > 1
+      ? `${prod.packQty}×${prod.packSize} ${prod.packType}`
+      : (prod.packSize || prod.packType || '');
 
-    html += `<div id="billitem_${idx}" style="border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px;margin-bottom:8px">
-      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px">
-        <div style="flex:1">
-          <div style="font-weight:700;font-size:13px">${sanitize(prod.name||'')}</div>
-          <div style="font-size:10px;color:var(--text-3);margin-top:2px">
-            ${prod.sku?'SKU '+sanitize(prod.sku)+' · ':''}HSN ${sanitize(prod.hsn||'')} · GST ${prod.gstPct||18}% · ${prod.cartonsOrdered||0} ${prod.isCartonPacked?'CAR':'nos'} @ ₹${(prod.ratePerCarton||0).toLocaleString('en-IN',{maximumFractionDigits:2})}
-            ${packStr?'<br><span style="background:rgba(99,153,34,0.12);color:#27500A;padding:0 5px;border-radius:3px">'+sanitize(packStr)+'</span>':''}
+    html += `<div id="billitem_${idx}" style="border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px;margin-bottom:8px;display:flex;align-items:flex-start;gap:10px">
+      <input type="checkbox" class="bill-item-chk" data-idx="${idx}" checked
+        style="width:16px;height:16px;accent-color:var(--accent);cursor:pointer;margin-top:3px;flex-shrink:0"
+        onchange="billUpdateAddBtn()" />
+      <div style="flex:1">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px">
+          <div style="flex:1">
+            <div style="font-weight:700;font-size:13px">${sanitize(prod.name||'')}</div>
+            <div style="font-size:10px;color:var(--text-3);margin-top:2px">
+              ${prod.sku?'SKU '+sanitize(prod.sku)+' · ':''}HSN ${sanitize(prod.hsn||'')} · GST ${prod.gstPct||18}% · ${prod.cartonsOrdered||0} ${prod.isCartonPacked?'CAR':'nos'} @ ₹${(prod.ratePerCarton||0).toLocaleString('en-IN',{maximumFractionDigits:2})}
+              ${packStr?'<br><span style="background:rgba(99,153,34,0.12);color:#27500A;padding:0 5px;border-radius:3px">'+sanitize(packStr)+'</span>':''}
+            </div>
           </div>
-        </div>
-        <div style="text-align:right;flex-shrink:0">
-          ${match
-            ? `<div style="font-size:10px;color:#185FA5;margin-bottom:4px">↺ Update stock</div>
-               <button class="btn btn-accent btn-sm" style="font-size:11px" onclick="confirmBillItem(${idx})">+ ${pieces.toLocaleString('en-IN')} pcs</button>`
-            : `<div style="font-size:10px;color:#27500A;margin-bottom:4px">New product</div>
-               <button class="btn btn-accent btn-sm" style="font-size:11px;background:#22c55e" onclick="confirmBillItem(${idx})">Add →</button>`
-          }
+          <div style="text-align:right;flex-shrink:0;font-size:10px">
+            ${match
+              ? `<span style="color:#185FA5">↺ Update · +${pieces.toLocaleString('en-IN')} pcs</span>`
+              : `<span style="color:#27500A">New product</span>`}
+          </div>
         </div>
       </div>
     </div>`;
   });
+
+  html += `<div style="display:flex;gap:8px;margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">
+    <button class="btn btn-ghost" style="flex:1" onclick="closeModal()">Close</button>
+    <button class="btn btn-accent" id="billAddSelectedBtn"
+      style="flex:2;background:#22c55e;color:#000;font-weight:700"
+      onclick="confirmAllBillItems()">
+      ✅ Add All Selected (${prods.length})
+    </button>
+  </div>`;
 
   area.innerHTML = html;
   area.style.display = 'block';
 }
 window.renderBillScanResults = renderBillScanResults;
 
-async function confirmBillItem(idx) {
+function billToggleAll(checked) {
+  document.querySelectorAll('.bill-item-chk').forEach(c => { c.checked = checked; });
+  billUpdateAddBtn();
+}
+window.billToggleAll = billToggleAll;
+
+function billUpdateAddBtn() {
+  const selected = document.querySelectorAll('.bill-item-chk:checked').length;
+  const total    = document.querySelectorAll('.bill-item-chk').length;
+  const btn      = document.getElementById('billAddSelectedBtn');
+  const allChk   = document.getElementById('billSelectAll');
+  if (btn) {
+    btn.textContent = selected > 0 ? `✅ Add Selected (${selected})` : 'Nothing selected';
+    btn.disabled    = selected === 0;
+    btn.style.opacity = selected === 0 ? '0.5' : '1';
+  }
+  if (allChk) allChk.checked = selected > 0 && selected === total;
+}
+window.billUpdateAddBtn = billUpdateAddBtn;
+
+async function confirmAllBillItems() {
   const data = window._billScanData;
   if (!data) return;
-  const prod = data.products[idx];
-  if (!prod) return;
+  const checkboxes = Array.from(document.querySelectorAll('.bill-item-chk:checked'));
+  if (checkboxes.length === 0) { toast('Select at least one product', 'error'); return; }
 
-  const btn = document.querySelector(`#billitem_${idx} button`);
-  if (btn) { btn.disabled = true; btn.textContent = '✓ Done'; }
+  const btn = document.getElementById('billAddSelectedBtn');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Adding...'; }
 
-  const pieces = prod.isCartonPacked ? Math.round((prod.cartonsOrdered||0)*(prod.packQty||1)) : (prod.cartonsOrdered||0);
+  let updated = 0;
+  const needsModal = [];
 
-  // Check if product already exists by SKU or name
-  const existingBySku  = prod.sku ? (window._lubesProducts||[]).find(p=>p.sku===prod.sku) : null;
-  const existingByName = (window._lubesProducts||[]).find(p=>p.name.toLowerCase()===(prod.name||'').toLowerCase());
-  const existing = existingBySku || existingByName;
+  for (const chk of checkboxes) {
+    const idx  = parseInt(chk.dataset.idx);
+    const prod = data.products[idx];
+    if (!prod) continue;
+    const pieces         = prod.isCartonPacked ? Math.round((prod.cartonsOrdered||0)*(prod.packQty||1)) : (prod.cartonsOrdered||0);
+    const existingBySku  = prod.sku ? (window._lubesProducts||[]).find(p=>p.sku===prod.sku) : null;
+    const existingByName = (window._lubesProducts||[]).find(p=>p.name.toLowerCase()===(prod.name||'').toLowerCase());
+    const existing       = existingBySku || existingByName;
 
-  if (existing) {
-    // Update stock + cost price on existing product
-    existing.stock = (existing.stock||0) + pieces;
-    if (prod.ratePerCarton > 0) existing.costPrice = prod.ratePerCarton;
-    if (prod.mrp > 0) existing.mrp = prod.mrp;
-    if (prod.sku && !existing.sku) existing.sku = prod.sku;
-    lubes_save();
-    toast(`✅ ${sanitize(prod.name)} — stock +${pieces.toLocaleString('en-IN')}`, 'success');
-  } else {
-    // Add new product — close scan modal and open add modal pre-filled
-    closeModal();
-    openAddLubeModal({
-      name:          prod.name || '',
-      brand:         'Indian Oil / Servo',
-      sku:           prod.sku || '',
-      hsn:           prod.hsn || '',
-      gstPct:        prod.gstPct || 18,
-      costPrice:     prod.ratePerCarton || 0,
-      mrp:           prod.mrp || 0,
-      isCartonPacked: prod.isCartonPacked,
-      qtyPerCarton:  prod.packQty || 0,
-      indSize:       prod.packSize || '',
-      packType:      prod.packType || 'Pouch',
-      cartons:       prod.cartonsOrdered || 0,
-      category:      'Engine Oil',
-      unit:          'Nos',
-    });
-    return;
+    if (existing) {
+      existing.stock = (existing.stock||0) + pieces;
+      if (prod.ratePerCarton > 0) existing.costPrice = prod.ratePerCarton;
+      if (prod.mrp > 0) existing.mrp = prod.mrp;
+      if (prod.sku && !existing.sku) existing.sku = prod.sku;
+      updated++;
+    } else {
+      needsModal.push(prod);
+    }
   }
+
+  if (updated > 0) {
+    lubes_save();
+    toast(`✅ ${updated} product${updated>1?'s':''} updated`, 'success');
+  }
+
+  if (needsModal.length === 0) { closeModal(); renderPage(); return; }
+
+  // New products: open add modal sequentially; store queue for saveLubeProduct to pick up
+  window._billAddQueue = needsModal.slice(1);
+  const first = needsModal[0];
+  closeModal();
+  openAddLubeModal({
+    name: first.name||'', brand: 'Indian Oil / Servo',
+    sku: first.sku||'', hsn: first.hsn||'',
+    gstPct: first.gstPct||18, costPrice: first.ratePerCarton||0, mrp: first.mrp||0,
+    isCartonPacked: first.isCartonPacked, qtyPerCarton: first.packQty||0,
+    indSize: first.packSize||'', packType: first.packType||'Pouch',
+    cartons: first.cartonsOrdered||0, category: 'Engine Oil', unit: 'Nos',
+    _queueRemaining: needsModal.length,
+  });
 }
+window.confirmAllBillItems = confirmAllBillItems;
+
+// Keep old single-item handler as no-op for safety
+function confirmBillItem(idx) { billUpdateAddBtn(); }
 window.confirmBillItem = confirmBillItem;
 
 window.renderLubes = renderLubes;
-
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ── EXPORTS PAGE ─────────────────────────────────────────────────────────────
@@ -8017,21 +8088,28 @@ function renderPage() {
   // Guard: if data not loaded yet, show loading state with auto-retry
   if (!D && APP.page !== 'employee') {
     el.innerHTML = '<div style="text-align:center;padding:60px 20px;color:var(--text-3)"><div style="font-size:40px;margin-bottom:16px">⏳</div><div class="fw-700">Loading data...</div><div style="font-size:12px;margin-top:8px">Connecting to server. Please wait.</div><div style="margin-top:16px"><button onclick="location.reload()" style="background:var(--bg-2);border:1px solid var(--border);color:var(--text-1);padding:8px 18px;border-radius:8px;font-size:12px;cursor:pointer">↺ Reload</button></div></div>';
-    // Auto-retry: attempt loadData() again after 5s if still no data
+    // Auto-retry: attempt loadData() once after 5s if still no data.
+    // Only schedule ONE retry — if it still fails, user sees the Reload button.
     if (!window._renderPageRetryTimer) {
       window._renderPageRetryTimer = setTimeout(async function() {
         window._renderPageRetryTimer = null;
-        if (APP.data && APP.data !== SEED) return; // data arrived via other path
+        // If data arrived via another path, just re-render
+        if (APP.data && APP.data.tanks) { renderPage(); return; }
         try {
           const token = typeof getAuthToken === 'function' ? getAuthToken() : null;
           if (!token) return; // no session — don't retry
+          // Ensure APP.data is initialised before loadData writes into it
+          if (!APP.data && typeof SEED !== 'undefined') APP.data = JSON.parse(JSON.stringify(SEED));
           await Promise.race([
             loadData(),
             new Promise((_, rej) => setTimeout(() => rej(new Error('retry timeout')), 15000))
           ]);
           if (typeof saveDataSnapshot === 'function' && APP.data) saveDataSnapshot(APP.data);
-        } catch(e) { console.warn('[renderPage retry]', e.message); }
-        renderPage(); // re-render now that data may be loaded
+          renderPage(); // re-render only on success
+        } catch(e) {
+          console.warn('[renderPage retry]', e.message);
+          // Don't call renderPage() on failure — leaves the Reload button visible
+        }
       }, 5000);
     }
     return;
