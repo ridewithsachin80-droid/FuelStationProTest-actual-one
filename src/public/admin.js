@@ -4355,6 +4355,14 @@ function toggleLpCarton() {
   if (carGroup) carGroup.style.display = on ? '' : 'none';
   if (stkGroup) stkGroup.style.display = on ? 'none' : '';
   if (costLbl) costLbl.textContent = on ? 'Cost Price (₹ per carton)' : 'Cost Price (₹)';
+  // FIX: when user enables carton mode on a blank sell field, mark it auto-fillable
+  // so calcLpCarton will populate it as soon as QPC and MRP are entered
+  if (on) {
+    const sellEl = document.getElementById('lp_sell');
+    if (sellEl && (parseFloat(sellEl.value) || 0) === 0) {
+      sellEl.dataset.autoFilled = '1';
+    }
+  }
   calcLpCarton();
 }
 function calcLpCarton() {
@@ -4368,31 +4376,19 @@ function calcLpCarton() {
   const cartons  = parseFloat(document.getElementById('lp_cartons')?.value) || 0;
   const sellEl   = document.getElementById('lp_sell');
 
-  // AUTO-FILL SELLING PRICE FIX:
-  // If MRP and qty per carton are both filled, and selling price is 0/empty,
-  // auto-calculate selling price = MRP ÷ qty per carton.
-  // This mirrors how cost/pc is already shown below.
-  // User can still override manually — we only auto-fill when the field is blank/zero.
+  // AUTO-FILL SELLING PRICE:
+  // If MRP and qty-per-carton are both filled, and sell field is blank/zero or was auto-filled,
+  // compute sell = MRP ÷ qpc. User can override — once they type a different value, auto-fill stops.
   if (sellEl && qpc > 0 && mrpPack > 0) {
     const currentSell = parseFloat(sellEl.value) || 0;
+    const autoSell    = Math.round((mrpPack / qpc) * 100) / 100;
     if (currentSell === 0 || sellEl.dataset.autoFilled === '1') {
-      const autoSell = Math.round((mrpPack / qpc) * 100) / 100;
       sellEl.value = autoSell.toFixed(2);
-      sellEl.dataset.autoFilled = '1'; // mark as auto-filled so we keep updating until user edits
+      sellEl.dataset.autoFilled = '1';
     }
   }
-  // Clear auto-fill flag if user manually changes the sell price away from computed value
-  if (sellEl) {
-    sellEl.addEventListener('input', function _sellManual() {
-      const qpcV = parseFloat(document.getElementById('lp_qpc')?.value) || 0;
-      const mrpV = parseFloat(document.getElementById('lp_mrp')?.value) || 0;
-      const auto = qpcV > 0 && mrpV > 0 ? Math.round((mrpV / qpcV) * 100) / 100 : 0;
-      if (parseFloat(this.value) !== auto) {
-        this.dataset.autoFilled = '0'; // user overrode — stop auto-filling
-      }
-      this.removeEventListener('input', _sellManual); // one-time listener cleanup
-    }, { once: true });
-  }
+  // NOTE: The sell field's oninput handler (in the HTML template) sets dataset.autoFilled='0'
+  // when the user types a value different from the computed MRP/qpc — this stops auto-fill.
 
   const sellPc = parseFloat(sellEl?.value) || 0;
 
@@ -4419,8 +4415,23 @@ function calcLpCarton() {
     } else { stockCalc.style.display = 'none'; }
   }
 }
-window.toggleLpCarton = toggleLpCarton;
-window.calcLpCarton   = calcLpCarton;
+// Called from sell field oninput in HTML — stops auto-fill if user types a custom price
+function lpSellManualInput() {
+  const sellEl = document.getElementById('lp_sell');
+  if (!sellEl) return;
+  const qpc  = parseFloat(document.getElementById('lp_qpc')?.value) || 0;
+  const mrp  = parseFloat(document.getElementById('lp_mrp')?.value) || 0;
+  const auto = (qpc > 0 && mrp > 0) ? Math.round((mrp / qpc) * 100) / 100 : 0;
+  if (parseFloat(sellEl.value) !== auto) {
+    sellEl.dataset.autoFilled = '0'; // user overrode — stop auto-filling
+  } else {
+    sellEl.dataset.autoFilled = '1'; // user typed exact auto value — keep updating
+  }
+  calcLpCarton(); // refresh margin display
+}
+window.toggleLpCarton  = toggleLpCarton;
+window.calcLpCarton    = calcLpCarton;
+window.lpSellManualInput = lpSellManualInput;
 
 // Data: window._lubesProducts = [{ id, name, brand, category, hsn, gstPct, unit, sellingPrice, costPrice, stock, minStock, expiryDate, active }]
 //       window._lubesSales    = [{ id, date, time, productId, productName, qty, unit, rate, amount, customer, mode, employee }]
@@ -4726,7 +4737,7 @@ function openAddLubeModal(prefill) {
     <div class="g g-2 gap-12">
       <div class="form-group"><label class="form-label" for="lp_cost" id="lp_cost_label">${isCarton?'Cost Price (₹ per carton)':'Cost Price (₹)'}</label><input class="form-input" type="number" id="lp_cost" step="0.01" value="${pf.costPrice||''}" placeholder="0.00" oninput="calcLpCarton()" /></div>
       <div class="form-group"><label class="form-label" for="lp_mrp">MRP on pack (₹)</label><input class="form-input" type="number" id="lp_mrp" step="0.01" value="${pf.mrp||''}" placeholder="0.00" oninput="calcLpCarton()" /></div>
-      <div class="form-group"><label class="form-label" for="lp_sell">Selling Price (₹ per piece/unit)</label><input class="form-input" type="number" id="lp_sell" step="0.01" value="${pf.sellingPrice||''}" placeholder="0.00" oninput="calcLpCarton()" /></div>
+      <div class="form-group"><label class="form-label" for="lp_sell">Selling Price (₹ per piece/unit)</label><input class="form-input" type="number" id="lp_sell" step="0.01" value="${pf.sellingPrice||''}" placeholder="0.00" oninput="lpSellManualInput()" /></div>
       <div class="form-group"><label class="form-label" for="lp_gst">GST %</label><select class="form-input" id="lp_gst">${gstOpts}</select></div>
     </div>
     <div id="lp_margin_box" style="display:none;padding:8px 12px;background:var(--bg-0);border-radius:var(--radius-sm);border:1px solid var(--border-light);font-size:12px;margin-bottom:8px"><span id="lp_margin_text"></span></div>
@@ -4785,7 +4796,7 @@ function openEditLubeModal(id) {
     <div class="g g-2 gap-12">
       <div class="form-group"><label class="form-label" for="lp_cost" id="lp_cost_label">${isCarton?'Cost Price (₹ per carton)':'Cost Price (₹)'}</label><input class="form-input" type="number" id="lp_cost" step="0.01" value="${p.costPrice||0}" oninput="calcLpCarton()" /></div>
       <div class="form-group"><label class="form-label" for="lp_mrp">MRP on pack (₹)</label><input class="form-input" type="number" id="lp_mrp" step="0.01" value="${p.mrp||0}" oninput="calcLpCarton()" /></div>
-      <div class="form-group"><label class="form-label" for="lp_sell">Selling Price (₹ per piece/unit)</label><input class="form-input" type="number" id="lp_sell" step="0.01" value="${p.sellingPrice||0}" oninput="calcLpCarton()" /></div>
+      <div class="form-group"><label class="form-label" for="lp_sell">Selling Price (₹ per piece/unit)</label><input class="form-input" type="number" id="lp_sell" step="0.01" value="${p.sellingPrice||0}" oninput="lpSellManualInput()" /></div>
       <div class="form-group"><label class="form-label" for="lp_gst">GST %</label><select class="form-input" id="lp_gst">${gstOpts}</select></div>
     </div>
     <div id="lp_margin_box" style="display:none;padding:8px 12px;background:var(--bg-0);border-radius:var(--radius-sm);border:1px solid var(--border-light);font-size:12px;margin-bottom:8px"><span id="lp_margin_text"></span></div>
