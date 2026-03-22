@@ -659,7 +659,7 @@ function renderPumps(D) {
   const _pumpsHeaderRight = _pumpsTab === 'pumps'
     ? `<button class="btn btn-accent btn-sm" onclick="openAddPumpModal()">+ Add Pump</button>`
     : `<div style="display:flex;gap:8px">
-        <input type="date" class="form-input" style="width:160px;padding:6px 12px;font-size:13px"
+        <input type="date" name="allocDatePicker" class="form-input" style="width:160px;padding:6px 12px;font-size:13px"
           value="${window._nmPageDate||(typeof window.today==='function'?window.today():new Date().toLocaleString('en-CA',{timeZone:'Asia/Kolkata'}).slice(0,10))}"
           max="${typeof window.today==='function'?window.today():new Date().toLocaleString('en-CA',{timeZone:'Asia/Kolkata'}).slice(0,10)}"
           onchange="window._nmPageDate=this.value;renderPage()" />
@@ -835,7 +835,7 @@ function renderSales(D, filter = 'all') {
       <button class="btn btn-ghost btn-sm" onclick="APP.salesDate='${dateOffset(selDate,-1)}';APP.salesEmpFilter='all';renderPage()">◀ Prev</button>
       <div style="display:flex;align-items:center;gap:8px;background:var(--bg-1);border:1px solid var(--border);border-radius:8px;padding:4px 10px">
         <span style="font-size:13px;font-weight:700;color:var(--text-0)">${fmtDateLabel(selDate)}</span>
-        <input type="date" value="${selDate}" max="${todayIso}"
+        <input type="date" id="salesDatePicker" name="salesDatePicker" value="${selDate}" max="${todayIso}"
           onchange="APP.salesDate=this.value;APP.salesEmpFilter='all';renderPage()"
           style="opacity:0;position:absolute;width:120px;cursor:pointer" title="Pick a date" />
         <span style="font-size:11px;color:var(--text-3);font-family:var(--mono)">${selDate}</span>
@@ -1117,7 +1117,7 @@ function renderStaff(D) {
                 onclick="allocDate='${date}';removeAllocForDate(${p.id},'${n}','${date}')">✕</button>
             </div>
           ` : `
-            <select onchange="allocDate='${date}';assignNozzleForDate(${p.id},'${n}','${date}',this.value);this.value=''"
+            <select name="allocNozzle_${date}" onchange="allocDate='${date}';assignNozzleForDate(${p.id},'${n}','${date}',this.value);this.value=''"
               style="width:100%;font-size:11px;padding:5px 7px;border-radius:7px;background:var(--bg-1);border:1px dashed var(--border);color:var(--text-3);cursor:pointer;outline:none">
               <option value="">＋ Assign</option>
               ${selectOpts}
@@ -1250,7 +1250,7 @@ function renderStaff(D) {
     : window.staffTab === 'allocation'
     ? `<button class="btn btn-ghost btn-sm" onclick="window.allocWeekAnchor=(()=>{const _a=window.allocWeekAnchor?new Date(window.allocWeekAnchor):new Date();_a.setDate(_a.getDate()-7);return _a.toISOString().slice(0,10);})();renderPage()">◀ Prev</button><button class="btn btn-ghost btn-sm" onclick="window.allocWeekAnchor=(()=>{const _a=window.allocWeekAnchor?new Date(window.allocWeekAnchor):new Date();_a.setDate(_a.getDate()+7);return _a.toISOString().slice(0,10);})();renderPage()">Next ▶</button><button class="btn btn-ghost btn-sm" onclick="autoAssignAlloc()">⚡ Auto</button><button class="btn btn-ghost btn-sm" onclick="clearShiftAllocConfirm()">🗑 Clear</button>`
     : window.staffTab === 'attendance'
-    ? `<input type="date" class="form-input" style="padding:6px 12px;font-size:13px;width:160px" value="${window._attDate||(()=>{const _d=new Date();return _d.getFullYear()+'-'+String(_d.getMonth()+1).padStart(2,'0')+'-'+String(_d.getDate()).padStart(2,'0');})()}" onchange="window._attDate=this.value;renderPage()" /><button class="btn btn-ghost btn-sm" onclick="attMarkAllPresent('${window._attDate||(()=>{const _d=new Date();return _d.getFullYear()+'-'+String(_d.getMonth()+1).padStart(2,'0')+'-'+String(_d.getDate()).padStart(2,'0');})()}')">✅ All Present</button>`
+    ? `<input type="date" name="analyticsMonthPicker" class="form-input" style="padding:6px 12px;font-size:13px;width:160px" value="${window._attDate||(()=>{const _d=new Date();return _d.getFullYear()+'-'+String(_d.getMonth()+1).padStart(2,'0')+'-'+String(_d.getDate()).padStart(2,'0');})()}" onchange="window._attDate=this.value;renderPage()" /><button class="btn btn-ghost btn-sm" onclick="attMarkAllPresent('${window._attDate||(()=>{const _d=new Date();return _d.getFullYear()+'-'+String(_d.getMonth()+1).padStart(2,'0')+'-'+String(_d.getDate()).padStart(2,'0');})()}')">✅ All Present</button>`
     : window.staffTab === 'roster'
     ? `<button class="btn btn-ghost btn-sm" onclick="rosterNavWeek(-1)">◀ Prev</button><button class="btn btn-ghost btn-sm" onclick="rosterNavWeek(1)">Next ▶</button>${(()=>{const _o=window._rosterWeekOffset||0;const _t=new Date();const _d=_t.getDay()===0?6:_t.getDay()-1;const _w=new Date(_t);_w.setDate(_t.getDate()-_d+_o*7);_w.setHours(0,0,0,0);const _m=new Date(_t);_m.setDate(_t.getDate()-_d);_m.setHours(0,0,0,0);return _w<_m?'':'';})()}`
     : `<button class="btn btn-accent" onclick="openEmployeeModal()">+ Add Employee</button>`;
@@ -1587,7 +1587,7 @@ function renderReports(D) {
           <h4 class="fw-700" style="color:var(--text-0);font-size:13px">📋 Daily Shift Report (DSR)</h4>
           <div style="display:flex;align-items:center;gap:6px">
             <button class="btn btn-ghost btn-sm" onclick="reportDate=new Date(new Date(reportDate).getTime()-86400000).toISOString().slice(0,10);renderPage()">&#8249;</button>
-            <input type="date" value="${dsrFilterDate}" onchange="reportDate=this.value;renderPage()"
+            <input type="date" id="reportDatePicker" name="reportDatePicker" value="${dsrFilterDate}" onchange="reportDate=this.value;renderPage()"
               style="background:var(--bg-0);border:1px solid var(--border);border-radius:6px;padding:3px 8px;color:var(--text-1);font-size:12px;cursor:pointer" />
             <button class="btn btn-ghost btn-sm" onclick="reportDate=new Date(new Date(reportDate).getTime()+86400000).toISOString().slice(0,10);renderPage()">&#8250;</button>
             ${reportDate!==todayIso2?`<button class="btn btn-ghost btn-sm" onclick="reportDate='${todayIso2}';renderPage()">Today</button>`:''}
@@ -1784,27 +1784,27 @@ function renderSettings(D) {
       <div class="card card-pad">
         <h4 class="mb-16 fw-700" style="color:var(--text-0);font-size:13px">📱 UPI Payment Settings</h4>
         <div class="form-group">
-          <label class="form-label">UPI VPA (Your payment address)</label>
+          <label class="form-label" for="upiVPA">UPI VPA (Your payment address)</label>
           <input class="form-input" id="upiVPA" value="${D.upiVPA || ''}" placeholder="e.g. station@okaxis" />
           <div style="font-size:11px;color:var(--text-3);margin-top:3px">Your UPI ID — customers pay to this</div>
         </div>
         <div class="form-group">
-          <label class="form-label">Station / Merchant Name</label>
+          <label class="form-label" for="upiName">Station / Merchant Name</label>
           <input class="form-input" id="upiName" value="${D.upiName || APP.tenant?.name || ''}" placeholder="e.g. Sri Lakshmi Fuel Station" />
           <div style="font-size:11px;color:var(--text-3);margin-top:3px">This name appears on all reports and receipts</div>
         </div>
         <div class="form-group">
-          <label class="form-label">Station Code (for reports)</label>
+          <label class="form-label" for="stationCode">Station Code (for reports)</label>
           <input class="form-input" id="stationCode" value="${D.stationCode || ''}" placeholder="e.g. KA/TUM/FSL/2024/0142" />
           <div style="font-size:11px;color:var(--text-3);margin-top:3px">OMC assigned station code — printed on DSR</div>
         </div>
         <div class="form-group">
-          <label class="form-label">Oil Company (OMC) Name</label>
+          <label class="form-label" for="omcName">Oil Company (OMC) Name</label>
           <input class="form-input" id="omcName" value="${D.omcName || ''}" placeholder="e.g. Bharat Petroleum Corporation Ltd." />
           <div style="font-size:11px;color:var(--text-3);margin-top:3px">Printed on report footer</div>
         </div>
         <div class="form-group" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border-light)">
-          <label class="form-label" style="display:flex;align-items:center;gap:6px">
+          <label class="form-label" for="waPhone" style="display:flex;align-items:center;gap:6px">
             <span>📱 WhatsApp Number</span>
             <span style="font-size:10px;background:rgba(34,197,94,0.12);color:var(--green);padding:1px 6px;border-radius:4px;font-weight:700">FREE</span>
           </label>
@@ -1815,7 +1815,7 @@ function renderSettings(D) {
           <div style="font-size:11px;color:var(--text-3);margin-top:3px">Your WhatsApp number — receives low-tank, mismatch & daily summary alerts</div>
         </div>
         <div class="form-group">
-          <label class="form-label" style="display:flex;align-items:center;gap:6px">
+          <label class="form-label" for="waApiKey" style="display:flex;align-items:center;gap:6px">
             CallMeBot API Key
             <a href="https://www.callmebot.com/blog/free-api-whatsapp-messages/" target="_blank" style="font-size:10px;color:var(--accent-light)">How to get →</a>
           </label>
@@ -1826,7 +1826,7 @@ function renderSettings(D) {
           </div>
         </div>
         <div class="form-group">
-          <label class="form-label" style="display:flex;align-items:center;gap:6px">
+          <label class="form-label" for="rzpKey" style="display:flex;align-items:center;gap:6px">
             Razorpay Key ID <span style="font-size:10px;background:rgba(59,130,246,0.12);color:var(--blue);padding:1px 6px;border-radius:4px;font-weight:700">AUTO-CONFIRM</span>
           </label>
           <input class="form-input" id="rzpKey" value="${D.razorpayKey || ''}" placeholder="rzp_live_XXXXXXXXXX" autocomplete="off" />
@@ -1981,17 +1981,17 @@ function renderSettings(D) {
           Earn points on every credit sale. Customers can redeem points for discounts on outstanding balance.
         </div>
         <div class="form-group">
-          <label class="form-label">Earn Rate (points per ₹100 spent)</label>
+          <label class="form-label" for="ly_earnRate">Earn Rate (points per ₹100 spent)</label>
           <input class="form-input" type="number" id="ly_earnRate" value="${D.loyaltyEarnRate||1}" min="1" max="10" step="1" />
           <div style="font-size:11px;color:var(--text-3);margin-top:3px">Default: 1 point per ₹100</div>
         </div>
         <div class="form-group">
-          <label class="form-label">Redemption Rate (₹ per 100 points)</label>
+          <label class="form-label" for="ly_redeemRate">Redemption Rate (₹ per 100 points)</label>
           <input class="form-input" type="number" id="ly_redeemRate" value="${D.loyaltyRedeemRate||50}" min="10" max="200" step="10" />
           <div style="font-size:11px;color:var(--text-3);margin-top:3px">Default: ₹50 per 100 points</div>
         </div>
         <div class="form-group">
-          <label class="form-label">Minimum Points to Redeem</label>
+          <label class="form-label" for="ly_minRedeem">Minimum Points to Redeem</label>
           <input class="form-input" type="number" id="ly_minRedeem" value="${D.loyaltyMinRedeem||100}" min="100" step="100" />
         </div>
         <button class="btn btn-accent btn-block mt-4" onclick="saveLoyaltySettings()">💾 Save Loyalty Settings</button>
@@ -2337,7 +2337,7 @@ function renderRoster(D) {
       const addDropdown = isReadOnly ? '' : noEligible ? '' : allAssigned
         ? "<div style='font-size:10px;color:var(--text-3);margin-top:4px;text-align:center'>All assigned</div>"
         :
-        `<select style="margin-top:${assignedEmps.length?'5px':'0'};width:100%;background:var(--bg-1);border:1px dashed var(--border);border-radius:6px;padding:4px 6px;color:var(--text-3);font-size:11px;font-family:var(--font);cursor:pointer"
+        `<select name="rosterAssign_${dateStr}_${sanitize(shift.name)}" style="margin-top:${assignedEmps.length?'5px':'0'};width:100%;background:var(--bg-1);border:1px dashed var(--border);border-radius:6px;padding:4px 6px;color:var(--text-3);font-size:11px;font-family:var(--font);cursor:pointer"
           onchange="if(this.value){rosterAssign('${dateStr}','${shift.name}',this.value);this.value=''}">
           <option value="">+ Assign</option>
           ${unassigned.map(e => `<option value="${e.id}">${sanitize(e.name)}</option>`).join('')}
@@ -2553,7 +2553,7 @@ function renderAttendance(D) {
         <div style="font-size:10px;color:var(--text-3)">${sanitize(e.role||'')} · ${sanitize((e.shift||'').split(',')[0]||'—')} shift</div>
       </td>
       <td style="padding:10px 12px">
-        <select class="form-input" style="padding:6px 10px;font-size:12px;width:130px" onchange="attSetStatus(${e.id},'${dateKey}',this.value)">
+        <select class="form-input" name="attStatus_${e.id}" style="padding:6px 10px;font-size:12px;width:130px" onchange="attSetStatus(${e.id},'${dateKey}',this.value)">
           <option value="">Mark status</option>
           ${statusOpts.map(s => `<option value="${s}" ${status===s?'selected':''} style="color:${statusColor[s]}">${statusEmoji[s]} ${s.charAt(0).toUpperCase()+s.slice(1)}</option>`).join('')}
         </select>
@@ -2587,7 +2587,7 @@ function renderAttendance(D) {
   return `
     <div class="page-hdr"><h3>✅ Attendance</h3>
       <div style="display:flex;gap:8px;align-items:center">
-        <input type="date" class="form-input" style="padding:6px 12px;font-size:13px;width:160px" value="${attDate}" onchange="window._attDate=this.value;renderPage()" />
+        <input type="date" name="attDatePicker" class="form-input" style="padding:6px 12px;font-size:13px;width:160px" value="${attDate}" onchange="window._attDate=this.value;renderPage()" />
         <button class="btn btn-ghost btn-sm" onclick="attMarkAllPresent('${dateKey}')">✅ All Present</button>
         <button class="btn btn-ghost btn-sm" onclick="exportAttendanceCSV()">📊 Export CSV</button>
         <span id="att-autosave-ind" style="display:none;font-size:11px;font-weight:700;margin-left:4px"></span>
@@ -2891,22 +2891,22 @@ function renderAnalytics(D) {
       <div class="card card-pad mb-16">
         <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
           <div class="form-group" style="margin:0;flex:1;min-width:130px">
-            <label class="form-label">From</label>
-            <input type="date" class="form-input" value="${vFrom}" max="${vTo}" onchange="window._vFrom=this.value;renderPage()" />
+            <label class="form-label" for="analyticsFrom">From</label>
+            <input type="date" class="form-input" id="analyticsFrom" name="analyticsFrom" value="${vFrom}" max="${vTo}" onchange="window._vFrom=this.value;renderPage()" />
           </div>
           <div class="form-group" style="margin:0;flex:1;min-width:130px">
-            <label class="form-label">To</label>
-            <input type="date" class="form-input" value="${vTo}" max="${(()=>{const _d=new Date();return _d.getFullYear()+'-'+String(_d.getMonth()+1).padStart(2,'0')+'-'+String(_d.getDate()).padStart(2,'0');})()}" onchange="window._vTo=this.value;renderPage()" />
+            <label class="form-label" for="analyticsTo">To</label>
+            <input type="date" class="form-input" id="analyticsTo" name="analyticsTo" value="${vTo}" max="${(()=>{const _d=new Date();return _d.getFullYear()+'-'+String(_d.getMonth()+1).padStart(2,'0')+'-'+String(_d.getDate()).padStart(2,'0');})()}" onchange="window._vTo=this.value;renderPage()" />
           </div>
           <div class="form-group" style="margin:0;flex:1;min-width:120px">
-            <label class="form-label">Fuel</label>
-            <select class="form-input" onchange="window._vFuel=this.value;renderPage()">
+            <label class="form-label" for="analyticsFuel">Fuel</label>
+            <select class="form-input" id="analyticsFuel" name="analyticsFuel" onchange="window._vFuel=this.value;renderPage()">
               <option value="">All</option>${fuelOpts}
             </select>
           </div>
           <div class="form-group" style="margin:0;flex:1;min-width:130px">
-            <label class="form-label">Vehicle No.</label>
-            <input class="form-input" placeholder="e.g. KA01" value="${window._vNum||''}" oninput="window._vNum=this.value" onchange="renderPage()" style="text-transform:uppercase" />
+            <label class="form-label" for="analyticsVNum">Vehicle No.</label>
+            <input class="form-input" id="analyticsVNum" name="analyticsVNum" placeholder="e.g. KA01" value="${window._vNum||''}" oninput="window._vNum=this.value" onchange="renderPage()" style="text-transform:uppercase" />
           </div>
         </div>
       </div>
@@ -3038,8 +3038,8 @@ function renderAnalytics(D) {
         <div class="card card-pad" style="flex:1;min-width:200px">
           <div class="fw-700 mb-10" style="font-size:13px;color:var(--text-0)">✏️ Enter Bank Data</div>
           <div class="form-group" style="margin-bottom:10px">
-            <label class="form-label">Date</label>
-            <input type="date" class="form-input" value="${selDate}" max="${today}" onchange="window._brSelDate=this.value;renderPage()" />
+            <label class="form-label" for="br_cash">Date</label>
+            <input type="date" name="bankReconDate" class="form-input" value="${selDate}" max="${today}" onchange="window._brSelDate=this.value;renderPage()" />
           </div>
           <div class="g g-2 gap-10">
             <div class="form-group" style="margin-bottom:8px">
@@ -3047,15 +3047,15 @@ function renderAnalytics(D) {
               <input type="number" class="form-input" id="br_cash" placeholder="0" value="${entry.cash||''}" style="font-size:13px" />
             </div>
             <div class="form-group" style="margin-bottom:8px">
-              <label class="form-label" style="font-size:11px">📱 UPI Settled (₹)</label>
+              <label class="form-label" for="br_upi" style="font-size:11px">📱 UPI Settled (₹)</label>
               <input type="number" class="form-input" id="br_upi" placeholder="0" value="${entry.upi||''}" style="font-size:13px" />
             </div>
             <div class="form-group" style="margin-bottom:8px">
-              <label class="form-label" style="font-size:11px">💳 Card/POS (₹)</label>
+              <label class="form-label" for="br_card" style="font-size:11px">💳 Card/POS (₹)</label>
               <input type="number" class="form-input" id="br_card" placeholder="0" value="${entry.card||''}" style="font-size:13px" />
             </div>
             <div class="form-group" style="margin-bottom:8px">
-              <label class="form-label" style="font-size:11px">📝 Notes</label>
+              <label class="form-label" for="br_notes" style="font-size:11px">📝 Notes</label>
               <input class="form-input" id="br_notes" placeholder="e.g. T+1 settlement" value="${sanitize(entry.notes||'')}" style="font-size:13px" />
             </div>
           </div>
@@ -3452,10 +3452,10 @@ function calcPayrollSlip(empId, empName, month, year) {
       <div style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.2);border-radius:8px;padding:10px 14px;margin:8px 0">
         <div style="font-size:11px;color:var(--text-3);font-weight:700;text-transform:uppercase;margin-bottom:6px">Salary Advance</div>
         <div class="flex-between mb-6"><span style="font-size:13px;color:var(--text-2)">Total Outstanding Balance</span><span class="mono fw-700" style="color:var(--red)">₹${fmt(totalAdvBalance)}</span></div>
-        <label class="form-label" style="margin-top:4px">Deduct this month (₹) — default: ₹${fmt(defaultAdvDeduction)}</label>
+        <label class="form-label" for="advDedInput" style="margin-top:4px">Deduct this month (₹) — default: ₹${fmt(defaultAdvDeduction)}</label>
         <input class="form-input" type="number" id="advDedInput" value="${defaultAdvDeduction}" min="0" max="${totalAdvBalance}" oninput="updateNetPreview(${grossSalary})" />
       </div>`:''}
-      <div class="form-group mt-10"><label class="form-label">Other Deductions (₹)</label><input class="form-input" type="number" id="otherDed" value="0" min="0" oninput="updateNetPreview(${grossSalary})" /></div>
+      <div class="form-group mt-10"><label class="form-label" for="otherDed">Other Deductions (₹)</label><input class="form-input" type="number" id="otherDed" value="0" min="0" oninput="updateNetPreview(${grossSalary})" /></div>
     </div>
     <div style="background:rgba(212,148,15,0.08);border:2px solid rgba(212,148,15,0.3);border-radius:12px;padding:18px;text-align:center">
       <div style="font-size:11px;color:var(--text-3);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.8px">Net Salary</div>
@@ -3534,10 +3534,10 @@ function openAddAdvanceModal() {
   const emps = (D.employees||[]).filter(e=>e.status!=='inactive');
   const empOpts = emps.map(e=>`<option value="${e.id}">${sanitize(e.name)}</option>`).join('');
   openModal('💸 New Salary Advance', `
-    <div class="form-group"><label class="form-label">Employee *</label><select class="form-input" id="advEmp">${empOpts}</select></div>
+    <div class="form-group"><label class="form-label" for="advEmp">Employee *</label><select class="form-input" id="advEmp">${empOpts}</select></div>
     <div class="form-row">
-      <div class="form-group"><label class="form-label">Amount (₹) *</label><input class="form-input" type="number" id="advAmt" placeholder="e.g. 5000" oninput="updateAdvPreview()" /></div>
-      <div class="form-group"><label class="form-label">Repay in months</label>
+      <div class="form-group"><label class="form-label" for="advAmt">Amount (₹) *</label><input class="form-input" type="number" id="advAmt" placeholder="e.g. 5000" oninput="updateAdvPreview()" /></div>
+      <div class="form-group"><label class="form-label" for="advMonths">Repay in months</label>
         <select class="form-input" id="advMonths" onchange="updateAdvPreview()">
           ${[1,2,3,4,5,6].map(n=>`<option value="${n}">${n} month${n>1?'s':''}</option>`).join('')}
           <option value="custom">Custom</option>
@@ -3545,8 +3545,8 @@ function openAddAdvanceModal() {
         <input class="form-input mt-6" type="number" id="advMonthsCustom" min="1" max="60" placeholder="Enter number of months" style="display:none;margin-top:6px" oninput="updateAdvPreview()" />
       </div>
     </div>
-    <div class="form-group"><label class="form-label">Reason</label><input class="form-input" id="advReason" placeholder="Medical / Personal / Other" /></div>
-    <div class="form-group"><label class="form-label">Date</label><input class="form-input" type="date" id="advDate" value="${(()=>{const _d=new Date();return _d.getFullYear()+'-'+String(_d.getMonth()+1).padStart(2,'0')+'-'+String(_d.getDate()).padStart(2,'0');})()}" /></div>
+    <div class="form-group"><label class="form-label" for="advReason">Reason</label><input class="form-input" id="advReason" placeholder="Medical / Personal / Other" /></div>
+    <div class="form-group"><label class="form-label" for="advDate">Date</label><input class="form-input" type="date" id="advDate" value="${(()=>{const _d=new Date();return _d.getFullYear()+'-'+String(_d.getMonth()+1).padStart(2,'0')+'-'+String(_d.getDate()).padStart(2,'0');})()}" /></div>
     <div id="advPreview" style="padding:10px 14px;background:var(--bg-0);border-radius:8px;font-size:13px;color:var(--text-3)">Monthly EMI: —</div>
   `, `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-accent" onclick="saveAdvance()">Record Advance</button>`);
 }
@@ -3705,18 +3705,18 @@ function openNozzleMeterModal(pumpId, nozzleLabel) {
 
   openModal('📟 Record Nozzle Meter Reading', `
     <div class="g g-2 gap-12">
-      <div class="form-group"><label class="form-label">Date</label>
+      <div class="form-group"><label class="form-label" for="nm_date">Date</label>
         <input type="date" class="form-input" id="nm_date" value="${today}" max="${today}" />
       </div>
-      <div class="form-group"><label class="form-label">Shift</label>
+      <div class="form-group"><label class="form-label" for="nm_shift">Shift</label>
         <select class="form-input" id="nm_shift">${shiftOpts}</select>
       </div>
     </div>
     <div class="g g-2 gap-12">
-      <div class="form-group"><label class="form-label">Pump · Nozzle</label>
+      <div class="form-group"><label class="form-label" for="nm_nozzle">Pump · Nozzle</label>
         <select class="form-input" id="nm_nozzle" onchange="nmUpdatePrev()">${nozzleOpts}</select>
       </div>
-      <div class="form-group"><label class="form-label">Employee</label>
+      <div class="form-group"><label class="form-label" for="nm_emp">Employee</label>
         <select class="form-input" id="nm_emp">
           <option value="">— Select —</option>
           ${(D.employees||[]).filter(e=>e.status!=='inactive').map(e=>`<option value="${sanitize(e.name)}">${sanitize(e.name)}</option>`).join('')}
@@ -3724,11 +3724,11 @@ function openNozzleMeterModal(pumpId, nozzleLabel) {
       </div>
     </div>
     <div class="g g-2 gap-12">
-      <div class="form-group"><label class="form-label">Opening Reading</label>
+      <div class="form-group"><label class="form-label" for="nm_open">Opening Reading</label>
         <input type="number" class="form-input" id="nm_open" step="0.01" placeholder="e.g. 12345.6" oninput="nmCalcVariance()" style="font-family:var(--mono);font-size:16px;font-weight:700" />
         <div id="nm_prev_reading" style="font-size:11px;color:var(--text-3);margin-top:3px"></div>
       </div>
-      <div class="form-group"><label class="form-label">Closing Reading</label>
+      <div class="form-group"><label class="form-label" for="nm_close">Closing Reading</label>
         <input type="number" class="form-input" id="nm_close" step="0.01" placeholder="e.g. 12567.3" oninput="nmCalcVariance()" style="font-family:var(--mono);font-size:16px;font-weight:700" />
       </div>
     </div>
@@ -4265,8 +4265,8 @@ function renderLubes(D) {
     body = `
       <div class="card card-pad mb-12" style="padding:10px 14px">
         <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-          <label class="form-label" style="margin:0;white-space:nowrap">Filter:</label>
-          <select class="form-input" style="padding:6px 10px;width:auto" onchange="window._lubesCatFilter=this.value;renderPage()">${catOpts}</select>
+          <label class="form-label" style="margin:0;white-space:nowrap" for="lubesCatFilter">Filter:</label>
+          <select class="form-input" id="lubesCatFilter" name="lubesCatFilter" style="padding:6px 10px;width:auto" onchange="window._lubesCatFilter=this.value;renderPage()">${catOpts}</select>
           <span style="font-size:11px;color:var(--text-3)">${filtered.length} products</span>
         </div>
       </div>
@@ -4375,11 +4375,11 @@ function openAddLubeModal(prefill) {
   const isCarton = !!(pf.qtyPerCarton > 0);
   openModal('📦 Add Product', `
     <div class="g g-2 gap-12">
-      <div class="form-group" style="grid-column:1/-1"><label class="form-label">Product Name *</label><input class="form-input" id="lp_name" value="${sanitize(pf.name||'')}" placeholder="e.g. Servo 2T Supreme(JFC)" /></div>
-      <div class="form-group"><label class="form-label">Brand</label><input class="form-input" id="lp_brand" value="${sanitize(pf.brand||'')}" placeholder="e.g. Indian Oil / Servo" /></div>
-      <div class="form-group"><label class="form-label">SKU / Supplier code</label><input class="form-input" id="lp_sku" value="${sanitize(pf.sku||'')}" placeholder="e.g. 2900125" /></div>
-      <div class="form-group"><label class="form-label">Category</label><select class="form-input" id="lp_cat">${catOpts}</select></div>
-      <div class="form-group"><label class="form-label">HSN Code</label><input class="form-input" id="lp_hsn" value="${sanitize(pf.hsn||'')}" placeholder="e.g. 271019" /></div>
+      <div class="form-group" style="grid-column:1/-1"><label class="form-label" for="lp_name">Product Name *</label><input class="form-input" id="lp_name" value="${sanitize(pf.name||'')}" placeholder="e.g. Servo 2T Supreme(JFC)" /></div>
+      <div class="form-group"><label class="form-label" for="lp_brand">Brand</label><input class="form-input" id="lp_brand" value="${sanitize(pf.brand||'')}" placeholder="e.g. Indian Oil / Servo" /></div>
+      <div class="form-group"><label class="form-label" for="lp_sku">SKU / Supplier code</label><input class="form-input" id="lp_sku" value="${sanitize(pf.sku||'')}" placeholder="e.g. 2900125" /></div>
+      <div class="form-group"><label class="form-label" for="lp_cat">Category</label><select class="form-input" id="lp_cat">${catOpts}</select></div>
+      <div class="form-group"><label class="form-label" for="lp_hsn">HSN Code</label><input class="form-input" id="lp_hsn" value="${sanitize(pf.hsn||'')}" placeholder="e.g. 271019" /></div>
     </div>
     <label style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--bg-0);border-radius:var(--radius-sm);border:1px solid var(--border);margin:2px 0 10px;cursor:pointer">
       <input type="checkbox" id="lp_carton_toggle" ${isCarton?'checked':''} onchange="toggleLpCarton()" style="width:16px;height:16px;cursor:pointer" />
@@ -4390,27 +4390,27 @@ function openAddLubeModal(prefill) {
     </label>
     <div id="lp_carton_wrap" style="display:${isCarton?'block':'none'}">
       <div class="g" style="grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:10px">
-        <div class="form-group mb-0"><label class="form-label">Qty per carton</label><input class="form-input" type="number" id="lp_qpc" value="${pf.qtyPerCarton||''}" placeholder="300" min="1" oninput="calcLpCarton()" /></div>
-        <div class="form-group mb-0"><label class="form-label">Individual size</label><input class="form-input" id="lp_indsize" value="${sanitize(pf.indSize||'')}" placeholder="40ml" /></div>
-        <div class="form-group mb-0"><label class="form-label">Pack type</label><select class="form-input" id="lp_packtype">${ptOpts}</select></div>
+        <div class="form-group mb-0"><label class="form-label" for="lp_qpc">Qty per carton</label><input class="form-input" type="number" id="lp_qpc" value="${pf.qtyPerCarton||''}" placeholder="300" min="1" oninput="calcLpCarton()" /></div>
+        <div class="form-group mb-0"><label class="form-label" for="lp_indsize">Individual size</label><input class="form-input" id="lp_indsize" value="${sanitize(pf.indSize||'')}" placeholder="40ml" /></div>
+        <div class="form-group mb-0"><label class="form-label" for="lp_packtype">Pack type</label><select class="form-input" id="lp_packtype">${ptOpts}</select></div>
       </div>
     </div>
     <div class="g g-2 gap-12">
-      <div class="form-group"><label class="form-label" id="lp_cost_label">${isCarton?'Cost Price (₹ per carton)':'Cost Price (₹)'}</label><input class="form-input" type="number" id="lp_cost" step="0.01" value="${pf.costPrice||''}" placeholder="0.00" oninput="calcLpCarton()" /></div>
-      <div class="form-group"><label class="form-label">MRP on pack (₹)</label><input class="form-input" type="number" id="lp_mrp" step="0.01" value="${pf.mrp||''}" placeholder="0.00" oninput="calcLpCarton()" /></div>
-      <div class="form-group"><label class="form-label">Selling Price (₹ per piece/unit)</label><input class="form-input" type="number" id="lp_sell" step="0.01" value="${pf.sellingPrice||''}" placeholder="0.00" oninput="calcLpCarton()" /></div>
-      <div class="form-group"><label class="form-label">GST %</label><select class="form-input" id="lp_gst">${gstOpts}</select></div>
+      <div class="form-group"><label class="form-label" for="lp_cost" id="lp_cost_label">${isCarton?'Cost Price (₹ per carton)':'Cost Price (₹)'}</label><input class="form-input" type="number" id="lp_cost" step="0.01" value="${pf.costPrice||''}" placeholder="0.00" oninput="calcLpCarton()" /></div>
+      <div class="form-group"><label class="form-label" for="lp_mrp">MRP on pack (₹)</label><input class="form-input" type="number" id="lp_mrp" step="0.01" value="${pf.mrp||''}" placeholder="0.00" oninput="calcLpCarton()" /></div>
+      <div class="form-group"><label class="form-label" for="lp_sell">Selling Price (₹ per piece/unit)</label><input class="form-input" type="number" id="lp_sell" step="0.01" value="${pf.sellingPrice||''}" placeholder="0.00" oninput="calcLpCarton()" /></div>
+      <div class="form-group"><label class="form-label" for="lp_gst">GST %</label><select class="form-input" id="lp_gst">${gstOpts}</select></div>
     </div>
     <div id="lp_margin_box" style="display:none;padding:8px 12px;background:var(--bg-0);border-radius:var(--radius-sm);border:1px solid var(--border-light);font-size:12px;margin-bottom:8px"><span id="lp_margin_text"></span></div>
     <div class="g g-2 gap-12">
-      <div class="form-group" id="lp_stock_group" style="display:${isCarton?'none':''}"><label class="form-label">Opening Stock</label><input class="form-input" type="number" id="lp_stock" value="${pf.stock||''}" placeholder="0" /></div>
-      <div class="form-group" id="lp_cartons_group" style="display:${isCarton?'':'none'}"><label class="form-label">Opening Stock (cartons)</label><input class="form-input" type="number" id="lp_cartons" value="${pf.cartons||''}" placeholder="0" min="0" oninput="calcLpCarton()" /></div>
-      <div class="form-group"><label class="form-label">Min Stock Alert (pieces)</label><input class="form-input" type="number" id="lp_minstock" value="${pf.minStock||5}" placeholder="5" /></div>
+      <div class="form-group" id="lp_stock_group" style="display:${isCarton?'none':''}"><label class="form-label" for="lp_stock">Opening Stock</label><input class="form-input" type="number" id="lp_stock" value="${pf.stock||''}" placeholder="0" /></div>
+      <div class="form-group" id="lp_cartons_group" style="display:${isCarton?'':'none'}"><label class="form-label" for="lp_cartons">Opening Stock (cartons)</label><input class="form-input" type="number" id="lp_cartons" value="${pf.cartons||''}" placeholder="0" min="0" oninput="calcLpCarton()" /></div>
+      <div class="form-group"><label class="form-label" for="lp_minstock">Min Stock Alert (pieces)</label><input class="form-input" type="number" id="lp_minstock" value="${pf.minStock||5}" placeholder="5" /></div>
     </div>
     <div id="lp_stock_calc" style="display:none;padding:8px 12px;background:var(--bg-0);border-radius:var(--radius-sm);border:1px solid var(--border-light);font-size:12px;margin-bottom:8px"><span id="lp_stock_text"></span></div>
     <div class="g g-2 gap-12">
-      <div class="form-group"><label class="form-label">Unit (for sales)</label><select class="form-input" id="lp_unit">${unitOpts}</select></div>
-      <div class="form-group"><label class="form-label">Expiry Date (optional)</label><input class="form-input" type="date" id="lp_expiry" value="${pf.expiryDate||''}" /></div>
+      <div class="form-group"><label class="form-label" for="lp_unit">Unit (for sales)</label><select class="form-input" id="lp_unit">${unitOpts}</select></div>
+      <div class="form-group"><label class="form-label" for="lp_expiry">Expiry Date (optional)</label><input class="form-input" type="date" id="lp_expiry" value="${pf.expiryDate||''}" /></div>
     </div>
   `, `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-accent" onclick="saveLubeProduct(null)">Add Product</button>`);
   setTimeout(()=>{
@@ -4434,11 +4434,11 @@ function openEditLubeModal(id) {
   const isCarton = !!(p.isCartonPacked && p.qtyPerCarton > 0);
   openModal('✏️ Edit Product', `
     <div class="g g-2 gap-12">
-      <div class="form-group" style="grid-column:1/-1"><label class="form-label">Product Name *</label><input class="form-input" id="lp_name" value="${sanitize(p.name)}" /></div>
-      <div class="form-group"><label class="form-label">Brand</label><input class="form-input" id="lp_brand" value="${sanitize(p.brand||'')}" /></div>
-      <div class="form-group"><label class="form-label">SKU / Supplier code</label><input class="form-input" id="lp_sku" value="${sanitize(p.sku||'')}" placeholder="e.g. 2900125" /></div>
-      <div class="form-group"><label class="form-label">Category</label><select class="form-input" id="lp_cat">${catOpts}</select></div>
-      <div class="form-group"><label class="form-label">HSN Code</label><input class="form-input" id="lp_hsn" value="${sanitize(p.hsn||'')}" /></div>
+      <div class="form-group" style="grid-column:1/-1"><label class="form-label" for="lp_name">Product Name *</label><input class="form-input" id="lp_name" value="${sanitize(p.name)}" /></div>
+      <div class="form-group"><label class="form-label" for="lp_brand">Brand</label><input class="form-input" id="lp_brand" value="${sanitize(p.brand||'')}" /></div>
+      <div class="form-group"><label class="form-label" for="lp_sku">SKU / Supplier code</label><input class="form-input" id="lp_sku" value="${sanitize(p.sku||'')}" placeholder="e.g. 2900125" /></div>
+      <div class="form-group"><label class="form-label" for="lp_cat">Category</label><select class="form-input" id="lp_cat">${catOpts}</select></div>
+      <div class="form-group"><label class="form-label" for="lp_hsn">HSN Code</label><input class="form-input" id="lp_hsn" value="${sanitize(p.hsn||'')}" /></div>
     </div>
     <label style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--bg-0);border-radius:var(--radius-sm);border:1px solid var(--border);margin:2px 0 10px;cursor:pointer">
       <input type="checkbox" id="lp_carton_toggle" ${isCarton?'checked':''} onchange="toggleLpCarton()" style="width:16px;height:16px;cursor:pointer" />
@@ -4449,27 +4449,27 @@ function openEditLubeModal(id) {
     </label>
     <div id="lp_carton_wrap" style="display:${isCarton?'block':'none'}">
       <div class="g" style="grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:10px">
-        <div class="form-group mb-0"><label class="form-label">Qty per carton</label><input class="form-input" type="number" id="lp_qpc" value="${p.qtyPerCarton||''}" placeholder="300" min="1" oninput="calcLpCarton()" /></div>
-        <div class="form-group mb-0"><label class="form-label">Individual size</label><input class="form-input" id="lp_indsize" value="${sanitize(p.indSize||'')}" placeholder="40ml" /></div>
-        <div class="form-group mb-0"><label class="form-label">Pack type</label><select class="form-input" id="lp_packtype">${ptOpts}</select></div>
+        <div class="form-group mb-0"><label class="form-label" for="lp_qpc">Qty per carton</label><input class="form-input" type="number" id="lp_qpc" value="${p.qtyPerCarton||''}" placeholder="300" min="1" oninput="calcLpCarton()" /></div>
+        <div class="form-group mb-0"><label class="form-label" for="lp_indsize">Individual size</label><input class="form-input" id="lp_indsize" value="${sanitize(p.indSize||'')}" placeholder="40ml" /></div>
+        <div class="form-group mb-0"><label class="form-label" for="lp_packtype">Pack type</label><select class="form-input" id="lp_packtype">${ptOpts}</select></div>
       </div>
     </div>
     <div class="g g-2 gap-12">
-      <div class="form-group"><label class="form-label" id="lp_cost_label">${isCarton?'Cost Price (₹ per carton)':'Cost Price (₹)'}</label><input class="form-input" type="number" id="lp_cost" step="0.01" value="${p.costPrice||0}" oninput="calcLpCarton()" /></div>
-      <div class="form-group"><label class="form-label">MRP on pack (₹)</label><input class="form-input" type="number" id="lp_mrp" step="0.01" value="${p.mrp||0}" oninput="calcLpCarton()" /></div>
-      <div class="form-group"><label class="form-label">Selling Price (₹ per piece/unit)</label><input class="form-input" type="number" id="lp_sell" step="0.01" value="${p.sellingPrice||0}" oninput="calcLpCarton()" /></div>
-      <div class="form-group"><label class="form-label">GST %</label><select class="form-input" id="lp_gst">${gstOpts}</select></div>
+      <div class="form-group"><label class="form-label" for="lp_cost" id="lp_cost_label">${isCarton?'Cost Price (₹ per carton)':'Cost Price (₹)'}</label><input class="form-input" type="number" id="lp_cost" step="0.01" value="${p.costPrice||0}" oninput="calcLpCarton()" /></div>
+      <div class="form-group"><label class="form-label" for="lp_mrp">MRP on pack (₹)</label><input class="form-input" type="number" id="lp_mrp" step="0.01" value="${p.mrp||0}" oninput="calcLpCarton()" /></div>
+      <div class="form-group"><label class="form-label" for="lp_sell">Selling Price (₹ per piece/unit)</label><input class="form-input" type="number" id="lp_sell" step="0.01" value="${p.sellingPrice||0}" oninput="calcLpCarton()" /></div>
+      <div class="form-group"><label class="form-label" for="lp_gst">GST %</label><select class="form-input" id="lp_gst">${gstOpts}</select></div>
     </div>
     <div id="lp_margin_box" style="display:none;padding:8px 12px;background:var(--bg-0);border-radius:var(--radius-sm);border:1px solid var(--border-light);font-size:12px;margin-bottom:8px"><span id="lp_margin_text"></span></div>
     <div class="g g-2 gap-12">
-      <div class="form-group" id="lp_stock_group" style="display:${isCarton?'none':''}"><label class="form-label">Current Stock (pieces)</label><input class="form-input" type="number" id="lp_stock" value="${p.stock||0}" /></div>
-      <div class="form-group" id="lp_cartons_group" style="display:${isCarton?'':'none'}"><label class="form-label">Current Stock (cartons, approx)</label><input class="form-input" type="number" id="lp_cartons" value="${p.qtyPerCarton > 0 ? Math.floor((p.stock||0)/p.qtyPerCarton) : 0}" placeholder="0" min="0" oninput="calcLpCarton()" /></div>
-      <div class="form-group"><label class="form-label">Min Stock Alert (pieces)</label><input class="form-input" type="number" id="lp_minstock" value="${p.minStock||5}" /></div>
+      <div class="form-group" id="lp_stock_group" style="display:${isCarton?'none':''}"><label class="form-label" for="lp_stock">Current Stock (pieces)</label><input class="form-input" type="number" id="lp_stock" value="${p.stock||0}" /></div>
+      <div class="form-group" id="lp_cartons_group" style="display:${isCarton?'':'none'}"><label class="form-label" for="lp_cartons">Current Stock (cartons, approx)</label><input class="form-input" type="number" id="lp_cartons" value="${p.qtyPerCarton > 0 ? Math.floor((p.stock||0)/p.qtyPerCarton) : 0}" placeholder="0" min="0" oninput="calcLpCarton()" /></div>
+      <div class="form-group"><label class="form-label" for="lp_minstock">Min Stock Alert (pieces)</label><input class="form-input" type="number" id="lp_minstock" value="${p.minStock||5}" /></div>
     </div>
     <div id="lp_stock_calc" style="display:none;padding:8px 12px;background:var(--bg-0);border-radius:var(--radius-sm);border:1px solid var(--border-light);font-size:12px;margin-bottom:8px"><span id="lp_stock_text"></span></div>
     <div class="g g-2 gap-12">
-      <div class="form-group"><label class="form-label">Unit (for sales)</label><select class="form-input" id="lp_unit">${unitOpts}</select></div>
-      <div class="form-group"><label class="form-label">Expiry Date</label><input class="form-input" type="date" id="lp_expiry" value="${p.expiryDate||''}" /></div>
+      <div class="form-group"><label class="form-label" for="lp_unit">Unit (for sales)</label><select class="form-input" id="lp_unit">${unitOpts}</select></div>
+      <div class="form-group"><label class="form-label" for="lp_expiry">Expiry Date</label><input class="form-input" type="date" id="lp_expiry" value="${p.expiryDate||''}" /></div>
     </div>
   `, `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-accent" onclick="saveLubeProduct(${id})">Save Changes</button>`);
   setTimeout(()=>{
@@ -4573,21 +4573,21 @@ function openRestockModal(id) {
     </div>
     ${isCarton ? `
     <div class="form-group">
-      <label class="form-label">Cartons received *</label>
+      <label class="form-label" for="rs_cartons">Cartons received *</label>
       <input class="form-input" type="number" id="rs_cartons" placeholder="e.g. 5" min="1" step="1"
         oninput="(function(v){var p=document.getElementById('rs_pieces_preview');if(p)p.textContent=(+v||0)*${p.qtyPerCarton}+' ${sanitize(p.packType||p.unit||'pieces')}s = '+((+v||0)*${p.qtyPerCarton}).toLocaleString('en-IN')+' pieces'})(this.value)"
         style="font-family:var(--mono);font-size:22px;font-weight:700" />
       <div id="rs_pieces_preview" style="font-size:12px;color:var(--text-3);margin-top:4px">0 pieces</div>
     </div>` : `
     <div class="form-group">
-      <label class="form-label">Add Quantity *</label>
+      <label class="form-label" for="rs_qty">Add Quantity *</label>
       <input class="form-input" type="number" id="rs_qty" placeholder="Enter quantity received" min="0" step="0.01" style="font-family:var(--mono);font-size:22px;font-weight:700" />
     </div>`}
     <div class="form-group">
-      <label class="form-label">Updated Cost Price (₹${isCarton?' per carton':''}) <span style="font-size:10px;color:var(--text-3)">optional</span></label>
+      <label class="form-label" for="rs_cost">Updated Cost Price (₹${isCarton?' per carton':''}) <span style="font-size:10px;color:var(--text-3)">optional</span></label>
       <input class="form-input" type="number" id="rs_cost" value="${p.costPrice||0}" step="0.01" />
     </div>
-    <div class="form-group"><label class="form-label">Supplier / Invoice No. <span style="font-size:10px;color:var(--text-3)">optional</span></label>
+    <div class="form-group"><label class="form-label" for="rs_note">Supplier / Invoice No. <span style="font-size:10px;color:var(--text-3)">optional</span></label>
       <input class="form-input" id="rs_note" placeholder="e.g. G.Y. Enterprises Inv-2779302600133" /></div>
   `, `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-accent" onclick="saveRestock(${id})">📦 Confirm Restock</button>`);
 }
@@ -4634,17 +4634,17 @@ function openLubeSaleModal(productId) {
       <div class="dbox text-center" style="padding:10px"><div class="mono fw-800" style="color:var(--accent-light)">${cur(p.sellingPrice||0)}</div><div style="font-size:10px;color:var(--text-3)">Per ${sanitize(p.unit||'unit')}</div></div>
     </div>
     <div class="g g-2 gap-12">
-      <div class="form-group"><label class="form-label">Quantity *</label>
+      <div class="form-group"><label class="form-label" for="ls_qty">Quantity *</label>
         <input class="form-input" type="number" id="ls_qty" placeholder="1" min="0.1" step="0.1" max="${p.stock}" oninput="calcLubeSaleTotal(${p.sellingPrice||0})" style="font-family:var(--mono);font-size:18px;font-weight:700" />
       </div>
-      <div class="form-group"><label class="form-label">Rate (₹/${sanitize(p.unit||'unit')})</label>
+      <div class="form-group"><label class="form-label" for="ls_rate">Rate (₹/${sanitize(p.unit||'unit')})</label>
         <input class="form-input" type="number" id="ls_rate" value="${p.sellingPrice||0}" step="0.01" oninput="calcLubeSaleTotal()" style="font-family:var(--mono);font-size:18px;font-weight:700" />
       </div>
     </div>
     <div id="ls_total_preview" style="padding:12px;background:rgba(212,148,15,0.08);border-radius:8px;text-align:center;margin-bottom:12px;font-size:11px;color:var(--text-3)">Enter quantity to see total</div>
     <div class="g g-2 gap-12">
-      <div class="form-group"><label class="form-label">Payment Mode</label><select class="form-input" id="ls_mode">${modeOpts}</select></div>
-      <div class="form-group"><label class="form-label">Customer (optional)</label><input class="form-input" id="ls_customer" placeholder="Name / Vehicle" /></div>
+      <div class="form-group"><label class="form-label" for="ls_mode">Payment Mode</label><select class="form-input" id="ls_mode">${modeOpts}</select></div>
+      <div class="form-group"><label class="form-label" for="ls_customer">Customer (optional)</label><input class="form-input" id="ls_customer" placeholder="Name / Vehicle" /></div>
     </div>
   `, `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-accent" onclick="saveLubeSale(${productId})">💰 Record Sale</button>`);
 }
@@ -5079,11 +5079,11 @@ function renderExports(D) {
       <div class="card card-pad mb-16">
         <h4 class="fw-700 mb-12" style="font-size:13px;color:var(--text-0)">📅 Daily Sales Report (CSV + Print)</h4>
         <div class="g g-2 gap-12 mb-14">
-          <div class="form-group"><label class="form-label">From Date</label>
-            <input type="date" class="form-input" id="exp_dfrom" value="${dfrom}" onchange="window._expDFrom=this.value" />
+          <div class="form-group"><label class="form-label" for="exp_dfrom">From Date</label>
+            <input type="date" class="form-input" id="exp_dfrom" name="exp_dfrom" value="${dfrom}" onchange="window._expDFrom=this.value" />
           </div>
-          <div class="form-group"><label class="form-label">To Date</label>
-            <input type="date" class="form-input" id="exp_dto" value="${dto}" onchange="window._expDTo=this.value" />
+          <div class="form-group"><label class="form-label" for="exp_dto">To Date</label>
+            <input type="date" class="form-input" id="exp_dto" name="exp_dto" value="${dto}" onchange="window._expDTo=this.value" />
           </div>
         </div>
         <div style="display:flex;gap:10px;flex-wrap:wrap">
@@ -5205,11 +5205,11 @@ function renderExports(D) {
       <div class="card card-pad mb-16">
         <h4 class="fw-700 mb-12" style="font-size:13px;color:var(--text-0)">🛢️ Lubes & Products Sales Report</h4>
         <div class="g g-2 gap-12 mb-14">
-          <div class="form-group"><label class="form-label">From Date</label>
-            <input type="date" class="form-input" id="exp_lfrom" value="${lfrom}" onchange="window._expLFrom=this.value" />
+          <div class="form-group"><label class="form-label" for="exp_lfrom">From Date</label>
+            <input type="date" class="form-input" id="exp_lfrom" name="exp_lfrom" value="${lfrom}" onchange="window._expLFrom=this.value" />
           </div>
-          <div class="form-group"><label class="form-label">To Date</label>
-            <input type="date" class="form-input" id="exp_lto" value="${lto}" onchange="window._expLTo=this.value" />
+          <div class="form-group"><label class="form-label" for="exp_lto">To Date</label>
+            <input type="date" class="form-input" id="exp_lto" name="exp_lto" value="${lto}" onchange="window._expLTo=this.value" />
           </div>
         </div>
         <div style="display:flex;gap:10px;flex-wrap:wrap">
@@ -6229,14 +6229,14 @@ window.exportGSTR3BCSV = exportGSTR3BCSV;
 function openGSTINModal() {
   const D = APP.data;
   openModal('⚙️ GST Settings', `
-    <div class="form-group"><label class="form-label">GSTIN *</label>
+    <div class="form-group"><label class="form-label" for="g_gstin">GSTIN *</label>
       <input class="form-input" id="g_gstin" value="${sanitize(D.gstin||'')}" placeholder="e.g. 29AAAPL1234C1ZK" style="font-family:var(--mono);font-weight:700;text-transform:uppercase" oninput="this.value=this.value.toUpperCase();nmCheckGSTIN()" maxlength="15" />
       <div id="gstinValidMsg" style="font-size:11px;margin-top:4px;min-height:16px"></div>
     </div>
-    <div class="form-group"><label class="form-label">Legal / Trade Name</label>
+    <div class="form-group"><label class="form-label" for="g_legal">Legal / Trade Name</label>
       <input class="form-input" id="g_legal" value="${sanitize(D.legalName||D.upiName||'')}" placeholder="Registered business name" />
     </div>
-    <div class="form-group"><label class="form-label">State Code</label>
+    <div class="form-group"><label class="form-label" for="g_state">State Code</label>
       <input class="form-input" id="g_state" value="${sanitize(D.stateCode||'29')}" placeholder="e.g. 29 for Karnataka" maxlength="2" />
     </div>
   `, `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-accent" onclick="saveGSTINSettings()">Save</button>`);
@@ -6748,9 +6748,9 @@ function renderAnalyticsFuelPL(D) {
     <div class="card card-pad mb-14" style="padding:10px 14px">
       <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
         <span class="fw-700" style="font-size:12px">Date Range:</span>
-        <input type="date" class="form-input" style="width:auto;padding:5px 10px" value="${vFrom}" onchange="window._plFrom=this.value;renderPage()" />
+        <input type="date" class="form-input" id="plFrom" name="plFrom" style="width:auto;padding:5px 10px" value="${vFrom}" onchange="window._plFrom=this.value;renderPage()" />
         <span style="color:var(--text-3)">→</span>
-        <input type="date" class="form-input" style="width:auto;padding:5px 10px" value="${vTo}" onchange="window._plTo=this.value;renderPage()" />
+        <input type="date" class="form-input" id="plTo" name="plTo" style="width:auto;padding:5px 10px" value="${vTo}" onchange="window._plTo=this.value;renderPage()" />
       </div>
     </div>
     <div class="g g-auto-sm gap-12 mb-16">
@@ -7057,14 +7057,14 @@ function openLoyaltyRedeemModal(customerId) {
       <div style="font-size:11px;color:var(--text-3);margin-top:4px">Rate: ${settings.redeemRate} per 100 pts · Redeemable: ${redeemable} pts</div>
     </div>
     <div class="form-group">
-      <label class="form-label">Points to Redeem</label>
+      <label class="form-label" for="ly_pts">Points to Redeem</label>
       <input class="form-input" type="number" id="ly_pts" value="${redeemable}" min="100" max="${redeemable}" step="100"
         style="font-family:var(--mono);font-size:20px;font-weight:700"
         oninput="document.getElementById('ly_val').textContent=cur(Math.floor((+this.value||0)/100)*${settings.redeemRate})" />
     </div>
     <div style="text-align:center;font-size:12px;color:var(--text-3)">Value: <span id="ly_val" class="fw-700 mono" style="color:var(--green)">${cur(rupeeVal)}</span></div>
     <div class="form-group mt-12">
-      <label class="form-label">Apply as discount to outstanding balance?</label>
+      <label class="form-label" for="ly_apply">Apply as discount to outstanding balance?</label>
       <select class="form-input" id="ly_apply">
         <option value="balance">Deduct from outstanding balance</option>
         <option value="note">Record redemption only (cash discount given)</option>
@@ -7146,12 +7146,12 @@ window.saveLoyaltySettings = saveLoyaltySettings;
 function openAddAdminUserModal() {
   openModal('➕ Add Admin User', `
     <div class="g g-2 gap-12">
-      <div class="form-group"><label class="form-label">Full Name *</label>
+      <div class="form-group"><label class="form-label" for="au_name">Full Name *</label>
         <input class="form-input" id="au_name" placeholder="e.g. Ramesh Kumar" /></div>
-      <div class="form-group"><label class="form-label">Username *</label>
+      <div class="form-group"><label class="form-label" for="au_user">Username *</label>
         <input class="form-input" id="au_user" placeholder="e.g. ramesh" autocomplete="off" /></div>
     </div>
-    <div class="form-group"><label class="form-label">Phone Number <span style="font-size:10px;color:var(--text-3)">(for SMS OTP login)</span></label>
+    <div class="form-group"><label class="form-label" for="au_email">Phone Number <span style="font-size:10px;color:var(--text-3)">(for SMS OTP login)</span></label>
       <div style="display:flex;gap:8px">
         <span style="background:var(--bg-1);border:1px solid var(--border);border-radius:var(--radius-sm);padding:0 10px;display:flex;align-items:center;font-size:13px;color:var(--text-2);flex-shrink:0">+91</span>
         <input class="form-input" id="au_phone" type="tel" inputmode="numeric" maxlength="10" placeholder="10-digit mobile number" oninput="this.value=this.value.replace(/[^0-9]/g,'')" autocomplete="off" />
@@ -7161,12 +7161,12 @@ function openAddAdminUserModal() {
       <input class="form-input" id="au_email" type="email" placeholder="name@example.com" autocomplete="off" />
       <div style="font-size:10px;color:var(--text-3);margin-top:3px">Phone or email required for forgot password. Both recommended.</div>
     </div>
-    <div class="form-group"><label class="form-label">Role</label>
+    <div class="form-group"><label class="form-label" for="au_role">Role</label>
       <select class="form-input" id="au_role">
         <option>Owner</option><option selected>Manager</option><option>Accountant</option><option>Cashier</option>
       </select>
     </div>
-    <div class="form-group"><label class="form-label">Password *</label>
+    <div class="form-group"><label class="form-label" for="au_pass">Password *</label>
       <input class="form-input" id="au_pass" type="password" placeholder="Min 6 characters" autocomplete="new-password" /></div>
   `, `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
       <button class="btn btn-accent" onclick="saveAddAdminUser()">Add User</button>`);
@@ -7233,7 +7233,7 @@ function openEditAdminUserRoleModal(userIdx) {
   const currentEmail = u.email || '';
   openModal(`✏️ Edit User — ${sanitize(u.name||u.username)}`, `
     <div class="form-group">
-      <label class="form-label">Phone Number <span style="font-size:10px;color:var(--text-3)">(SMS OTP login)</span></label>
+      <label class="form-label" for="aue_email">Phone Number <span style="font-size:10px;color:var(--text-3)">(SMS OTP login)</span></label>
       <div style="display:flex;gap:0;border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden;background:var(--bg-1)">
         <span style="display:flex;align-items:center;padding:0 10px;background:var(--bg-2);border-right:1px solid var(--border);color:var(--text-2);font-size:12px;font-weight:600">+91</span>
         <input class="form-input" id="aue_phone" type="tel" inputmode="numeric" maxlength="10" value="${sanitize(currentPhone)}" placeholder="10-digit number" oninput="this.value=this.value.replace(/[^0-9]/g,'')" style="border:none;border-radius:0;background:transparent;flex:1" />
@@ -7244,7 +7244,7 @@ function openEditAdminUserRoleModal(userIdx) {
       <input class="form-input" id="aue_email" type="email" value="${sanitize(currentEmail)}" placeholder="name@example.com" />
       ${(!currentPhone && !currentEmail) ? '<div style="font-size:10px;color:var(--orange);margin-top:3px">⚠️ No phone or email — forgot password will not work</div>' : ''}
     </div>
-    <div class="form-group"><label class="form-label">Role</label>
+    <div class="form-group"><label class="form-label" for="aue_role">Role</label>
       <select class="form-input" id="aue_role">
         ${['Owner','Manager','Accountant','Cashier'].map(r=>`<option value="${r}" ${r===u.role?'selected':''}>${r}</option>`).join('')}
       </select>
@@ -7364,7 +7364,7 @@ function openDayLockPicker() {
   const locks = APP.data.dayLocks || {};
   openModal('📅 Lock / Unlock a Date', `
     <div class="form-group">
-      <label class="form-label">Select Date</label>
+      <label class="form-label" for="dlp_date">Select Date</label>
       <input class="form-input" type="date" id="dlp_date" value="${today}" max="${today}" />
     </div>
     <div id="dlp_status" style="margin-top:10px;padding:10px;background:var(--bg-0);border-radius:8px;font-size:13px;color:var(--text-2);text-align:center">
@@ -7451,18 +7451,18 @@ function openAddTaxRateModal(editIdx) {
 
   openModal(isEdit ? '✏️ Edit Tax Rate' : '➕ Add Fuel Tax Rate', `
     <div class="form-group">
-      <label class="form-label">Fuel Type *</label>
+      <label class="form-label" for="trFuelType">Fuel Type *</label>
       <select class="form-input" id="trFuelType">${fuelOpts}</select>
     </div>
     <div class="form-row">
       <div class="form-group">
-        <label class="form-label">Tax Name *
+        <label class="form-label" for="trTaxName">Tax Name *
           <span style="font-size:10px;color:var(--text-3);font-weight:400"> e.g. ZLST, VAT, GST, Cess</span>
         </label>
         <input class="form-input" id="trTaxName" placeholder="e.g. ZLST" value="${sanitize(existing.taxName||'')}" />
       </div>
       <div class="form-group">
-        <label class="form-label">Rate % *</label>
+        <label class="form-label" for="trTaxRate">Rate % *</label>
         <input class="form-input" id="trTaxRate" type="number" min="0" max="100" step="0.001" placeholder="e.g. 29.840" value="${existing.rate !== undefined ? existing.rate : ''}" />
       </div>
     </div>
@@ -7795,20 +7795,20 @@ function openSaleModal() {
   const pumpOpts = APP.data.pumps.map(p => `<option value="${p.id}">${p.name} (${getFuel(p.fuelType).short})</option>`).join('');
   openModal('Record New Sale', `
     <div class="form-row">
-      <div class="form-group"><label class="form-label">Fuel Type</label><select class="form-input" id="saleFuel">${fuelOpts}</select></div>
-      <div class="form-group"><label class="form-label">Pump</label><select class="form-input" id="salePump">${pumpOpts}</select></div>
+      <div class="form-group"><label class="form-label" for="saleFuel">Fuel Type</label><select class="form-input" id="saleFuel">${fuelOpts}</select></div>
+      <div class="form-group"><label class="form-label" for="salePump">Pump</label><select class="form-input" id="salePump">${pumpOpts}</select></div>
     </div>
     <div class="form-row">
-      <div class="form-group"><label class="form-label">Liters</label><input class="form-input" id="saleLiters" type="number" step="0.1" placeholder="Enter liters" oninput="calcSaleAmount()"/></div>
-      <div class="form-group"><label class="form-label">Amount (₹)</label><input class="form-input" id="saleAmount" type="number" step="0.01" placeholder="Auto-calculated" /></div>
+      <div class="form-group"><label class="form-label" for="saleLiters">Liters</label><input class="form-input" id="saleLiters" type="number" step="0.1" placeholder="Enter liters" oninput="calcSaleAmount()"/></div>
+      <div class="form-group"><label class="form-label" for="saleAmount">Amount (₹)</label><input class="form-input" id="saleAmount" type="number" step="0.01" placeholder="Auto-calculated" /></div>
     </div>
     <div class="form-row">
-      <div class="form-group"><label class="form-label">Vehicle No. <span style="font-size:10px;color:var(--text-3);font-weight:500">(optional for cash)</span></label><input class="form-input" id="saleVehicle" placeholder="KA00XX0000" style="text-transform:uppercase" oninput="this.value=this.value.toUpperCase()" onpaste="setTimeout(()=>this.value=this.value.toUpperCase(),0)" /></div>
-      <div class="form-group"><label class="form-label">Payment Mode</label><select class="form-input" id="saleMode">
+      <div class="form-group"><label class="form-label" for="saleVehicle">Vehicle No. <span style="font-size:10px;color:var(--text-3);font-weight:500">(optional for cash)</span></label><input class="form-input" id="saleVehicle" placeholder="KA00XX0000" style="text-transform:uppercase" oninput="this.value=this.value.toUpperCase()" onpaste="setTimeout(()=>this.value=this.value.toUpperCase(),0)" /></div>
+      <div class="form-group"><label class="form-label" for="saleMode">Payment Mode</label><select class="form-input" id="saleMode">
         <option value="cash">Cash</option><option value="upi">UPI</option><option value="card">Card</option><option value="credit">Credit</option>
       </select></div>
     </div>
-    <div class="form-group"><label class="form-label">Customer (for credit)</label><input class="form-input" id="saleCustomer" placeholder="Optional" /></div>
+    <div class="form-group"><label class="form-label" for="saleCustomer">Customer (for credit)</label><input class="form-input" id="saleCustomer" placeholder="Optional" /></div>
   `, `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-accent" onclick="saveSale()">💾 Save Sale</button>`);
 }
 
@@ -7825,19 +7825,19 @@ function openEditSaleModal(saleId) {
       <strong style="color:var(--red)">⚠️ Editing a sale adjusts the record only.</strong> Tank levels are NOT automatically recalculated — use Record Dip to correct tank inventory after editing.
     </div>
     <div class="form-row">
-      <div class="form-group"><label class="form-label">Fuel Type</label><select class="form-input" id="editSaleFuel">${fuelOpts}</select></div>
-      <div class="form-group"><label class="form-label">Pump</label><select class="form-input" id="editSalePump">${pumpOpts}</select></div>
+      <div class="form-group"><label class="form-label" for="editSaleFuel">Fuel Type</label><select class="form-input" id="editSaleFuel">${fuelOpts}</select></div>
+      <div class="form-group"><label class="form-label" for="editSalePump">Pump</label><select class="form-input" id="editSalePump">${pumpOpts}</select></div>
     </div>
     <div class="form-row">
-      <div class="form-group"><label class="form-label">Liters *</label><input class="form-input mono" id="editSaleLiters" type="number" step="0.1" value="${s.liters||0}" style="font-size:18px;font-weight:700;color:var(--accent-light)" /></div>
-      <div class="form-group"><label class="form-label">Amount ₹ *</label><input class="form-input mono" id="editSaleAmount" type="number" step="0.01" value="${s.amount||0}" style="font-size:18px;font-weight:700" /></div>
+      <div class="form-group"><label class="form-label" for="editSaleLiters">Liters *</label><input class="form-input mono" id="editSaleLiters" type="number" step="0.1" value="${s.liters||0}" style="font-size:18px;font-weight:700;color:var(--accent-light)" /></div>
+      <div class="form-group"><label class="form-label" for="editSaleAmount">Amount ₹ *</label><input class="form-input mono" id="editSaleAmount" type="number" step="0.01" value="${s.amount||0}" style="font-size:18px;font-weight:700" /></div>
     </div>
     <div class="form-row">
-      <div class="form-group"><label class="form-label">Vehicle No.</label><input class="form-input" id="editSaleVehicle" value="${sanitize(s.vehicle||'')}" style="text-transform:uppercase" oninput="this.value=this.value.toUpperCase()" /></div>
-      <div class="form-group"><label class="form-label">Payment Mode</label><select class="form-input" id="editSaleMode">${modeOpts}</select></div>
+      <div class="form-group"><label class="form-label" for="editSaleVehicle">Vehicle No.</label><input class="form-input" id="editSaleVehicle" value="${sanitize(s.vehicle||'')}" style="text-transform:uppercase" oninput="this.value=this.value.toUpperCase()" /></div>
+      <div class="form-group"><label class="form-label" for="editSaleMode">Payment Mode</label><select class="form-input" id="editSaleMode">${modeOpts}</select></div>
     </div>
-    <div class="form-group"><label class="form-label">Customer</label><input class="form-input" id="editSaleCustomer" value="${sanitize(s.customer||'')}" /></div>
-    <div class="form-group"><label class="form-label">Edit Reason <span style="color:var(--red)">*</span></label>
+    <div class="form-group"><label class="form-label" for="editSaleCustomer">Customer</label><input class="form-input" id="editSaleCustomer" value="${sanitize(s.customer||'')}" /></div>
+    <div class="form-group"><label class="form-label" for="editSaleReason">Edit Reason <span style="color:var(--red)">*</span></label>
       <input class="form-input" id="editSaleReason" placeholder="e.g. Typo — employee entered 100 instead of 10" required />
     </div>`,
     `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
@@ -7899,7 +7899,7 @@ function confirmDeleteSale(saleId, vehicle, liters, amount) {
         ${vehicle ? `<div style="font-size:11px;color:var(--text-3);margin-top:4px">Vehicle: ${sanitize(vehicle)}</div>` : ''}
       </div>
       <div style="font-size:12px;color:var(--text-3);margin-bottom:12px">This removes the sale from reports and revenue totals.<br>Tank stock will be <strong style="color:var(--green)">automatically restored</strong> by the deleted liters.</div>
-      <div class="form-group"><label class="form-label">Delete Reason <span style="color:var(--red)">*</span></label>
+      <div class="form-group"><label class="form-label" for="deleteSaleReason">Delete Reason <span style="color:var(--red)">*</span></label>
         <input class="form-input" id="deleteSaleReason" placeholder="e.g. Duplicate entry / Employee error" />
       </div>
     </div>`,
@@ -8126,7 +8126,7 @@ function openAddTankModal() {
 
   openModal('🛢️ Add New Tank',
     `<div class="form-group">
-       <label class="form-label">Fuel Type *</label>
+       <label class="form-label" for="newTankCurrent">Fuel Type *</label>
        <div style="display:flex;gap:8px;margin-top:4px">${fuelOpts}</div>
      </div>
      <div class="form-group" style="margin-top:16px">
@@ -8244,7 +8244,7 @@ function openEditTankModal(tankId) {
        <span style="font-size:12px;color:var(--text-2)">Current stock: <strong>${fmt(tank.current)} L</strong></span>
      </div>
      <div class="form-group">
-       <label class="form-label">Fuel Type *</label>
+       <label class="form-label" for="editTankCurrent">Fuel Type *</label>
        <div style="display:flex;gap:8px;margin-top:4px">${fuelOpts}</div>
      </div>
      <div class="form-group" style="margin-top:16px">
@@ -8503,7 +8503,7 @@ function openDipModal(preselect) {
          </div>
        </div>`
     : `<div class="form-group">
-         <label class="form-label">Tank</label>
+         <label class="form-label" for="dipTank">Tank</label>
          <select class="form-input" id="dipTank" onchange="onDipTankChange()">${tankOpts}</select>
        </div>`;
 
@@ -8517,13 +8517,13 @@ function openDipModal(preselect) {
        </div>
        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
          <div>
-           <label class="form-label">Dip Cm <span id="dipCmRange" style="color:var(--text-3);font-weight:400">(${cmR.min}–${cmR.max})</span></label>
+           <label class="form-label" for="dipCm">Dip Cm <span id="dipCmRange" style="color:var(--text-3);font-weight:400">(${cmR.min}–${cmR.max})</span></label>
            <input class="form-input" id="dipCm" type="number" min="${cmR.min}" max="${cmR.max}" step="1"
              placeholder="${cmR.placeholder}" oninput="updateDipPreview()"
              style="font-size:22px;font-weight:800;text-align:center" />
          </div>
          <div>
-           <label class="form-label">+ mm (0–9)</label>
+           <label class="form-label" for="dipMm">+ mm (0–9)</label>
            <select class="form-input" id="dipMm" onchange="updateDipPreview()"
              style="font-size:22px;font-weight:800;text-align:center">${mmOpts}</select>
          </div>
@@ -8550,7 +8550,7 @@ function openDipModal(preselect) {
      <!-- Direct Litre Input (non-chart tanks) -->
      <div id="dipDirectSection" style="${useChart ? 'display:none' : ''}">
        <div class="form-group">
-         <label class="form-label">Physical Dip Reading (Litres) — Sets Available Qty</label>
+         <label class="form-label" for="dipReading">Physical Dip Reading (Litres) — Sets Available Qty</label>
          <input class="form-input" id="dipReading" type="number" step="1"
            placeholder="Enter measured litres" style="font-size:22px;font-weight:700;text-align:center" />
          <div style="font-size:11px;color:var(--accent-light);margin-top:4px;font-weight:600">
@@ -8781,11 +8781,11 @@ function openExpenseModal(prefillCategory) {
   openModal('Add Expense', `
     <div class="form-row">
       <div class="form-group">
-        <label class="form-label">Category</label>
+        <label class="form-label" for="expCategory">Category</label>
         <select class="form-input" id="expCategory" onchange="expCategoryChanged()">${allOpts}</select>
       </div>
       <div class="form-group">
-        <label class="form-label">Total Amount (₹)</label>
+        <label class="form-label" for="expAmount">Total Amount (₹)</label>
         <input class="form-input mono fw-700" id="expAmount" type="number" inputmode="decimal" step="0.01" placeholder="0.00" readonly style="background:var(--bg-2)" />
       </div>
     </div>
@@ -8831,11 +8831,11 @@ function openExpenseModal(prefillCategory) {
       <div style="font-size:11px;font-weight:700;color:#06b6d4;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:10px">📦 GST — Lube Purchase</div>
       <div class="form-row">
         <div class="form-group">
-          <label class="form-label">Invoice Value (₹) incl. GST</label>
+          <label class="form-label" for="expGSTInvoice">Invoice Value (₹) incl. GST</label>
           <input class="form-input" id="expGSTInvoice" type="number" inputmode="decimal" step="0.01" placeholder="Total bill amount" oninput="expCalcGST()" />
         </div>
         <div class="form-group">
-          <label class="form-label">GST Rate</label>
+          <label class="form-label" for="expGSTRate">GST Rate</label>
           <select class="form-input" id="expGSTRate" onchange="expCalcGST()">
             <option value="5">5%</option>
             <option value="12">12%</option>
@@ -8860,7 +8860,7 @@ function openExpenseModal(prefillCategory) {
     </div>
 
     <div class="form-group">
-      <label class="form-label">Bill / Invoice No. & Notes</label>
+      <label class="form-label" for="expDesc">Bill / Invoice No. & Notes</label>
       <input class="form-input" id="expDesc" placeholder="Bill no., period (e.g. March 2026), vendor…" />
     </div>
   `, `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-accent" onclick="saveExpense()">💾 Save</button>`);
@@ -9022,12 +9022,12 @@ function openPurchaseModal() {
   openModal('🚛 Record Fuel Purchase', `
     <div class="form-row">
       <div class="form-group">
-        <label class="form-label">Fuel Type *</label>
+        <label class="form-label" for="purchFuel">Fuel Type *</label>
         <select class="form-input" id="purchFuel" onchange="purchFuelChanged();calcPurchTotal()">${fuelOpts}</select>
         <div id="purchCapHint" style="font-size:11px;margin-top:4px;display:none"></div>
       </div>
       <div class="form-group">
-        <label class="form-label">Quantity (Litres) *</label>
+        <label class="form-label" for="purchQty">Quantity (Litres) *</label>
         <input class="form-input" id="purchQty" type="number" min="1" max="25000" step="1" placeholder="e.g. 10000" oninput="calcPurchTotal();updateTankDistribution(document.getElementById('purchFuel')?.value, parseFloat(this.value)||0)" />
       </div>
     </div>
@@ -9036,13 +9036,13 @@ function openPurchaseModal() {
       <div style="font-size:11px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px">📄 Invoice Pricing (from OMC bill)</div>
       <div class="form-row">
         <div class="form-group" style="margin-bottom:0">
-          <label class="form-label">Basic Price (per KL) *
+          <label class="form-label" for="purchBasicKL">Basic Price (per KL) *
             <span style="font-size:10px;color:var(--text-3);font-weight:500"> — from invoice</span>
           </label>
           <input class="form-input" id="purchBasicKL" type="number" min="1" step="0.001" placeholder="e.g. 76732.28" oninput="calcPurchTotal()" />
         </div>
         <div class="form-group" style="margin-bottom:0">
-          <label class="form-label">
+          <label class="form-label" for="purchTaxPct">
             <span id="purchTaxLabel">${defaultTaxName}</span> %
             <span style="font-size:10px;color:var(--text-3);font-weight:500"> — auto-filled, editable</span>
           </label>
@@ -9053,11 +9053,11 @@ function openPurchaseModal() {
 
     <div class="form-row">
       <div class="form-group">
-        <label class="form-label">Invoice No.</label>
+        <label class="form-label" for="purchInvoice">Invoice No.</label>
         <input class="form-input" id="purchInvoice" placeholder="e.g. 20264324B122958" />
       </div>
       <div class="form-group">
-        <label class="form-label">Supplier Name</label>
+        <label class="form-label" for="purchSupplier">Supplier Name</label>
         <input class="form-input" id="purchSupplier" placeholder="e.g. IOCL Bangalore Terminal" />
       </div>
     </div>
@@ -9317,36 +9317,36 @@ function openEditPurchaseModal(purchaseId) {
     </div>
     <div class="form-row">
       <div class="form-group">
-        <label class="form-label">Date *</label>
+        <label class="form-label" for="editPurchDate">Date *</label>
         <input class="form-input" id="editPurchDate" type="date" value="${(p.date||'').slice(0,10)}" />
       </div>
       <div class="form-group">
-        <label class="form-label">Fuel Type *</label>
+        <label class="form-label" for="editPurchFuel">Fuel Type *</label>
         <select class="form-input" id="editPurchFuel">${fuelOpts}</select>
       </div>
     </div>
     <div class="form-row">
       <div class="form-group">
-        <label class="form-label">Quantity (Litres) *</label>
+        <label class="form-label" for="editPurchQty">Quantity (Litres) *</label>
         <input class="form-input" id="editPurchQty" type="number" min="1" max="50000" step="1" value="${p.liters||0}" oninput="calcEditPurchTotal()" />
       </div>
       <div class="form-group">
-        <label class="form-label">Basic Price (per KL) *</label>
+        <label class="form-label" for="editPurchBasicKL">Basic Price (per KL) *</label>
         <input class="form-input" id="editPurchBasicKL" type="number" min="1" step="0.001" value="${basicKL.toFixed(3)}" oninput="calcEditPurchTotal()" />
       </div>
     </div>
     <div class="form-row">
       <div class="form-group">
-        <label class="form-label">${taxName} %</label>
+        <label class="form-label" for="editPurchTaxPct">${taxName} %</label>
         <input class="form-input" id="editPurchTaxPct" type="number" min="0" max="100" step="0.001" value="${taxPct}" oninput="calcEditPurchTotal()" />
       </div>
       <div class="form-group">
-        <label class="form-label">Invoice No.</label>
+        <label class="form-label" for="editPurchInvoice">Invoice No.</label>
         <input class="form-input" id="editPurchInvoice" value="${sanitize(p.invoice||'')}" placeholder="e.g. 20264324B122958" />
       </div>
     </div>
     <div class="form-group">
-      <label class="form-label">Supplier</label>
+      <label class="form-label" for="editPurchSupplier">Supplier</label>
       <input class="form-input" id="editPurchSupplier" value="${sanitize(p.supplier||'')}" placeholder="e.g. IOCL Bangalore Terminal" />
     </div>
     <div id="editPurchPreview" style="background:rgba(212,148,15,0.08);border:1px solid rgba(212,148,15,0.25);border-radius:8px;padding:10px 14px;font-size:12px;color:var(--accent-light);margin-top:4px">
@@ -9569,11 +9569,11 @@ function openEditPumpModal(pumpId) {
 
   openModal(`✏️ Edit ${pump.name}`,
     `<div class="form-group">
-       <label class="form-label">Pump Name</label>
+       <label class="form-label" for="editPumpName">Pump Name</label>
        <input class="form-input" id="editPumpName" value="${pump.name}" />
      </div>
      <div class="form-group">
-       <label class="form-label">Status</label>
+       <label class="form-label" for="editPumpStatus">Status</label>
        <select class="form-input" id="editPumpStatus">${statusOpts}</select>
      </div>
      <div style="margin-top:4px">
@@ -9625,16 +9625,16 @@ function openAddPumpModal() {
 
   openModal('➕ Add New Pump',
     `<div class="form-group">
-       <label class="form-label">Pump Name *</label>
+       <label class="form-label" for="addPumpName">Pump Name *</label>
        <input class="form-input" id="addPumpName" placeholder="e.g. Pump 6" />
      </div>
      <div class="form-row">
        <div class="form-group">
-         <label class="form-label">Number of Nozzles</label>
+         <label class="form-label" for="addPumpNozzles">Number of Nozzles</label>
          <select class="form-input" id="addPumpNozzles" onchange="renderAddPumpNozzleRows()">${nozzleCountOpts}</select>
        </div>
        <div class="form-group">
-         <label class="form-label">Status</label>
+         <label class="form-label" for="addPumpStatus">Status</label>
          <select class="form-input" id="addPumpStatus">
            <option value="active">Active</option>
            <option value="inactive">Inactive</option>
@@ -10034,8 +10034,8 @@ function openPaymentModal(customerId) {
   if (!c) return;
   openModal(`Record Payment — ${sanitize(c.name)}`, `
     <div class="dbox mb-14" style="padding:16px"><div class="dbox-label">Outstanding</div><div class="dbox-value mono" style="color:var(--red)">${cur(c.outstanding)}</div></div>
-    <div class="form-group"><label class="form-label">Payment Amount (₹)</label><input class="form-input" id="payAmount" type="number" placeholder="0.00" /></div>
-    <div class="form-group"><label class="form-label">Payment Mode</label><select class="form-input" id="payMode">
+    <div class="form-group"><label class="form-label" for="payAmount">Payment Amount (₹)</label><input class="form-input" id="payAmount" type="number" placeholder="0.00" /></div>
+    <div class="form-group"><label class="form-label" for="payMode">Payment Mode</label><select class="form-input" id="payMode">
       <option value="cash">Cash</option><option value="upi">UPI</option><option value="cheque">Cheque</option><option value="neft">NEFT/RTGS</option>
     </select></div>
   `, `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-accent" onclick="savePayment(${customerId})">💾 Record Payment</button>`);
@@ -10350,7 +10350,7 @@ function shareUPILink() {
 function openPriceModal() {
   const fields = FUEL_TYPES.map(f => `
     <div class="form-group">
-      <label class="form-label" style="display:flex;align-items:center;gap:8px">
+      <label class="form-label" for="price_${f.id}" style="display:flex;align-items:center;gap:8px">
         <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${f.color}"></span>
         ${f.name}
       </label>
@@ -10399,7 +10399,7 @@ function savePrices() {
 function openPurchasePriceModal() {
   const fields = FUEL_TYPES.map(f => `
     <div class="form-group">
-      <label class="form-label">${f.name} — Purchase Price (&#8377;/L)</label>
+      <label class="form-label" for="pprice_${f.id}">${f.name} — Purchase Price (&#8377;/L)</label>
       <input class="form-input" id="pprice_${f.id}" type="number" inputmode="decimal" step="0.01" value="${APP.data.purchasePrices[f.id]}"
         style="font-family:var(--mono);font-size:18px;font-weight:700;text-align:center;padding:12px" />
     </div>`).join('');
@@ -10788,9 +10788,9 @@ function empFormHTML(shiftOpts, vals) {
   }).join('');
 
   return `
-    <div class="form-group"><label class="form-label">Full Name *</label><input class="form-input" id="empName" placeholder="Enter full name" value="${vals.name||''}" /></div>
+    <div class="form-group"><label class="form-label" for="empName">Full Name *</label><input class="form-input" id="empName" placeholder="Enter full name" value="${vals.name||''}" /></div>
     <div class="form-row">
-      <div class="form-group"><label class="form-label">Role</label>
+      <div class="form-group"><label class="form-label" for="empRole">Role</label>
         <select class="form-input" id="empRole">
           <option ${vals.role==='Attendant'?'selected':''}>Attendant</option>
           <option ${vals.role==='Shift Manager'?'selected':''}>Shift Manager</option>
@@ -10798,7 +10798,7 @@ function empFormHTML(shiftOpts, vals) {
       </div>
     </div>
     <div class="form-row">
-      <div class="form-group"><label class="form-label">Phone</label><div style="display:flex;gap:8px"><input class="form-input" id="empPhoneCC" type="tel" inputmode="numeric" maxlength="4" placeholder="+91" value="${vals.phoneCC||'+91'}" style="width:72px;flex-shrink:0" /><input class="form-input" id="empPhone" type="tel" inputmode="numeric" maxlength="10" minlength="10" oninput="this.value=this.value.replace(/[^0-9]/g,'')" placeholder="10-digit number" value="${vals.phone||''}" style="flex:1" /></div></div>
+      <div class="form-group"><label class="form-label" for="empSalary">Phone</label><div style="display:flex;gap:8px"><input class="form-input" id="empPhoneCC" type="tel" inputmode="numeric" maxlength="4" placeholder="+91" value="${vals.phoneCC||'+91'}" style="width:72px;flex-shrink:0" /><input class="form-input" id="empPhone" type="tel" inputmode="numeric" maxlength="10" minlength="10" oninput="this.value=this.value.replace(/[^0-9]/g,'')" placeholder="10-digit number" value="${vals.phone||''}" style="flex:1" /></div></div>
       <div class="form-group"><label class="form-label">Monthly Salary (₹)</label><input class="form-input" id="empSalary" type="number" value="${vals.salary||12000}" /></div>
     </div>
     <div style="margin-top:4px">
@@ -10983,10 +10983,10 @@ function openSetPINModal(empId) {
     `<div style="margin-bottom:12px;padding:12px;background:var(--bg-0);border-radius:var(--radius-sm);border:1px solid var(--border-light);font-size:12px;color:var(--text-2)">
       ${hasPIN ? '🔄 <strong style="color:var(--accent-light)">A PIN is already set.</strong> Enter a new PIN below to change it.' : '⚠️ <strong style="color:var(--orange)">No PIN set yet.</strong> This employee cannot log in until a PIN is assigned.'}
     </div>
-    <div class="form-group"><label class="form-label">New 4-Digit PIN *</label>
+    <div class="form-group"><label class="form-label" for="newPIN">New 4-Digit PIN *</label>
       <input class="form-input mono" id="newPIN" type="password" inputmode="numeric" maxlength="4" placeholder="••••" style="font-size:24px;letter-spacing:8px;text-align:center" />
     </div>
-    <div class="form-group"><label class="form-label">Confirm PIN *</label>
+    <div class="form-group"><label class="form-label" for="confirmPIN">Confirm PIN *</label>
       <input class="form-input mono" id="confirmPIN" type="password" inputmode="numeric" maxlength="4" placeholder="••••" style="font-size:24px;letter-spacing:8px;text-align:center" />
     </div>
     <input type="hidden" id="setPINEmpId" value="${empId}" />
@@ -11090,18 +11090,18 @@ function shiftFormHTML(vals) {
     .map(e => `<option value="${e.id}" ${(vals.managerId===e.id || vals.manager===e.name)?'selected':''}>${sanitize(e.name)}</option>`)
     .join('');
   return `
-    <div class="form-group"><label class="form-label">Shift Name *</label>
+    <div class="form-group"><label class="form-label" for="shiftName">Shift Name *</label>
       <input class="form-input" id="shiftName" placeholder="e.g. Morning" value="${vals.name||''}" />
     </div>
     <div class="form-row">
-      <div class="form-group"><label class="form-label">Start Time *</label>
+      <div class="form-group"><label class="form-label" for="shiftStart">Start Time *</label>
         <input class="form-input" id="shiftStart" type="time" value="${vals.start||'06:00'}" />
       </div>
-      <div class="form-group"><label class="form-label">End Time *</label>
+      <div class="form-group"><label class="form-label" for="shiftEnd">End Time *</label>
         <input class="form-input" id="shiftEnd" type="time" value="${vals.end||'14:00'}" />
       </div>
     </div>
-    <div class="form-group"><label class="form-label">Shift Manager</label>
+    <div class="form-group"><label class="form-label" for="shiftManager">Shift Manager</label>
       <select class="form-input" id="shiftManager">
         <option value="">— None —</option>
         ${managerOpts}
@@ -11562,22 +11562,22 @@ function openRecordPaymentModal(tenantId, stationName, defaultPrice) {
 
   openModal(`💰 Record Payment — ${sanitize(stationName)}`, `
     <div class="g g-2 gap-12 mb-12">
-      <div class="form-group"><label class="form-label">Plan *</label>
+      <div class="form-group"><label class="form-label" for="rp_plan">Plan *</label>
         <select class="form-input" id="rp_plan" onchange="
           const m={monthly:1,quarterly:3,halfyearly:6,yearly:12};
           document.getElementById('rp_months').value=m[this.value]||1;
           document.getElementById('rp_amount').value=(${defaultPrice||0}*m[this.value]).toFixed(0);
         ">${planOpts}</select>
       </div>
-      <div class="form-group"><label class="form-label">Months</label>
+      <div class="form-group"><label class="form-label" for="rp_months">Months</label>
         <input class="form-input mono" type="number" id="rp_months" value="1" min="1" max="24" />
       </div>
     </div>
     <div class="g g-2 gap-12 mb-12">
-      <div class="form-group"><label class="form-label">Amount (₹) *</label>
+      <div class="form-group"><label class="form-label" for="rp_amount">Amount (₹) *</label>
         <input class="form-input mono" type="number" id="rp_amount" value="${defaultPrice||0}" min="0" />
       </div>
-      <div class="form-group"><label class="form-label">Payment Mode</label>
+      <div class="form-group"><label class="form-label" for="rp_mode">Payment Mode</label>
         <select class="form-input" id="rp_mode">
           <option value="upi">UPI</option>
           <option value="cash">Cash</option>
@@ -11586,10 +11586,10 @@ function openRecordPaymentModal(tenantId, stationName, defaultPrice) {
         </select>
       </div>
     </div>
-    <div class="form-group"><label class="form-label">Reference / UTR</label>
+    <div class="form-group"><label class="form-label" for="rp_ref">Reference / UTR</label>
       <input class="form-input" id="rp_ref" placeholder="UPI ref, UTR, cheque no..." />
     </div>
-    <div class="form-group"><label class="form-label">Notes</label>
+    <div class="form-group"><label class="form-label" for="rp_notes">Notes</label>
       <input class="form-input" id="rp_notes" placeholder="Optional notes" />
     </div>
     <input type="hidden" id="rp_tid" value="${tenantId}" />
@@ -11627,29 +11627,29 @@ function openSubSettingsModal(tenantId, stationName) {
   const sub = _billingData?.find(s => s.tenant_id === tenantId) || {};
   openModal(`⚙️ Subscription Settings — ${sanitize(stationName)}`, `
     <div class="g g-2 gap-12 mb-12">
-      <div class="form-group"><label class="form-label">Status</label>
+      <div class="form-group"><label class="form-label" for="ss_status">Status</label>
         <select class="form-input" id="ss_status">
           <option value="trial" ${sub.status==='trial'?'selected':''}>Trial</option>
           <option value="active" ${sub.status==='active'?'selected':''}>Active</option>
           <option value="suspended" ${sub.status==='suspended'?'selected':''}>Suspended</option>
         </select>
       </div>
-      <div class="form-group"><label class="form-label">Trial Days</label>
+      <div class="form-group"><label class="form-label" for="ss_trial">Trial Days</label>
         <input class="form-input mono" type="number" id="ss_trial" value="${sub.trial_days||30}" min="1" max="365" />
       </div>
     </div>
     <div class="g g-2 gap-12 mb-12">
-      <div class="form-group"><label class="form-label">Monthly Price (₹)</label>
+      <div class="form-group"><label class="form-label" for="ss_price">Monthly Price (₹)</label>
         <input class="form-input mono" type="number" id="ss_price" value="${sub.price_monthly||0}" min="0" />
       </div>
-      <div class="form-group"><label class="form-label">Grace Period (days)</label>
+      <div class="form-group"><label class="form-label" for="ss_grace">Grace Period (days)</label>
         <input class="form-input mono" type="number" id="ss_grace" value="${sub.grace_days||3}" min="0" max="30" />
       </div>
     </div>
-    <div class="form-group"><label class="form-label">Owner Phone (for reminders)</label>
+    <div class="form-group"><label class="form-label" for="ss_phone">Owner Phone (for reminders)</label>
       <input class="form-input" id="ss_phone" value="${sanitize(sub.owner_phone||'')}" placeholder="+91XXXXXXXXXX" />
     </div>
-    <div class="form-group"><label class="form-label">Notes</label>
+    <div class="form-group"><label class="form-label" for="ss_notes">Notes</label>
       <input class="form-input" id="ss_notes" value="${sanitize(sub.notes||'')}" placeholder="Internal notes" />
     </div>
     <input type="hidden" id="ss_tid" value="${tenantId}" />
@@ -12733,9 +12733,9 @@ function openDMSEntryModal() {
   const refLabel = omc==='bpcl'?'SmartDrive PO Number':omc==='hpcl'?'MyHPCL Order ID':'Indent Number';
   openModal('📦 Add DMS / Indent Entry', `
     <div class="g g-2 gap-12">
-      <div class="form-group"><label class="form-label">Date</label>
+      <div class="form-group"><label class="form-label" for="dms_date">Date</label>
         <input type="date" class="form-input" id="dms_date" value="${todayIs}" max="${todayIs}" /></div>
-      <div class="form-group"><label class="form-label">Type</label>
+      <div class="form-group"><label class="form-label" for="dms_type">Type</label>
         <select class="form-input" id="dms_type">
           <option value="indent_placed">Indent Placed</option>
           <option value="delivery_received">Delivery Received</option>
@@ -12744,29 +12744,29 @@ function openDMSEntryModal() {
         </select></div>
     </div>
     <div class="g g-2 gap-12">
-      <div class="form-group"><label class="form-label">Fuel Type</label>
+      <div class="form-group"><label class="form-label" for="dms_fuel">Fuel Type</label>
         <select class="form-input" id="dms_fuel">
           <option value="petrol">Petrol (MS)</option>
           <option value="diesel">Diesel (HSD)</option>
           <option value="premium_petrol">Premium (XP95)</option>
         </select></div>
-      <div class="form-group"><label class="form-label">Quantity (L)</label>
+      <div class="form-group"><label class="form-label" for="dms_qty">Quantity (L)</label>
         <input type="number" class="form-input" id="dms_qty" step="0.1" placeholder="e.g. 10000" /></div>
     </div>
     <div class="g g-2 gap-12">
-      <div class="form-group"><label class="form-label">Rate (₹/L)</label>
+      <div class="form-group"><label class="form-label" for="dms_rate">Rate (₹/L)</label>
         <input type="number" class="form-input" id="dms_rate" step="0.01" placeholder="e.g. 87.50" /></div>
-      <div class="form-group"><label class="form-label">${refLabel}</label>
+      <div class="form-group"><label class="form-label" for="dms_ref">${refLabel}</label>
         <input class="form-input" id="dms_ref" placeholder="Reference number" /></div>
     </div>
-    <div class="form-group"><label class="form-label">Status</label>
+    <div class="form-group"><label class="form-label" for="dms_status">Status</label>
       <select class="form-input" id="dms_status">
         <option value="placed">Placed</option>
         <option value="pending">Pending</option>
         <option value="completed">Completed</option>
         <option value="cancelled">Cancelled</option>
       </select></div>
-    <div class="form-group"><label class="form-label">Notes</label>
+    <div class="form-group"><label class="form-label" for="cmpOld">Notes</label>
       <textarea class="form-input" id="dms_notes" rows="2" placeholder="Optional notes"></textarea></div>
   `, `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
      <button class="btn btn-accent" onclick="saveDMSEntry()">💾 Save</button>`);
@@ -12977,10 +12977,10 @@ function openChangeMyPasswordModal() {
     <div class="form-group"><label class="form-label">Current Password</label>
       <input class="form-input" id="cmpOld" type="password" placeholder="Enter current password" autocomplete="current-password" />
     </div>
-    <div class="form-group"><label class="form-label">New Password</label>
+    <div class="form-group"><label class="form-label" for="cmpNew">New Password</label>
       <input class="form-input" id="cmpNew" type="password" placeholder="Min 6 characters" autocomplete="new-password" />
     </div>
-    <div class="form-group"><label class="form-label">Confirm New Password</label>
+    <div class="form-group"><label class="form-label" for="cmpConf">Confirm New Password</label>
       <input class="form-input" id="cmpConf" type="password" placeholder="Re-enter new password" autocomplete="new-password" />
     </div>
     <button class="btn btn-accent btn-block" style="padding:12px;margin-top:4px" onclick="saveChangeMyPassword()">Update Password</button>

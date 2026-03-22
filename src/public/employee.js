@@ -1093,7 +1093,7 @@ function emp_renderSales() {
       ${badge(empState.sales.length+' sales','badge-green')}
     </div>
     <div class="card" style="margin-bottom:16px"><div class="card-body">
-      <div class="form-group"><label class="form-label">Fuel Type</label><div style="display:flex;gap:6px;flex-wrap:wrap">${fuels.map(f=>`<button class="btn btn-sm ${empSaleFuel===f?'btn-accent':'btn-ghost'}" data-fuelbtn="${f}" onclick="emp_selFuel('${f}')">${EMP_FUEL[f]?.split(' ')[0]||f}</button>`).join('')}</div></div>
+      <div class="form-group"><label class="form-label" for="empSaleLiters">Fuel Type</label><div style="display:flex;gap:6px;flex-wrap:wrap">${fuels.map(f=>`<button class="btn btn-sm ${empSaleFuel===f?'btn-accent':'btn-ghost'}" data-fuelbtn="${f}" onclick="emp_selFuel('${f}')">${EMP_FUEL[f]?.split(' ')[0]||f}</button>`).join('')}</div></div>
       <div class="form-group"><label class="form-label">Pump &amp; Nozzle</label>
         <div id="empPumpNozzleBtns" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
           ${(() => {
@@ -1118,10 +1118,10 @@ function emp_renderSales() {
         </div>
       </div>
       <div class="form-row"><div class="form-group"><label class="form-label">Liters</label><input class="form-input" id="empSaleLiters" type="number" inputmode="decimal" step="0.1" placeholder="0.0" oninput="emp_calcAmt()" style="font-family:var(--mono);font-weight:600" /></div>
-      <div class="form-group"><label class="form-label">Amount (₹)</label><input class="form-input" id="empSaleAmt" type="number" inputmode="decimal" step="0.01" placeholder="${emp_hasPerm('prices')?'Auto — price applied':'Enter amount'}" style="font-family:var(--mono);font-weight:600" oninput="emp_calcLiters()" /></div></div>
+      <div class="form-group"><label class="form-label" for="empSaleAmt">Amount (₹)</label><input class="form-input" id="empSaleAmt" type="number" inputmode="decimal" step="0.01" placeholder="${emp_hasPerm('prices')?'Auto — price applied':'Enter amount'}" style="font-family:var(--mono);font-weight:600" oninput="emp_calcLiters()" /></div></div>
       ${emp_hasPerm('prices') ? `<div style="font-size:11px;color:var(--text-3);margin-top:-6px;margin-bottom:8px">Current price: <strong style="color:var(--accent-light)">${cur(EMP_PRICES[empSaleFuel] || 0)}/L</strong></div>` : ''}
       <div class="form-group">
-        <label class="form-label" style="margin-bottom:8px">Vehicle Number <span id="vehOptHint" style="font-size:10px;font-weight:500;color:var(--text-3)">${empPayMode==='cash'?'(optional for cash)':''}</span></label>
+        <label class="form-label" for="empSaleCustomer" style="margin-bottom:8px">Vehicle Number <span id="vehOptHint" style="font-size:10px;font-weight:500;color:var(--text-3)">${empPayMode==='cash'?'(optional for cash)':''}</span></label>
         <div style="display:flex;align-items:stretch;gap:6px">
           <div id="vehSegWrap" style="display:flex;gap:3px;flex:1;min-width:0">
             <input id="veh_state" class="veh-seg" maxlength="2" placeholder="KA"
@@ -1193,8 +1193,8 @@ function emp_renderDip() {
     <h3 class="fw-800" style="color:var(--text-0);font-size:18px;margin-bottom:4px">📏 Dip Reading</h3>
     <p style="font-size:11px;color:var(--text-3);margin-bottom:16px">Measure & record physical tank levels</p>
     <div class="card" style="margin-bottom:14px"><div class="card-body">
-      <div class="form-group"><label class="form-label">Select Tank</label><select class="form-input" id="empDipTank">${tanks.map(t=>`<option value="${t.id}">${t.name} (${fmt(t.cap)} L)</option>`).join('')}</select></div>
-      <div class="form-group"><label class="form-label">Physical Dip Reading (Liters)</label><input class="form-input" id="empDipVal" type="number" inputmode="numeric" placeholder="Enter reading in liters" style="font-family:var(--mono);font-size:22px;font-weight:700;text-align:center;padding:16px" /></div>
+      <div class="form-group"><label class="form-label" for="empDipTank">Select Tank</label><select class="form-input" id="empDipTank">${tanks.map(t=>`<option value="${t.id}">${t.name} (${fmt(t.cap)} L)</option>`).join('')}</select></div>
+      <div class="form-group"><label class="form-label" for="empDipVal">Physical Dip Reading (Liters)</label><input class="form-input" id="empDipVal" type="number" inputmode="numeric" placeholder="Enter reading in liters" style="font-family:var(--mono);font-size:22px;font-weight:700;text-align:center;padding:16px" /></div>
       <button class="btn btn-accent btn-block" style="padding:14px;font-size:14px" onclick="emp_recordDip()">📏 Save Dip Reading</button>
     </div></div>
     ${empState.dipReadings.length>0?`<div class="card"><div class="card-head"><h4>Today's Readings</h4></div><div class="card-body">
@@ -1211,18 +1211,18 @@ function emp_renderExpense() {
     <h3 class="fw-800" style="color:var(--text-0);font-size:18px;margin-bottom:4px">🧾 Log Expense</h3>
     <p style="font-size:11px;color:var(--text-3);margin-bottom:16px">Record petty cash & daily expenses</p>
     <div class="card" style="margin-bottom:14px"><div class="card-body">
-      <div class="form-group"><label class="form-label">Category</label>
+      <div class="form-group"><label class="form-label" for="empExpCat">Category</label>
         <select class="form-input" id="empExpCat">${cats.map(c=>`<option>${c}</option>`).join('')}</select>
       </div>
       <div class="form-row">
-        <div class="form-group"><label class="form-label">Amount (₹)</label>
+        <div class="form-group"><label class="form-label" for="empExpAmt">Amount (₹)</label>
           <input class="form-input" id="empExpAmt" type="number" inputmode="decimal" placeholder="0" style="font-family:var(--mono);font-size:20px;font-weight:700;text-align:center" />
         </div>
-        <div class="form-group"><label class="form-label">Payment</label>
+        <div class="form-group"><label class="form-label" for="empExpMode">Payment</label>
           <select class="form-input" id="empExpMode"><option value="cash">Cash</option><option value="upi">UPI</option></select>
         </div>
       </div>
-      <div class="form-group"><label class="form-label">Description (optional)</label>
+      <div class="form-group"><label class="form-label" for="empExpDesc">Description (optional)</label>
         <input class="form-input" id="empExpDesc" placeholder="Brief note..." />
       </div>
       <button class="btn btn-accent btn-block" style="padding:14px;font-size:14px" onclick="emp_recordExpense()">🧾 Save Expense</button>
@@ -3628,7 +3628,7 @@ function landingShowLogin(type) {
           '<div><div class="fw-800" style="color:var(--text-0);font-size:16px">Super Admin</div>' +
           '<div style="font-size:11px;color:var(--text-3)">Platform management</div></div>' +
         '</div>' +
-        '<div class="form-group"><label class="form-label">Username</label>' +
+        '<div class="form-group"><label class="form-label" for="ccName">Username</label>' +
           '<input class="form-input" id="superUserLanding" placeholder="Super admin username" autocomplete="off" ' +
           'onkeydown="if(event.key===\'Enter\')mt_doSuperLogin()" /></div>' +
         '<div class="form-group"><label class="form-label">Password</label>' +
@@ -3664,20 +3664,20 @@ function landingShowLogin(type) {
       '<p class="login-sub">' + COMPANY_NAME + '</p>' +
     '</div>' +
     '<div class="login-card">' +
-      '<input type="text" style="display:none" aria-hidden="true" />' +
-      '<input type="password" style="display:none" aria-hidden="true" />' +
+      '<input type="text" name="username_fake" style="display:none" aria-hidden="true" />' +
+      '<input type="password" name="password_fake" style="display:none" aria-hidden="true" />' +
       '<div style="display:flex;align-items:center;gap:10px;margin-bottom:20px">' +
         '<div style="width:42px;height:42px;border-radius:10px;background:linear-gradient(135deg,var(--accent),var(--accent-light));display:grid;place-items:center;font-size:18px">\uD83D\uDD11</div>' +
         '<div><div class="fw-800" style="color:var(--text-0);font-size:16px">Owner / Staff Login</div><div style="font-size:11px;color:var(--text-3)">Enter your registered phone number</div></div>' +
       '</div>' +
       '<div class="form-group">' +
-        '<label class="form-label">Phone Number</label>' +
+        '<label class="form-label" for="adminUser">Phone Number</label>' +
         '<div style="display:flex;gap:0;border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden;background:var(--bg-1)">' +
           '<span style="display:flex;align-items:center;padding:0 12px;background:var(--bg-2);border-right:1px solid var(--border);color:var(--text-2);font-size:13px;font-weight:600;white-space:nowrap">+91</span>' +
           '<input class="form-input" id="adminUser" type="tel" inputmode="numeric" maxlength="10" placeholder="10-digit mobile number" autocomplete="tel" oninput="this.value=this.value.replace(/[^0-9]/g,\'\')" onkeydown="if(event.key===\'Enter\')doAdminLogin()" style="border:none;border-radius:0;background:transparent;flex:1" />' +
         '</div>' +
       '</div>' +
-      '<div class="form-group"><label class="form-label">Password</label>' +
+      '<div class="form-group"><label class="form-label" for="adminPass">Password</label>' +
         '<input class="form-input" id="adminPass" type="password" placeholder="Enter your password" autocomplete="current-password" onkeydown="if(event.key===\'Enter\')doAdminLogin()" /></div>' +
       '<button class="btn btn-accent btn-block" style="padding:14px;font-size:14px;margin-top:6px" onclick="doAdminLogin()">\uD83D\uDD10 Login</button>' +
       '<div style="text-align:center;margin-top:12px">' +
@@ -4207,10 +4207,10 @@ function openCreditCustomerModal() {
   openModal('Add Credit Customer', `
     <div class="form-group"><label class="form-label">Customer Name</label><input class="form-input" id="ccName" placeholder="Enter full name or company" /></div>
     <div class="form-row">
-      <div class="form-group"><label class="form-label">Type</label><select class="form-input" id="ccType"><option value="Fleet">Fleet</option><option value="Government">Government</option><option value="Individual">Individual</option></select></div>
-      <div class="form-group"><label class="form-label">Credit Limit (₹)</label><input class="form-input" id="ccLimit" type="number" placeholder="500000" /></div>
+      <div class="form-group"><label class="form-label" for="ccType">Type</label><select class="form-input" id="ccType"><option value="Fleet">Fleet</option><option value="Government">Government</option><option value="Individual">Individual</option></select></div>
+      <div class="form-group"><label class="form-label" for="ccLimit">Credit Limit (₹)</label><input class="form-input" id="ccLimit" type="number" placeholder="500000" /></div>
     </div>
-    <div class="form-group"><label class="form-label">Phone</label><div style="display:flex;gap:8px"><input class="form-input" id="ccPhoneCC" type="tel" inputmode="numeric" maxlength="4" placeholder="+91" value="+91" style="width:72px;flex-shrink:0" /><input class="form-input" id="ccPhone" type="tel" inputmode="numeric" maxlength="10" minlength="10" oninput="this.value=this.value.replace(/[^0-9]/g,'')" placeholder="10-digit number" style="flex:1" /></div></div>
+    <div class="form-group"><label class="form-label" for="ecName">Phone</label><div style="display:flex;gap:8px"><input class="form-input" id="ccPhoneCC" type="tel" inputmode="numeric" maxlength="4" placeholder="+91" value="+91" style="width:72px;flex-shrink:0" /><input class="form-input" id="ccPhone" type="tel" inputmode="numeric" maxlength="10" minlength="10" oninput="this.value=this.value.replace(/[^0-9]/g,'')" placeholder="10-digit number" style="flex:1" /></div></div>
     <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:rgba(212,148,15,0.06);border:1px solid rgba(212,148,15,0.25);border-radius:8px;margin-top:4px">
       <input type="checkbox" id="ccLoyalty" style="width:16px;height:16px;cursor:pointer;accent-color:var(--accent-light)" />
       <label for="ccLoyalty" style="cursor:pointer;font-size:13px;color:var(--text-1)">⭐ Enrol in Loyalty Programme</label>
@@ -4248,16 +4248,16 @@ function openEditCreditModal(customerId) {
     <div class="form-group"><label class="form-label">Customer Name</label>
       <input class="form-input" id="ecName" value="${sanitize(c.name)}" placeholder="Enter full name or company" /></div>
     <div class="form-row">
-      <div class="form-group"><label class="form-label">Type</label>
+      <div class="form-group"><label class="form-label" for="ecType">Type</label>
         <select class="form-input" id="ecType">
           <option value="Fleet" ${c.type==='Fleet'?'selected':''}>Fleet</option>
           <option value="Government" ${c.type==='Government'?'selected':''}>Government</option>
           <option value="Individual" ${c.type==='Individual'?'selected':''}>Individual</option>
         </select></div>
-      <div class="form-group"><label class="form-label">Credit Limit (₹)</label>
+      <div class="form-group"><label class="form-label" for="ecLimit">Credit Limit (₹)</label>
         <input class="form-input" id="ecLimit" type="number" value="${c.limit||0}" /></div>
     </div>
-    <div class="form-group"><label class="form-label">Phone</label>
+    <div class="form-group"><label class="form-label" for="els_qty">Phone</label>
       <div style="display:flex;gap:8px"><input class="form-input" id="ecPhoneCC" type="tel" inputmode="numeric" maxlength="4" placeholder="+91" value="${sanitize(c.phoneCC||'+91')}" style="width:72px;flex-shrink:0" /><input class="form-input" id="ecPhone" type="tel" inputmode="numeric" maxlength="10" minlength="10" oninput="this.value=this.value.replace(/[^0-9]/g,'')" placeholder="10-digit number" value="${sanitize(c.phone||'')}" style="flex:1" /></div></div>
     <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:rgba(212,148,15,0.06);border:1px solid rgba(212,148,15,0.25);border-radius:8px;margin-top:4px">
       <input type="checkbox" id="ecLoyalty" ${c.loyaltyEnrolled ? 'checked' : ''} style="width:16px;height:16px;cursor:pointer;accent-color:var(--accent-light)" />
@@ -5242,7 +5242,7 @@ function emp_openLubeSell(productId) {
             oninput="emp_calcLubeTotal(${p.sellingPrice||0})"
             style="font-size:20px;font-weight:800;text-align:center;letter-spacing:2px" />
         </div>
-        <div class="form-group"><label class="form-label">Rate ₹/${sanitize(p.unit||'unit')}</label>
+        <div class="form-group"><label class="form-label" for="els_rate">Rate ₹/${sanitize(p.unit||'unit')}</label>
           <input class="form-input mono" type="number" id="els_rate" value="${p.sellingPrice||0}" step="0.01"
             oninput="emp_calcLubeTotal()"
             style="font-size:20px;font-weight:800;text-align:center;letter-spacing:2px" />
@@ -5250,8 +5250,8 @@ function emp_openLubeSell(productId) {
       </div>
       <div id="els_total" style="padding:14px;background:rgba(212,148,15,0.08);border-radius:8px;text-align:center;margin:10px 0;font-size:11px;color:var(--text-3)">Enter quantity to see total</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-        <div class="form-group"><label class="form-label">Payment Mode</label><select class="form-input" id="els_mode">${modeOpts}</select></div>
-        <div class="form-group"><label class="form-label">Customer (opt.)</label><input class="form-input" id="els_cust" placeholder="Name / Vehicle" /></div>
+        <div class="form-group"><label class="form-label" for="els_mode">Payment Mode</label><select class="form-input" id="els_mode">${modeOpts}</select></div>
+        <div class="form-group"><label class="form-label" for="els_cust">Customer (opt.)</label><input class="form-input" id="els_cust" placeholder="Name / Vehicle" /></div>
       </div>`,
       `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-accent" onclick="emp_saveLubeSale(${productId})">💰 Record Sale</button>`
     );

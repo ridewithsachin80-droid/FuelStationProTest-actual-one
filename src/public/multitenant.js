@@ -128,7 +128,7 @@ function mt_omcSelectorHTML(selected) {
       + '</div></label>';
   }).join('');
   return '<div class="form-group" style="margin-top:4px">'
-    + '<label class="form-label">Oil Marketing Company (OMC)</label>'
+    + '<label class="form-label" for="tName">Oil Marketing Company (OMC)</label>'
     + '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">' + btns + '</div></div>';
 }
 function mt_omcSelect(radio) {
@@ -343,14 +343,14 @@ function mt_showTenantForm(existing) {
           <div class="form-group"><label class="form-label">Station Name *</label>
             <input class="form-input" id="tName" placeholder="e.g. Sri Lakshmi Fuel Station" value="${existing?.name||''}" />
           </div>
-          <div class="form-group"><label class="form-label">Location</label>
+          <div class="form-group"><label class="form-label" for="tLocation">Location</label>
             <input class="form-input" id="tLocation" placeholder="e.g. Tumakuru, Karnataka" value="${existing?.location||''}" />
           </div>
-          <div class="form-group"><label class="form-label">Owner Name</label>
+          <div class="form-group"><label class="form-label" for="tOwner">Owner Name</label>
             <input class="form-input" id="tOwner" placeholder="e.g. Ramesh Kumar" value="${existing?.ownerName||''}" />
           </div>
           <div class="form-row">
-            <div class="form-group"><label class="form-label">Phone</label>
+            <div class="form-group"><label class="form-label" for="tIcon">Phone</label>
               <div style="display:flex;gap:8px"><input class="form-input" id="tPhoneCC" type="tel" inputmode="numeric" maxlength="4" placeholder="+91" value="${existing?.phoneCC||'+91'}" style="width:72px;flex-shrink:0" /><input class="form-input" id="tPhone" type="tel" inputmode="numeric" maxlength="10" minlength="10" oninput="this.value=this.value.replace(/[^0-9]/g,'')" placeholder="10-digit number" value="${existing?.phone||''}" style="flex:1" /></div>
             </div>
             <div class="form-group"><label class="form-label">Station Icon</label>
@@ -364,7 +364,7 @@ function mt_showTenantForm(existing) {
           <div style="background:var(--bg-0);border-radius:var(--radius-sm);border:1px solid var(--border-light);padding:14px;margin-top:4px">
             <div style="font-size:11px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px">Owner Login Credentials</div>
             <div class="form-group mb-0" style="margin-bottom:10px">
-              <label class="form-label">Owner Mobile Number <span style="font-size:10px;color:var(--text-3)">(SMS OTP login)</span></label>
+              <label class="form-label" for="tOwnerEmail">Owner Mobile Number <span style="font-size:10px;color:var(--text-3)">(SMS OTP login)</span></label>
               <div style="display:flex;gap:0;border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden;background:var(--bg-1)">
                 <span style="display:flex;align-items:center;padding:0 10px;background:var(--bg-2);border-right:1px solid var(--border);color:var(--text-2);font-size:12px;font-weight:600">+91</span>
                 <input class="form-input" id="tOwnerPhone" type="tel" inputmode="numeric" maxlength="10" placeholder="10-digit mobile number" oninput="this.value=this.value.replace(/[^0-9]/g,'')" style="border:none;border-radius:0;background:transparent;flex:1" />
@@ -376,10 +376,10 @@ function mt_showTenantForm(existing) {
               <div style="font-size:10px;color:var(--text-3);margin-top:3px">Phone or email required for forgot password. Both recommended.</div>
             </div>
             <div class="form-row">
-              <div class="form-group mb-0"><label class="form-label">Admin Username</label>
+              <div class="form-group mb-0"><label class="form-label" for="tAdminUser">Admin Username</label>
                 <input class="form-input" id="tAdminUser" placeholder="e.g. mirji_owner" />
               </div>
-              <div class="form-group mb-0"><label class="form-label">Admin Password</label>
+              <div class="form-group mb-0"><label class="form-label" for="tAdminPass">Admin Password</label>
                 <input class="form-input" id="tAdminPass" type="password" placeholder="Min 8 characters" />
               </div>
             </div>

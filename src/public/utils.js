@@ -220,7 +220,16 @@ function resetIdleTimer() {
 // Backup reminder
 function checkBackupReminder() {
   const lastBackup = localStorage.getItem('fb_last_backup');
-  const daysSince = lastBackup ? Math.floor((Date.now() - parseInt(lastBackup)) / 86400000) : 999;
+  let daysSince;
+  if (lastBackup) {
+    daysSince = Math.floor((Date.now() - parseInt(lastBackup)) / 86400000);
+  } else {
+    // No backup ever done — use station creation date as reference so brand-new
+    // stations don't immediately show "999 days". Fall back to 0 if no creation date.
+    const tenantCreatedAt = APP.tenant?.createdAt || APP.tenant?.created_at || null;
+    const refTime = tenantCreatedAt ? new Date(tenantCreatedAt).getTime() : Date.now();
+    daysSince = Math.floor((Date.now() - refTime) / 86400000);
+  }
   if (daysSince >= 7 && APP.role === 'admin') {
     setTimeout(() => toast('You haven\'t backed up data in ' + daysSince + ' days. Go to Settings → Export.', 'info'), 3000);
   }
