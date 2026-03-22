@@ -142,15 +142,18 @@
 
   // Register service worker v12 — works on any HTTPS or localhost origin
   if ('serviceWorker' in navigator) {
-    // FIX: Register controllerchange reload UNCONDITIONALLY — outside promptUpdate.
-    // clients.claim() in the SW activate event fires controllerchange immediately when
-    // a new SW takes over, even without user action. If we only register this listener
-    // inside promptUpdate() (which requires user click), the auto-claim causes the page
-    // to get stuck mid-load because loadData() fetch requests are dropped when the new
-    // SW takes control. Registering here ensures any controller change = clean reload.
+    // FIX: Reload on controllerchange ONLY when there was already a controller.
+    // Scenario A — SW UPDATE: old SW active, new SW installs → clients.claim() fires
+    //   controllerchange → old fetches are dropped → NEED reload for clean state.
+    // Scenario B — FIRST INSTALL (fresh browser / cleared cache): no previous SW,
+    //   new SW installs → clients.claim() fires controllerchange → but loadData() is
+    //   already in flight and works fine without reload → do NOT reload (causes stuck screen).
+    // We capture controller state at registration time. If null = first install = skip reload.
+    var _hadControllerOnLoad = !!navigator.serviceWorker.controller;
     var _reloadOnce = false;
     navigator.serviceWorker.addEventListener('controllerchange', function() {
-      if (_reloadOnce) return; // guard against double-fire
+      if (!_hadControllerOnLoad) return; // first install — no reload needed
+      if (_reloadOnce) return;           // guard against double-fire
       _reloadOnce = true;
       window.location.reload();
     });
