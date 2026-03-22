@@ -4426,21 +4426,25 @@ window.calcLpCarton   = calcLpCarton;
 function lubes_load()  { return window._lubesProducts || []; }
 function lubesSales_load() { return window._lubesSales || []; }
 function lubes_save() {
+  // Set flag so the auto-refresh timer doesn't overwrite this save in-flight
+  window._lubesSaveInProgress = true;
+  // Snapshot admin's intent before the async DB read
+  const adminProds = (window._lubesProducts || []).slice();
+  const adminIds   = new Set(adminProds.map(function(p) { return p.id; }));
+
   // RACE CONDITION FIX: Read fresh stock from DB, merge admin's edits on top,
   // then save. This prevents admin edits from overwriting employee sales.
   db.getSetting('lubes_products').then(function(freshProds) {
-    const adminProds = window._lubesProducts || [];
     if (!Array.isArray(freshProds) || freshProds.length === 0) {
-      // No existing DB data — save admin's copy directly
       return db.setSetting('lubes_products', adminProds);
     }
     // Merge: for each product in admin's list, preserve DB stock
     // (employee may have sold stock since admin loaded the page)
+    // DELETION FIX: only iterate over adminProds — products removed by admin
+    // (not in adminIds) are intentionally deleted and must NOT be re-added.
     const merged = adminProds.map(function(ap) {
       const dbProd = freshProds.find(function(fp) { return fp.id === ap.id; });
       if (dbProd && dbProd.stock !== ap.stock) {
-        // If admin explicitly changed stock (restock modal), use admin's value
-        // If admin only changed other fields (name, price), keep DB stock
         const adminChangedStock = ap._stockChanged === true;
         return Object.assign({}, ap, { stock: adminChangedStock ? ap.stock : dbProd.stock, _stockChanged: undefined });
       }
@@ -4449,8 +4453,9 @@ function lubes_save() {
     window._lubesProducts = merged;
     return db.setSetting('lubes_products', merged);
   }).catch(function(e) {
-    // Fallback: save directly if DB read fails
-    db.setSetting('lubes_products', window._lubesProducts||[]).catch(function(){});
+    db.setSetting('lubes_products', adminProds).catch(function(){});
+  }).finally(function() {
+    window._lubesSaveInProgress = false;
   });
 }
 function lubesSales_save() { db.setSetting('lubes_sales', window._lubesSales||[]).catch(()=>{}); }
@@ -4467,11 +4472,16 @@ function renderLubes(D) {
   clearInterval(window._lubesRefreshTimer);
   window._lubesRefreshTimer = setInterval(function() {
     if (APP.page !== 'lubes') { clearInterval(window._lubesRefreshTimer); return; }
+    // DELETION FIX: skip refresh if a save is in progress — the timer would
+    // read the old DB and restore just-deleted products over the admin's intent.
+    if (window._lubesSaveInProgress) return;
     Promise.all([
       db.getSetting('lubes_products'),
       db.getSetting('lubes_sales'),
     ]).then(function(res) {
       var freshProds = res[0], freshSales = res[1];
+      // Skip if save started while we were awaiting — same guard
+      if (window._lubesSaveInProgress) return;
       var changed = false;
       if (Array.isArray(freshProds) && freshProds.length > 0) {
         // Check if any stock changed (deep compare stock values)

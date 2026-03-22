@@ -5020,6 +5020,10 @@ async function seedDatabase() {
 }
 
 async function loadData() {
+  // Guard: ensure APP.data is a valid object before writing any properties.
+  // If APP.data is null (e.g. after logout, or during a renderPage retry),
+  // writing APP.data.razorpayKey = ... throws "Cannot set properties of null".
+  if (!APP.data && typeof SEED !== 'undefined') APP.data = JSON.parse(JSON.stringify(SEED));
   try {
     await db.ready;
   } catch (e) {
