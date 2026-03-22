@@ -184,6 +184,9 @@ function renderDashboard(D) {
   });
   // Credit pending = customer outstanding balances (authoritative source)
   const totalCredit = D.creditCustomers.reduce((a, c) => a + (c.outstanding || 0), 0);
+  // Unverified UPI — today's UPI sales with no UTR captured
+  const unverifiedUpi = todaySales.filter(s => s.mode === 'upi' && (!s.utr_ref || s.utr_ref === '') && (!s.payment_status || s.payment_status === 'unverified'));
+  const unverifiedUpiAmt = unverifiedUpi.reduce((a, s) => a + s.amount, 0);
   const h = new Date().getHours();
 
   // Payment breakdown
@@ -349,7 +352,18 @@ function renderDashboard(D) {
     <div class="g g-auto mb-24 gap-16">${tanksHtml}</div>
 
     <div class="g g-2 gap-16 mb-24">
-      <div class="card card-pad"><h4 class="mb-14 fw-700" style="color:var(--text-0);font-size:13px">💳 Sales by Payment</h4>${payBars}</div>
+      <div class="card card-pad">
+        <h4 class="mb-14 fw-700" style="color:var(--text-0);font-size:13px">💳 Sales by Payment</h4>
+        ${payBars}
+        ${(unverifiedUpi.length > 0 && (D.upiVerificationPolicy||'optional') !== 'none') ? `
+        <div onclick="navigate('analytics');window._analyticsTab='bankrecon';" style="margin-top:10px;padding:8px 12px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.3);border-radius:8px;cursor:pointer;display:flex;align-items:center;justify-content:space-between">
+          <div>
+            <span style="font-size:12px;font-weight:700;color:var(--accent-light)">⚠️ ${unverifiedUpi.length} UPI sale${unverifiedUpi.length>1?'s':''} unverified</span>
+            <div style="font-size:10px;color:var(--text-3);margin-top:1px">${cur(unverifiedUpiAmt)} without UTR — tap to reconcile</div>
+          </div>
+          <span style="color:var(--text-3);font-size:12px">→</span>
+        </div>` : ''}
+      </div>
       <div class="card card-pad"><h4 class="mb-14 fw-700" style="color:var(--text-0);font-size:13px">⏰ Shift Status</h4>${shiftsHtml}</div>
     </div>
     <div class="card card-pad">
@@ -2071,6 +2085,37 @@ function renderSettings(D) {
       </div>
     </div>
 
+    <div class="card card-pad mt-16" style="border:1px solid rgba(16,185,129,0.25);background:rgba(16,185,129,0.03)">
+      <h4 class="mb-12 fw-700" style="color:var(--text-0);font-size:13px">📱 UPI Verification Policy</h4>
+      <div style="font-size:12px;color:var(--text-2);margin-bottom:14px;line-height:1.6">
+        Controls whether employees must capture the customer's UTR (transaction reference) when recording a UPI sale.
+        UTR enables transaction-by-transaction bank reconciliation.
+      </div>
+      ${[
+        { val: 'none',      label: 'Not Required',
+          desc: 'No UTR prompt ever shown. Record sale instantly. Bank recon shows totals only.' },
+        { val: 'optional',  label: 'Optional',
+          desc: 'A quiet capture button appears. Employee can use it or completely ignore it. No prompt.' },
+        { val: 'encouraged',label: 'Encouraged',
+          desc: 'Prompt appears after UPI selected with easy Skip. Gentle nudge — sale never blocked.' },
+        { val: 'required',  label: 'Required',
+          desc: 'UTR must be captured before sale can be saved. Use when reconciliation is fully set up.' },
+      ].map(opt => `
+        <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;padding:10px;border-radius:8px;border:1px solid ${(D.upiVerificationPolicy||'optional')===opt.val?'var(--green)':'var(--border)'};background:${(D.upiVerificationPolicy||'optional')===opt.val?'rgba(16,185,129,0.06)':'var(--bg-0)'};margin-bottom:8px;transition:all 0.15s" onclick="setUpiPolicy('${opt.val}')">
+          <input type="radio" name="upiPolicy" value="${opt.val}"
+            ${(D.upiVerificationPolicy||'optional')===opt.val?'checked':''}
+            style="margin-top:2px;accent-color:var(--green);cursor:pointer" />
+          <div>
+            <div style="font-size:13px;font-weight:700;color:var(--text-0)">${opt.label}</div>
+            <div style="font-size:11px;color:var(--text-3);margin-top:2px">${opt.desc}</div>
+          </div>
+        </label>`).join('')}
+      <div style="font-size:11px;color:var(--text-3);margin-top:4px;padding:8px;background:var(--bg-0);border-radius:6px;line-height:1.6">
+        💡 <strong>Recommended path:</strong> Start with <em>Optional</em> while staff learn the system →
+        switch to <em>Encouraged</em> after 2–3 weeks → move to <em>Required</em> once everyone is comfortable.
+      </div>
+    </div>
+
     <div class="card card-pad mt-16" style="border:1px solid rgba(212,148,15,0.25);background:rgba(212,148,15,0.04)">
       <h4 class="mb-14 fw-700" style="color:var(--text-0);font-size:13px">🗺️ Suggested Build Order — Roadmap</h4>
       <div style="display:flex;flex-direction:column;gap:8px">
@@ -3010,66 +3055,158 @@ function renderAnalytics(D) {
     // ── Bank Reconciliation ────────────────────────────────────────────────
     if (!window._bankReconData) window._bankReconData = {};
     const recon = window._bankReconData;
-
     const today = (()=>{const _d=new Date();return _d.getFullYear()+'-'+String(_d.getMonth()+1).padStart(2,'0')+'-'+String(_d.getDate()).padStart(2,'0');})();
     const selDate = window._brSelDate || today;
     const D2 = APP.data;
+    const brMode = window._brMode || 'total'; // 'total' or 'txn'
 
     // System totals for selected date
     const daySales = D2.sales.filter(s => (s.date||'').slice(0,10) === selDate);
+    const upiSales = daySales.filter(s => s.mode === 'upi');
     const sysCash  = daySales.filter(s=>s.mode==='cash').reduce((a,s)=>a+s.amount,0);
-    const sysUpi   = daySales.filter(s=>s.mode==='upi').reduce((a,s)=>a+s.amount,0);
+    const sysUpi   = upiSales.reduce((a,s)=>a+s.amount,0);
     const sysCard  = daySales.filter(s=>s.mode==='card').reduce((a,s)=>a+s.amount,0);
-
     const entry = recon[selDate] || {};
-
-    // Month summary
     const month = selDate.slice(0,7);
     const monthDays = Object.entries(recon).filter(([d]) => d.startsWith(month));
+    const bankTxns = window._brParsedTxns || []; // parsed from CSV for selDate
 
     const diff = (bank, sys) => {
-      const d = (bank||0) - sys;
-      if (d === 0) return `<span style="color:var(--green)" class="fw-700">✓ Match</span>`;
+      const d = (parseFloat(bank)||0) - (parseFloat(sys)||0);
+      if (Math.abs(d) < 0.01) return `<span style="color:var(--green)" class="fw-700">✓ Match</span>`;
       return `<span style="color:${d<0?'var(--red)':'var(--orange)'}" class="fw-700">${d>0?'+':''}${cur(Math.abs(d))}</span>`;
     };
 
+    // Entry-by-entry matching
+    let matchRows = '';
+    if (brMode === 'txn' && bankTxns.length > 0) {
+      const usedSaleIds = new Set();
+      const matchedTxns = bankTxns.map(txn => {
+        // Try UTR match first, then amount match
+        let matched = null;
+        if (txn.utr) matched = upiSales.find(s => s.utr_ref === txn.utr && !usedSaleIds.has(s.id));
+        if (!matched) matched = upiSales.find(s => Math.abs(s.amount - txn.amount) < 0.5 && !usedSaleIds.has(s.id));
+        if (matched) usedSaleIds.add(matched.id);
+        return { txn, sale: matched };
+      });
+      const unmatchedSales = upiSales.filter(s => !usedSaleIds.has(s.id));
+
+      matchRows = `
+        <div class="card card-pad" style="padding:0;overflow:hidden;margin-top:16px">
+          <div style="padding:12px 16px;font-size:12px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:0.6px;border-bottom:1px solid var(--border-light);display:flex;justify-content:space-between;align-items:center">
+            <span>📋 Transaction Matching — ${selDate}</span>
+            <span style="font-size:11px;font-weight:400">
+              ✅ ${matchedTxns.filter(m=>m.sale).length} matched &nbsp;
+              🔴 ${matchedTxns.filter(m=>!m.sale).length} unmatched bank &nbsp;
+              🟡 ${unmatchedSales.length} unmatched sales
+            </span>
+          </div>
+          <div class="tbl-wrap"><table>
+            <thead><tr>
+              <th>Status</th><th>Bank Amount</th><th>Bank UTR</th><th>App Sale</th><th>App UTR</th><th>Employee</th>
+            </tr></thead>
+            <tbody>
+              ${matchedTxns.map(({txn, sale}) => `
+                <tr style="border-bottom:1px solid var(--border-light);background:${sale?'transparent':'rgba(239,68,68,0.04)'}">
+                  <td style="padding:8px 10px">${sale ? '✅' : '🔴'}</td>
+                  <td class="mono" style="padding:8px 10px;font-weight:700">${cur(txn.amount)}</td>
+                  <td class="mono" style="padding:8px 10px;font-size:11px;color:var(--text-3)">${sanitize(txn.utr||'—')}</td>
+                  <td style="padding:8px 10px;font-size:12px">${sale ? cur(sale.amount) : '<span style="color:var(--red);font-size:11px">Not in app</span>'}</td>
+                  <td class="mono" style="padding:8px 10px;font-size:11px;color:var(--text-3)">${sale?.utr_ref || '—'}</td>
+                  <td style="padding:8px 10px;font-size:11px;color:var(--text-2)">${sanitize(sale?.employee||'')}</td>
+                </tr>`).join('')}
+              ${unmatchedSales.map(s => `
+                <tr style="border-bottom:1px solid var(--border-light);background:rgba(245,158,11,0.04)">
+                  <td style="padding:8px 10px">🟡</td>
+                  <td style="padding:8px 10px;font-size:11px;color:var(--orange)">No bank credit</td>
+                  <td style="padding:8px 10px;color:var(--text-3);font-size:11px">—</td>
+                  <td class="mono" style="padding:8px 10px;font-weight:700">${cur(s.amount)}</td>
+                  <td class="mono" style="padding:8px 10px;font-size:11px;color:var(--text-3)">${sanitize(s.utr_ref||'—')}</td>
+                  <td style="padding:8px 10px;font-size:11px;color:var(--text-2)">${sanitize(s.employee||'')}</td>
+                </tr>`).join('')}
+            </tbody>
+          </table></div>
+          <div style="padding:10px 16px;font-size:11px;color:var(--text-3);background:var(--bg-0);border-top:1px solid var(--border-light)">
+            ✅ Bank credited + App recorded &nbsp;·&nbsp; 🔴 Bank credited, not in app (possible missed entry) &nbsp;·&nbsp; 🟡 In app, no bank credit (payment may have failed)
+          </div>
+        </div>`;
+    }
+
     body = `
+      <!-- Mode toggle -->
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;flex-wrap:wrap">
+        <span style="font-size:12px;font-weight:700;color:var(--text-2)">Reconciliation Mode:</span>
+        <button onclick="window._brMode='total';renderPage()" class="btn btn-sm ${brMode==='total'?'btn-accent':'btn-ghost'}">📊 Total Match</button>
+        <button onclick="window._brMode='txn';renderPage()" class="btn btn-sm ${brMode==='txn'?'btn-accent':'btn-ghost'}">📋 Entry by Entry</button>
+        ${brMode==='txn'?'<span style="font-size:11px;color:var(--text-3);margin-left:4px">Upload bank CSV to see transaction matching</span>':''}
+      </div>
+
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px">
+        <!-- Left: manual entry + CSV upload -->
         <div class="card card-pad" style="flex:1;min-width:200px">
-          <div class="fw-700 mb-10" style="font-size:13px;color:var(--text-0)">✏️ Enter Bank Data</div>
+          <div class="fw-700 mb-10" style="font-size:13px;color:var(--text-0)">✏️ Bank Data — ${selDate}</div>
           <div class="form-group" style="margin-bottom:10px">
-            <label class="form-label" for="br_cash">Date</label>
-            <input type="date" name="bankReconDate" class="form-input" value="${selDate}" max="${today}" onchange="window._brSelDate=this.value;renderPage()" />
+            <label class="form-label" for="brDate">Date</label>
+            <input type="date" id="brDate" name="brDate" class="form-input" value="${selDate}" max="${today}" onchange="window._brSelDate=this.value;window._brParsedTxns=null;renderPage()" />
           </div>
           <div class="g g-2 gap-10">
             <div class="form-group" style="margin-bottom:8px">
-              <label class="form-label" style="font-size:11px">💵 Cash Deposited (₹)</label>
-              <input type="number" class="form-input" id="br_cash" placeholder="0" value="${entry.cash||''}" style="font-size:13px" />
+              <label class="form-label" for="br_cash" style="font-size:11px">💵 Cash Deposited (₹)</label>
+              <input type="number" class="form-input" id="br_cash" name="br_cash" placeholder="0" value="${entry.cash||''}" style="font-size:13px" />
             </div>
             <div class="form-group" style="margin-bottom:8px">
               <label class="form-label" for="br_upi" style="font-size:11px">📱 UPI Settled (₹)</label>
-              <input type="number" class="form-input" id="br_upi" placeholder="0" value="${entry.upi||''}" style="font-size:13px" />
+              <input type="number" class="form-input" id="br_upi" name="br_upi" placeholder="0" value="${entry.upi||''}" style="font-size:13px" />
             </div>
             <div class="form-group" style="margin-bottom:8px">
               <label class="form-label" for="br_card" style="font-size:11px">💳 Card/POS (₹)</label>
-              <input type="number" class="form-input" id="br_card" placeholder="0" value="${entry.card||''}" style="font-size:13px" />
+              <input type="number" class="form-input" id="br_card" name="br_card" placeholder="0" value="${entry.card||''}" style="font-size:13px" />
             </div>
             <div class="form-group" style="margin-bottom:8px">
               <label class="form-label" for="br_notes" style="font-size:11px">📝 Notes</label>
-              <input class="form-input" id="br_notes" placeholder="e.g. T+1 settlement" value="${sanitize(entry.notes||'')}" style="font-size:13px" />
+              <input class="form-input" id="br_notes" name="br_notes" placeholder="e.g. T+1 settlement" value="${sanitize(entry.notes||'')}" style="font-size:13px" />
             </div>
           </div>
           <button class="btn btn-accent btn-block mt-8" onclick="saveBankReconEntry('${selDate}')">💾 Save Bank Entry</button>
+
+          <!-- CSV Upload -->
+          <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border-light)">
+            <div style="font-size:11px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">📄 Upload Bank Statement CSV</div>
+            <div class="form-group" style="margin-bottom:8px">
+              <label class="form-label" for="brBankFormat" style="font-size:11px">Bank Format</label>
+              <select class="form-input" id="brBankFormat" name="brBankFormat" style="font-size:12px;padding:6px 10px">
+                <option value="auto">Auto-detect</option>
+                <option value="sbi">SBI</option>
+                <option value="hdfc">HDFC</option>
+                <option value="icici">ICICI</option>
+                <option value="axis">Axis</option>
+                <option value="kotak">Kotak</option>
+                <option value="generic">Generic CSV</option>
+              </select>
+            </div>
+            <label style="display:flex;align-items:center;gap:8px;background:var(--bg-0);border:1px dashed var(--border);border-radius:8px;padding:10px;cursor:pointer;font-size:12px;color:var(--text-2)">
+              <span style="font-size:18px">📂</span>
+              <span>Choose CSV file</span>
+              <input type="file" accept=".csv,.txt" id="brCsvFile" name="brCsvFile" style="display:none" onchange="parseBankStatementCSV(this,'${selDate}')" />
+            </label>
+            ${window._brParsedTxns ? `<div style="margin-top:6px;font-size:11px;color:var(--green)">✅ ${window._brParsedTxns.length} transactions loaded from CSV</div>` : ''}
+            <div style="font-size:10px;color:var(--text-3);margin-top:6px;line-height:1.5">
+              Upload your bank's daily statement. App reads UPI credits for ${selDate} and auto-fills totals above.
+              ${brMode==='txn'?'In Entry-by-Entry mode, each transaction is matched to a recorded sale.':''}
+            </div>
+          </div>
         </div>
+
+        <!-- Right: comparison table -->
         <div class="card card-pad" style="flex:2;min-width:260px">
           <div class="fw-700 mb-14" style="font-size:13px;color:var(--text-0)">📊 Comparison — ${selDate}</div>
           <table style="width:100%;border-collapse:collapse;font-size:13px">
             <thead>
               <tr style="background:var(--bg-0);font-size:11px;color:var(--text-3)">
                 <th style="padding:8px 10px;text-align:left">Mode</th>
-                <th style="padding:8px 10px;text-align:right">System</th>
-                <th style="padding:8px 10px;text-align:right">Bank</th>
-                <th style="padding:8px 10px;text-align:right">Diff</th>
+                <th style="padding:8px 10px;text-align:right">System (App)</th>
+                <th style="padding:8px 10px;text-align:right">Bank Statement</th>
+                <th style="padding:8px 10px;text-align:right">Difference</th>
               </tr>
             </thead>
             <tbody>
@@ -3093,15 +3230,26 @@ function renderAnalytics(D) {
               </tr>
             </tbody>
           </table>
+          ${brMode==='txn' && upiSales.length > 0 ? `
+          <div style="margin-top:12px;padding:10px;background:var(--bg-0);border-radius:8px;font-size:12px">
+            <div class="fw-700" style="color:var(--text-0);margin-bottom:6px">UPI Verification Status</div>
+            <div style="display:flex;gap:12px;flex-wrap:wrap">
+              <span style="color:var(--green)">✅ With UTR: ${upiSales.filter(s=>s.utr_ref).length}</span>
+              <span style="color:var(--orange)">⚪ No UTR: ${upiSales.filter(s=>!s.utr_ref).length}</span>
+              <span style="color:var(--text-3)">Total: ${upiSales.length}</span>
+            </div>
+          </div>` : ''}
         </div>
       </div>
+
+      ${matchRows}
 
       ${monthDays.length > 0 ? `<div class="card card-pad" style="padding:0;overflow:hidden">
         <div style="padding:12px 16px;font-size:12px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:0.6px;border-bottom:1px solid var(--border-light)">📅 Past Entries — ${month}</div>
         <div class="tbl-wrap"><table>
           <thead><tr><th>Date</th><th>Cash</th><th>UPI</th><th>Card</th><th>Notes</th></tr></thead>
           <tbody>
-            ${monthDays.sort((a,b)=>b[0]<a[0]?-1:1).map(([d,e]) => `<tr onclick="window._brSelDate='${d}';renderPage()" style="cursor:pointer">
+            ${monthDays.sort((a,b)=>b[0]<a[0]?-1:1).map(([d,e]) => `<tr onclick="window._brSelDate='${d}';window._brParsedTxns=null;renderPage()" style="cursor:pointer">
               <td class="fw-600">${d}</td>
               <td class="mono">${e.cash ? cur(e.cash) : '—'}</td>
               <td class="mono">${e.upi  ? cur(e.upi)  : '—'}</td>
@@ -3131,13 +3279,177 @@ function saveBankReconEntry(date) {
   const card  = parseFloat(document.getElementById('br_card')?.value) || 0;
   const notes = document.getElementById('br_notes')?.value || '';
   window._bankReconData[date] = { cash, upi, card, notes };
-  // Persist
   db.setSetting('bank_recon_data', window._bankReconData).catch(()=>{});
   toast('✅ Bank entry saved for ' + date, 'success');
   renderPage();
 }
 window.saveBankReconEntry = saveBankReconEntry;
-window.renderAnalytics = renderAnalytics;
+
+// ── BANK STATEMENT CSV PARSER ───────────────────────────────────────────────
+// Supports SBI, HDFC, ICICI, Axis, Kotak, and generic CSV formats.
+// Auto-detects format from headers if "Auto-detect" selected.
+// Fills in UPI/Cash/Card totals automatically, and stores per-transaction
+// data for Entry-by-Entry matching mode.
+function parseBankStatementCSV(input, selDate) {
+  const file = input?.files?.[0];
+  if (!file) return;
+  const format = document.getElementById('brBankFormat')?.value || 'auto';
+
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      const text = e.target.result;
+      const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+      if (lines.length < 2) { toast('CSV appears empty or invalid', 'error'); return; }
+
+      // ── Parse CSV respecting quoted fields ──
+      function parseCSVLine(line) {
+        const cols = []; let cur2 = ''; let inQ = false;
+        for (let i = 0; i < line.length; i++) {
+          const c = line[i];
+          if (c === '"') { inQ = !inQ; }
+          else if (c === ',' && !inQ) { cols.push(cur2.trim().replace(/^"|"$/g,'')); cur2 = ''; }
+          else { cur2 += c; }
+        }
+        cols.push(cur2.trim().replace(/^"|"$/g,''));
+        return cols;
+      }
+
+      const headers = parseCSVLine(lines[0]).map(h => h.toLowerCase().replace(/[^a-z0-9]/g,''));
+      const rows = lines.slice(1).map(l => parseCSVLine(l));
+
+      // ── Auto-detect or use specified format ──
+      const detectedFormat = (() => {
+        if (format !== 'auto') return format;
+        const h = headers.join(',');
+        if (h.includes('transactionremarks') && h.includes('withdrawalamount')) return 'sbi';
+        if (h.includes('narration') && h.includes('withdrawalamt')) return 'hdfc';
+        if (h.includes('transactionremarks') && h.includes('amount') && h.includes('utr')) return 'icici';
+        if (h.includes('particulars') && h.includes('creditamount')) return 'axis';
+        if (h.includes('description') && h.includes('creditamt')) return 'kotak';
+        return 'generic';
+      })();
+
+      // ── Format-specific field extractors ──
+      const FORMATS = {
+        sbi: {
+          date:   h => { const i = h.findIndex(x => x.includes('txndate')||x.includes('date')); return i; },
+          desc:   h => h.findIndex(x => x.includes('transactionremarks')||x.includes('description')||x.includes('remarks')),
+          credit: h => h.findIndex(x => x.includes('credit')),
+          debit:  h => h.findIndex(x => x.includes('debit')||x.includes('withdrawal')),
+          utr:    h => h.findIndex(x => x.includes('ref')||x.includes('utr')||x.includes('refno')),
+        },
+        hdfc: {
+          date:   h => h.findIndex(x => x.includes('date')),
+          desc:   h => h.findIndex(x => x.includes('narration')||x.includes('description')),
+          credit: h => h.findIndex(x => x.includes('depositamt')||x.includes('credit')),
+          debit:  h => h.findIndex(x => x.includes('withdrawalamt')||x.includes('debit')),
+          utr:    h => h.findIndex(x => x.includes('chequeno')||x.includes('ref')),
+        },
+        icici: {
+          date:   h => h.findIndex(x => x.includes('date')),
+          desc:   h => h.findIndex(x => x.includes('remarks')||x.includes('description')||x.includes('narration')),
+          credit: h => h.findIndex(x => x.includes('credit')||x.includes('deposit')),
+          debit:  h => h.findIndex(x => x.includes('debit')||x.includes('withdrawal')),
+          utr:    h => h.findIndex(x => x.includes('utr')||x.includes('ref')),
+        },
+        axis: {
+          date:   h => h.findIndex(x => x.includes('trandate')||x.includes('date')),
+          desc:   h => h.findIndex(x => x.includes('particulars')||x.includes('description')),
+          credit: h => h.findIndex(x => x.includes('creditamount')||x.includes('credit')),
+          debit:  h => h.findIndex(x => x.includes('debitamount')||x.includes('debit')),
+          utr:    h => h.findIndex(x => x.includes('ref')||x.includes('utr')||x.includes('chqno')),
+        },
+        kotak: {
+          date:   h => h.findIndex(x => x.includes('date')),
+          desc:   h => h.findIndex(x => x.includes('description')||x.includes('narration')),
+          credit: h => h.findIndex(x => x.includes('creditamt')||x.includes('credit')),
+          debit:  h => h.findIndex(x => x.includes('debitamt')||x.includes('debit')),
+          utr:    h => h.findIndex(x => x.includes('ref')||x.includes('utr')),
+        },
+        generic: {
+          date:   h => h.findIndex(x => x.includes('date')),
+          desc:   h => h.findIndex(x => x.includes('desc')||x.includes('narr')||x.includes('remark')||x.includes('particular')),
+          credit: h => h.findIndex(x => x.includes('credit')||x.includes('deposit')||x.includes('in')),
+          debit:  h => h.findIndex(x => x.includes('debit')||x.includes('withdraw')||x.includes('out')),
+          utr:    h => h.findIndex(x => x.includes('ref')||x.includes('utr')||x.includes('txnid')),
+        },
+      };
+
+      const fmt2 = FORMATS[detectedFormat] || FORMATS.generic;
+      const idxDate   = fmt2.date(headers);
+      const idxDesc   = fmt2.desc(headers);
+      const idxCredit = fmt2.credit(headers);
+      const idxUtr    = fmt2.utr(headers);
+
+      // ── Parse and filter rows for selDate ──
+      const parseAmt  = v => parseFloat((v||'').replace(/[₹,\s]/g,'')) || 0;
+      const parseDate = v => {
+        if (!v) return '';
+        // Handles DD/MM/YYYY, DD-MM-YYYY, YYYY-MM-DD, DD Mon YYYY
+        const d = v.trim();
+        if (/^\d{4}-\d{2}-\d{2}/.test(d)) return d.slice(0,10);
+        const m = d.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
+        if (m) {
+          const yr = m[3].length === 2 ? '20' + m[3] : m[3];
+          return `${yr}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`;
+        }
+        const months = {jan:'01',feb:'02',mar:'03',apr:'04',may:'05',jun:'06',jul:'07',aug:'08',sep:'09',oct:'10',nov:'11',dec:'12'};
+        const dm = d.match(/(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})/i);
+        if (dm) return `${dm[3]}-${months[dm[2].toLowerCase()]||'01'}-${dm[1].padStart(2,'0')}`;
+        return '';
+      };
+
+      // UPI detection: look for UPI/PhonePe/GPay/Paytm keywords in description
+      const isUpi = desc => /upi|phonepe|gpay|google.?pay|paytm|bhim|imps.*upi|neft.*upi/i.test(desc||'');
+      const isCard = desc => /pos|card|swipe|nfs|visa|master|rupay/i.test(desc||'');
+
+      const allTxns = [];
+      let totalUpi = 0, totalCash = 0, totalCard = 0;
+
+      rows.forEach(row => {
+        if (row.length < 2) return;
+        const rowDate = idxDate >= 0 ? parseDate(row[idxDate]) : '';
+        if (rowDate && rowDate !== selDate) return; // filter to selDate
+        const amt = idxCredit >= 0 ? parseAmt(row[idxCredit]) : 0;
+        if (amt <= 0) return; // only credits
+        const desc = idxDesc >= 0 ? (row[idxDesc]||'') : '';
+        const utr  = idxUtr  >= 0 ? (row[idxUtr]||'').replace(/[^A-Z0-9]/gi,'').toUpperCase() : '';
+        const type = isUpi(desc) ? 'upi' : isCard(desc) ? 'card' : 'cash';
+        if (type === 'upi') totalUpi += amt;
+        else if (type === 'card') totalCard += amt;
+        else totalCash += amt;
+        allTxns.push({ amount: amt, desc, utr: utr.length >= 8 ? utr : '', type, date: rowDate });
+      });
+
+      if (allTxns.length === 0 && totalUpi === 0 && totalCash === 0 && totalCard === 0) {
+        toast(`No credit transactions found for ${selDate} in this CSV. Check format or date.`, 'error');
+        if (input) input.value = '';
+        return;
+      }
+
+      // Auto-fill the manual entry fields
+      const cashEl = document.getElementById('br_cash');
+      const upiEl  = document.getElementById('br_upi');
+      const cardEl = document.getElementById('br_card');
+      if (cashEl && totalCash > 0) cashEl.value = totalCash.toFixed(2);
+      if (upiEl  && totalUpi  > 0) upiEl.value  = totalUpi.toFixed(2);
+      if (cardEl && totalCard > 0) cardEl.value  = totalCard.toFixed(2);
+
+      // Store for entry-by-entry matching (UPI only)
+      window._brParsedTxns = allTxns.filter(t => t.type === 'upi');
+
+      toast(`✅ CSV parsed (${detectedFormat}): UPI ₹${totalUpi.toFixed(0)}, Cash ₹${totalCash.toFixed(0)}, Card ₹${totalCard.toFixed(0)} — ${allTxns.length} credits on ${selDate}`, 'success');
+      renderPage();
+    } catch(err) {
+      console.error('[BankCSV]', err);
+      toast('Failed to parse CSV: ' + err.message, 'error');
+    }
+    if (input) input.value = '';
+  };
+  reader.readAsText(file);
+}
+window.parseBankStatementCSV = parseBankStatementCSV;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ── PAYROLL PAGE ──────────────────────────────────────────────────────────────
@@ -4199,7 +4511,7 @@ function renderLubes(D) {
   </div>`;
 
   const totalProducts  = prods.filter(p=>p.active!==false).length;
-  const totalStockVal  = prods.reduce((a,p) => a + (p.stock||0)*(p.costPrice||0), 0);
+  const totalStockVal  = prods.reduce((a,p) => (a + (p.stock||0) * ((p.qtyPerCarton && p.qtyPerCarton > 1) ? (p.costPrice||0) / p.qtyPerCarton : (p.costPrice||0))), 0); // FIX: divide carton cost by qtyPerCarton to get per-piece cost
   const todaySalesAmt  = sales.filter(s=>s.date===today).reduce((a,s)=>a+s.amount,0);
   const lowStockCount  = prods.filter(p=>p.active!==false && (p.minStock||0) > 0 && (p.stock||0) <= (p.minStock||5)).length;
   const expiredCount   = prods.filter(p=>p.active!==false && p.expiryDate && p.expiryDate < today).length;
@@ -7424,6 +7736,29 @@ async function toggleMultiSalePerDay(enabled) {
   }
 }
 window.toggleMultiSalePerDay = toggleMultiSalePerDay;
+
+// ── UPI Verification Policy — admin control ────────────────────────────────
+async function setUpiPolicy(policy) {
+  const valid = ['none', 'optional', 'encouraged', 'required'];
+  if (!valid.includes(policy)) return;
+  if (!APP.data) APP.data = {};
+  APP.data.upiVerificationPolicy = policy;
+  try {
+    await db.setSetting('upi_verification_policy', policy);
+    const token = typeof getAuthToken === 'function' ? getAuthToken() : '';
+    await fetch('/api/data/settings/key/upi_verification_policy', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+      body: JSON.stringify({ value: policy })
+    }).catch(() => {});
+    const labels = { none: 'Not Required', optional: 'Optional', encouraged: 'Encouraged', required: 'Required' };
+    toast('✅ UPI policy set to: ' + labels[policy], 'success');
+    renderPage();
+  } catch(e) {
+    toast('Failed to save UPI policy: ' + e.message, 'error');
+  }
+}
+window.setUpiPolicy = setUpiPolicy;
 
 // ── Day-Lock check helper used by api-client.js ─────────────────────────────
 // Returns true if the given date (YYYY-MM-DD) is locked
@@ -12511,8 +12846,8 @@ function renderBalanceSheet(D) {
     return a + (t.current||0) * rate;
   }, 0);
 
-  // 5. Lube stock at cost
-  const lubeStock = (window._lubesProducts||[]).reduce((a,p)=>a+(p.stock||0)*(p.costPrice||p.cost_price||0),0);
+  // 5. Lube stock at cost — FIX: for carton products divide carton cost by qtyPerCarton to get per-piece cost
+  const lubeStock = (window._lubesProducts||[]).reduce((a,p)=>a+(p.stock||0)*((p.qtyPerCarton&&p.qtyPerCarton>1)?(p.costPrice||p.cost_price||0)/p.qtyPerCarton:(p.costPrice||p.cost_price||0)),0);
 
   const totalAssets = cashInHand + digitalAmt + creditReceivables + tankInventory + lubeStock;
 
@@ -12604,7 +12939,7 @@ function generateBalanceSheetPDF() {
     const lp = (D.fuelPurchases||[]).filter(p=>(p.fuelType||'').toLowerCase()===(t.fuelType||'').toLowerCase()).sort((a,b)=>(b.date||'')-(a.date||''))[0];
     return a+(t.current||0)*(lp?.rate||0);
   },0);
-  const lubeStock = (window._lubesProducts||[]).reduce((a,p)=>a+(p.stock||0)*(p.costPrice||p.cost_price||0),0);
+  const lubeStock = (window._lubesProducts||[]).reduce((a,p)=>(a + (p.stock||0) * ((p.qtyPerCarton && p.qtyPerCarton > 1) ? (p.costPrice||p.cost_price||0) / p.qtyPerCarton : (p.costPrice||p.cost_price||0))), 0); // FIX: carton cost ÷ qtyPerCarton
   const totalAssets = cashInHand+digitalAmt+creditReceivables+tankInventory+lubeStock;
   const fuelPayables = (D.fuelPurchases||[]).filter(p=>(p.mode||'')!=='paid'&&(p.date||'').startsWith(month)).reduce((a,p)=>a+(p.total||0),0);
   const paidSal = Object.values(window._payrollSaved||{}).filter(p=>p.status==='paid').reduce((a,p)=>a+(p.net||0),0);

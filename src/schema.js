@@ -764,6 +764,12 @@ async function initDatabase() {
       created_at TIMESTAMPTZ DEFAULT NOW()
     )`,
 
+    // ── UPI VERIFICATION — UTR reference and payment status per sale ───────
+    // utr_ref: UTR number captured by employee (via camera scan, screenshot OCR, or manual)
+    // payment_status: 'na' (non-UPI), 'unverified' (UPI, no UTR), 'manual_utr' (UTR entered)
+    "ALTER TABLE sales ADD COLUMN IF NOT EXISTS utr_ref TEXT DEFAULT ''",
+    "ALTER TABLE sales ADD COLUMN IF NOT EXISTS payment_status TEXT DEFAULT 'na'",
+
     // BUG-008 FIX: Enforce phone uniqueness per tenant at the database level.
     // Partial index (WHERE phone != '') preserves backward compatibility —
     // employees created without a phone are not affected, but any two active employees

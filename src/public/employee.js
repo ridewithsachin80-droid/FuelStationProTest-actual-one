@@ -1121,7 +1121,7 @@ function emp_renderSales() {
       <div class="form-group"><label class="form-label" for="empSaleAmt">Amount (₹)</label><input class="form-input" id="empSaleAmt" type="number" inputmode="decimal" step="0.01" placeholder="${emp_hasPerm('prices')?'Auto — price applied':'Enter amount'}" style="font-family:var(--mono);font-weight:600" oninput="emp_calcLiters()" /></div></div>
       ${emp_hasPerm('prices') ? `<div style="font-size:11px;color:var(--text-3);margin-top:-6px;margin-bottom:8px">Current price: <strong style="color:var(--accent-light)">${cur(EMP_PRICES[empSaleFuel] || 0)}/L</strong></div>` : ''}
       <div class="form-group">
-        <label class="form-label" for="empSaleCustomer" style="margin-bottom:8px">Vehicle Number <span id="vehOptHint" style="font-size:10px;font-weight:500;color:var(--text-3)">${empPayMode==='cash'?'(optional for cash)':''}</span></label>
+        <label class="form-label" for="empSaleCustomer" style="margin-bottom:8px">Vehicle Number <span id="vehOptHint" style="font-size:10px;font-weight:500;color:var(--text-3)">${empPayMode==='credit'?'(required for credit)':'(optional)'}</span></label>
         <div style="display:flex;align-items:stretch;gap:6px">
           <div id="vehSegWrap" style="display:flex;gap:3px;flex:1;min-width:0">
             <input id="veh_state" class="veh-seg" maxlength="2" placeholder="KA"
@@ -1154,6 +1154,37 @@ function emp_renderSales() {
       </div>
       <div class="form-group"><label class="form-label">Payment Mode</label><div style="display:flex;gap:6px;flex-wrap:wrap">${['cash','upi','card','credit']
         .map(m=>`<button class="btn btn-sm ${empPayMode===m?'btn-accent':'btn-ghost'}" data-paybtn="${m}" onclick="emp_selPay('${m}')">${{cash:'💵 Cash',upi:'📱 UPI',card:'💳 Card',credit:'📋 Credit'}[m]}</button>`).join('')}</div></div>
+      <!-- UPI UTR Capture Panel — shown when UPI mode selected -->
+      <div id="empUtrPanel" style="display:${empPayMode==='upi'?'block':'none'};margin-bottom:10px">
+        ${(()=>{
+          const policy = APP.data?.upiVerificationPolicy || 'optional';
+          if (policy === 'none') return ''; // admin disabled, show nothing
+          const isRequired = policy === 'required';
+          const label = isRequired
+            ? '🔒 UTR Required — capture customer\'s transaction reference'
+            : '📋 UTR ' + (policy === 'encouraged' ? '(recommended)' : '(optional)') + ' — capture for reconciliation';
+          return `<div style="background:rgba(59,130,246,0.06);border:1px solid rgba(59,130,246,0.2);border-radius:10px;padding:12px">
+            <div style="font-size:11px;color:var(--text-3);margin-bottom:8px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px">${label}</div>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+              <input class="form-input" id="empUtrInput" type="text" inputmode="numeric"
+                maxlength="22" placeholder="UTR / Ref No (e.g. 402522123456)"
+                style="flex:1;min-width:120px;font-family:var(--mono);font-size:13px;letter-spacing:1px"
+                oninput="this.value=this.value.replace(/[^0-9A-Za-z]/g,'')" />
+              <button type="button" onclick="emp_utrScanQR()" title="Scan QR from customer's payment screen"
+                style="background:var(--bg-2);border:1px solid var(--border);color:var(--text-1);padding:8px 10px;border-radius:8px;cursor:pointer;font-size:16px;flex-shrink:0"
+                aria-label="Scan QR">📷</button>
+              <button type="button" onclick="emp_utrFromScreenshot()" title="Upload customer's payment screenshot"
+                style="background:var(--bg-2);border:1px solid var(--border);color:var(--text-1);padding:8px 10px;border-radius:8px;cursor:pointer;font-size:16px;flex-shrink:0"
+                aria-label="Upload screenshot">📸</button>
+              <button type="button" onclick="emp_utrVoice()" title="Speak the UTR number"
+                style="background:var(--bg-2);border:1px solid var(--border);color:var(--text-1);padding:8px 10px;border-radius:8px;cursor:pointer;font-size:16px;flex-shrink:0"
+                aria-label="Voice input">🎤</button>
+            </div>
+            <div id="empUtrStatus" style="font-size:11px;color:var(--text-3);margin-top:6px;min-height:14px"></div>
+            <input type="file" id="empUtrImgFile" accept="image/*" style="display:none" onchange="emp_utrProcessImage(this)" />
+          </div>`;
+        })()}
+      </div>
       <div id="empCustWrap" style="display:${empPayMode==='credit'?'':'none'}"><div class="form-group"><label class="form-label">Credit Customer</label><select class="form-input" id="empSaleCustomer" onchange="emp_showLoyaltyBadge(this.value)"><option value="">— Select Customer —</option>${(APP.data?.creditCustomers||[]).filter(c=>c.active!==false&&c.active!==0).map(c=>`<option value="${sanitize(c.name)}">${sanitize(c.name)}</option>`).join('')}</select></div>
       <div id="empLoyaltyBadge" style="display:none;margin-top:6px;padding:8px 12px;background:rgba(212,148,15,0.08);border:1px solid rgba(212,148,15,0.3);border-radius:8px;font-size:12px;display:flex;justify-content:space-between;align-items:center">
         <span style="color:var(--text-2)">⭐ <span id="empLoyaltyPts">0</span> pts &nbsp;·&nbsp; Value: <span id="empLoyaltyVal" style="color:var(--green);font-weight:700">₹0</span></span>
@@ -1935,6 +1966,22 @@ function emp_selPay(m) {
   // Show/hide credit customer field without full re-render
   const custWrap = document.getElementById('empCustWrap');
   if (custWrap) custWrap.style.display = m === 'credit' ? '' : 'none';
+  // Show/hide UTR panel when UPI selected
+  const utrPanel = document.getElementById('empUtrPanel');
+  if (utrPanel) {
+    const policy = APP.data?.upiVerificationPolicy || 'optional';
+    utrPanel.style.display = (m === 'upi' && policy !== 'none') ? 'block' : 'none';
+  }
+  // Update vehicle number hint label
+  const vehHint = document.getElementById('vehOptHint');
+  if (vehHint) vehHint.textContent = m === 'credit' ? '(required for credit)' : '(optional)';
+  // Clear UTR input when switching away from UPI
+  if (m !== 'upi') {
+    const utrInput = document.getElementById('empUtrInput');
+    if (utrInput) utrInput.value = '';
+    const utrStatus = document.getElementById('empUtrStatus');
+    if (utrStatus) utrStatus.textContent = '';
+  }
 }
 function emp_calcAmt() {
   const price = EMP_PRICES[empSaleFuel] || 0;
@@ -2245,9 +2292,9 @@ function emp_recordSale() {
       return;
     }
   }
-  // Vehicle required for non-cash payments; optional for cash walk-ins
-  if (empPayMode !== 'cash') {
-    if (!v || v.length < 2) { toast('Enter valid vehicle number','error'); return; }
+  // Vehicle number: mandatory only for credit sales, optional for all others
+  if (empPayMode === 'credit') {
+    if (!v || v.length < 2) { toast('Enter vehicle number — required for credit sales', 'error'); return; }
   }
   // BUG-010 FIX: Validate Indian vehicle number format client-side using the same
   // regex the server uses. Strip spaces/hyphens before testing (same as server).
@@ -2261,6 +2308,17 @@ function emp_recordSale() {
       return;
     }
   }
+  // ── UPI Verification Policy gate ──────────────────────────────────────────
+  const _upiPolicy = APP.data?.upiVerificationPolicy || 'optional';
+  const _utrInput = document.getElementById('empUtrInput');
+  const _utrValue = (_utrInput?.value || '').trim().replace(/[^A-Z0-9]/gi, '').toUpperCase();
+  if (empPayMode === 'upi' && _upiPolicy === 'required' && !_utrValue) {
+    toast('❌ UTR required — capture customer\'s transaction reference before saving', 'error');
+    const inp = document.getElementById('empUtrInput');
+    if (inp) inp.focus();
+    return;
+  }
+
   const amt = isNaN(a) || a <= 0 ? l * (EMP_PRICES[empSaleFuel] || 0) : a;
   if (isNaN(amt) || amt <= 0) { toast('Invalid amount','error'); return; }
 
@@ -2299,6 +2357,11 @@ function emp_recordSale() {
     employee: empState.user?.name || 'Employee',
     employeeId: empState.user?.id || 0,
     employeeName: empState.user?.name || 'Employee',
+    // UPI verification fields
+    utr_ref: (empPayMode === 'upi' && _utrValue) ? _utrValue : '',
+    payment_status: empPayMode === 'upi'
+      ? (_utrValue ? 'manual_utr' : 'unverified')
+      : 'na',
   };
 
   // ── Save to employee session (for shift summary & reconciliation) ──
@@ -2438,6 +2501,11 @@ function emp_recordSale() {
   });
   const custEl = document.getElementById('empSaleCustomer');
   if (custEl) custEl.value = '';
+  // Clear UTR field after each sale
+  const utrEl = document.getElementById('empUtrInput');
+  if (utrEl) utrEl.value = '';
+  const utrStatus = document.getElementById('empUtrStatus');
+  if (utrStatus) utrStatus.textContent = '';
 
   emp_go('sales');
 }
@@ -2553,6 +2621,188 @@ function emp_voiceEntry() {
   _voiceRecognizer.start();
 }
 window.emp_voiceEntry = emp_voiceEntry;
+
+// ── UTR CAPTURE — 3 methods: QR scan, screenshot OCR, voice ───────────────
+
+// Helper: set UTR value and show status
+function _setUtrValue(utr, method) {
+  const inp = document.getElementById('empUtrInput');
+  const status = document.getElementById('empUtrStatus');
+  if (!inp) return;
+  inp.value = utr;
+  if (status) {
+    status.textContent = '✅ UTR captured via ' + method;
+    status.style.color = 'var(--green)';
+  }
+}
+
+// Method 1: Camera QR scan — reads QR code from customer's payment success screen
+function emp_utrScanQR() {
+  const statusEl = document.getElementById('empUtrStatus');
+  if (statusEl) { statusEl.textContent = '📷 Opening camera...'; statusEl.style.color = 'var(--text-3)'; }
+
+  // Create video overlay
+  const overlay = document.createElement('div');
+  overlay.id = 'empQrOverlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:#000;z-index:99999;display:flex;flex-direction:column;align-items:center;justify-content:center';
+  overlay.innerHTML = `
+    <div style="color:#fff;font-size:13px;margin-bottom:12px;text-align:center;padding:0 20px">
+      Point camera at customer's payment success screen<br>
+      <span style="font-size:11px;color:rgba(255,255,255,0.5)">PhonePe / GPay / Paytm QR detected automatically</span>
+    </div>
+    <video id="empQrVideo" style="width:100%;max-width:400px;border-radius:12px" autoplay playsinline muted></video>
+    <canvas id="empQrCanvas" style="display:none"></canvas>
+    <div id="empQrStatus" style="color:rgba(255,255,255,0.6);font-size:12px;margin-top:12px">Scanning...</div>
+    <button onclick="emp_utrStopQR()" style="margin-top:16px;background:rgba(255,255,255,0.15);border:1px solid rgba(255,255,255,0.3);color:#fff;padding:10px 24px;border-radius:8px;font-size:14px;cursor:pointer">✕ Cancel</button>
+  `;
+  document.body.appendChild(overlay);
+
+  // Load jsQR on demand
+  if (!window.jsQR) {
+    const s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js';
+    s.onload = () => _startQrStream();
+    s.onerror = () => {
+      emp_utrStopQR();
+      if (statusEl) { statusEl.textContent = '⚠️ QR scanner unavailable — type UTR manually'; statusEl.style.color = 'var(--orange)'; }
+    };
+    document.head.appendChild(s);
+  } else {
+    _startQrStream();
+  }
+}
+
+function _startQrStream() {
+  navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
+    .then(stream => {
+      window._empQrStream = stream;
+      const video = document.getElementById('empQrVideo');
+      if (!video) { stream.getTracks().forEach(t => t.stop()); return; }
+      video.srcObject = stream;
+      video.play();
+      window._empQrTimer = setInterval(() => {
+        const video = document.getElementById('empQrVideo');
+        const canvas = document.getElementById('empQrCanvas');
+        const statusEl2 = document.getElementById('empQrStatus');
+        if (!video || !canvas || video.readyState < 2) return;
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(video, 0, 0);
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        try {
+          const code = window.jsQR(imageData.data, imageData.width, imageData.height);
+          if (code && code.data) {
+            // Extract UTR from QR data — PhonePe/GPay embed it in URL or plain text
+            let utr = code.data;
+            const utrMatch = utr.match(/[A-Z0-9]{10,22}/i);
+            if (utrMatch) utr = utrMatch[0].toUpperCase();
+            emp_utrStopQR();
+            _setUtrValue(utr, 'QR scan');
+          } else if (statusEl2) {
+            statusEl2.textContent = 'Scanning... hold steady';
+          }
+        } catch(e) {}
+      }, 300);
+    })
+    .catch(err => {
+      emp_utrStopQR();
+      const statusEl = document.getElementById('empUtrStatus');
+      if (statusEl) { statusEl.textContent = '📷 Camera access denied — type UTR manually'; statusEl.style.color = 'var(--orange)'; }
+    });
+}
+
+function emp_utrStopQR() {
+  clearInterval(window._empQrTimer);
+  if (window._empQrStream) { window._empQrStream.getTracks().forEach(t => t.stop()); window._empQrStream = null; }
+  const overlay = document.getElementById('empQrOverlay');
+  if (overlay) overlay.remove();
+}
+window.emp_utrStopQR = emp_utrStopQR;
+
+// Method 2: Screenshot OCR — customer shares payment screenshot, Claude Vision extracts UTR
+function emp_utrFromScreenshot() {
+  const fileInput = document.getElementById('empUtrImgFile');
+  if (fileInput) fileInput.click();
+}
+
+async function emp_utrProcessImage(input) {
+  const statusEl = document.getElementById('empUtrStatus');
+  const file = input?.files?.[0];
+  if (!file) return;
+  if (statusEl) { statusEl.textContent = '🔍 Reading UTR from screenshot...'; statusEl.style.color = 'var(--text-3)'; }
+
+  try {
+    // Convert image to base64
+    const base64 = await new Promise((res, rej) => {
+      const reader = new FileReader();
+      reader.onload = () => res(reader.result.split(',')[1]);
+      reader.onerror = () => rej(new Error('Image read failed'));
+      reader.readAsDataURL(file);
+    });
+
+    // Call Anthropic API with the image to extract UTR
+    const token = typeof getAuthToken === 'function' ? getAuthToken() : '';
+    const resp = await fetch('/api/utr-extract', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+      body: JSON.stringify({ image: base64, mimeType: file.type })
+    });
+
+    if (resp.ok) {
+      const data = await resp.json();
+      if (data.utr) {
+        _setUtrValue(data.utr, 'screenshot');
+      } else {
+        if (statusEl) { statusEl.textContent = '⚠️ UTR not found in image — type manually'; statusEl.style.color = 'var(--orange)'; }
+      }
+    } else {
+      if (statusEl) { statusEl.textContent = '⚠️ Could not read screenshot — type UTR manually'; statusEl.style.color = 'var(--orange)'; }
+    }
+  } catch(e) {
+    if (statusEl) { statusEl.textContent = '⚠️ Screenshot read failed — type UTR manually'; statusEl.style.color = 'var(--orange)'; }
+  }
+  // Reset file input
+  if (input) input.value = '';
+}
+window.emp_utrProcessImage = emp_utrProcessImage;
+
+// Method 3: Voice — employee speaks the UTR number
+function emp_utrVoice() {
+  const statusEl = document.getElementById('empUtrStatus');
+  const inp = document.getElementById('empUtrInput');
+  if (!('webkitSpeechRecognition' in window || 'SpeechRecognition' in window)) {
+    if (statusEl) { statusEl.textContent = '🎤 Voice not supported — type UTR manually'; statusEl.style.color = 'var(--orange)'; }
+    return;
+  }
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const recog = new SpeechRecognition();
+  recog.lang = 'en-IN';
+  recog.interimResults = false;
+  recog.maxAlternatives = 1;
+
+  if (statusEl) { statusEl.textContent = '🎤 Listening... speak the UTR number'; statusEl.style.color = 'var(--accent-light)'; }
+
+  recog.onresult = (event) => {
+    const spoken = event.results[0][0].transcript.replace(/\s+/g, '').toUpperCase();
+    // Extract digits and alphanumeric UTR pattern
+    const utrMatch = spoken.match(/[A-Z0-9]{10,22}/i);
+    const utr = utrMatch ? utrMatch[0].toUpperCase() : spoken.replace(/[^A-Z0-9]/gi, '');
+    if (utr.length >= 8) {
+      _setUtrValue(utr, 'voice');
+    } else {
+      if (statusEl) { statusEl.textContent = '🎤 Didn\'t catch it — try again or type manually'; statusEl.style.color = 'var(--orange)'; }
+    }
+  };
+  recog.onerror = () => {
+    if (statusEl) { statusEl.textContent = '🎤 Voice failed — type UTR manually'; statusEl.style.color = 'var(--orange)'; }
+  };
+  recog.onend = () => {};
+  recog.start();
+}
+window.emp_utrScanQR = emp_utrScanQR;
+window.emp_utrFromScreenshot = emp_utrFromScreenshot;
+window.emp_utrVoice = emp_utrVoice;
 
 function emp_voiceReset() {
   _voiceActive     = false;
@@ -4841,6 +5091,7 @@ async function loadData() {
   const waPhone       = _s['waPhone']          || '';
   const waApiKey      = _s['waApiKey']         || '';
   const allowMultiSalePerDay = _s['allow_multi_sale_per_day'] === '1' || _s['allow_multi_sale_per_day'] === true;
+  const upiVerificationPolicy = _s['upi_verification_policy'] || 'optional';
   // STOCK FIX: load lubes products + sales from bulk settings so employee stock updates are visible
   const bulkLubeProds = Array.isArray(_s['lubes_products']) ? _s['lubes_products'] : null;
   const bulkLubeSales = Array.isArray(_s['lubes_sales'])    ? _s['lubes_sales']    : null;
@@ -4925,6 +5176,7 @@ async function loadData() {
       waPhone: waPhone || '',
       waApiKey: waApiKey || '',
       allowMultiSalePerDay: allowMultiSalePerDay || false, // BUG-04 FIX: loaded from server settings
+      upiVerificationPolicy: upiVerificationPolicy,        // UPI UTR capture policy for employee screen
       gstin: '',
       legalName: '',
       stateCode: '29',

@@ -154,6 +154,7 @@ async function startServer() {
   // compression. Override the 2mb JSON limit specifically for this route with a higher limit
   // so large invoices aren't silently rejected with a 413 before reaching the handler.
   app.use('/api/data/scan-invoice', express.json({ limit: '10mb' }));
+  app.use('/api/utr-extract', express.json({ limit: '5mb' }));
 
   // Serve frontend — index.html is in root directory
   const publicDir = require('fs').existsSync(path.join(__dirname, 'public'))
@@ -1816,6 +1817,58 @@ Pack decoding: "300x40ML-POU"=packQty:300,packSize:"40ml",packType:"Pouch",isCar
       }
       console.error('[Bill Scan]', e.message);
       res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ── UTR EXTRACTION: Read UTR from customer's payment success screenshot ──
+  // Called from employee sale screen when employee uploads a payment screenshot.
+  // Uses Claude Vision to extract the UTR/transaction reference number.
+  // No auth required — employee token is valid, just verify it exists.
+  app.post('/api/utr-extract', authMiddleware(db), async (req, res) => {
+    const { image, mimeType } = req.body;
+    if (!image) return res.status(400).json({ error: 'No image provided' });
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+
+    try {
+      const safeMime = (() => {
+        const m = (mimeType || 'image/jpeg').toLowerCase();
+        if (m === 'image/jpg') return 'image/jpeg';
+        if (['image/jpeg','image/png','image/webp'].includes(m)) return m;
+        return 'image/jpeg';
+      })();
+
+      const resp = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01'
+        },
+        body: JSON.stringify({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 100,
+          messages: [{
+            role: 'user',
+            content: [
+              { type: 'image', source: { type: 'base64', media_type: safeMime, data: image } },
+              { type: 'text', text: 'This is a UPI payment success screenshot (PhonePe, Google Pay, or Paytm). Extract the UTR number or transaction reference number. UTR is typically 12 digits or alphanumeric. Reply with ONLY the UTR/reference number, nothing else. If you cannot find it, reply with "NOT_FOUND".' }
+            ]
+          }]
+        })
+      });
+
+      if (!resp.ok) return res.status(500).json({ error: 'Vision API failed' });
+      const data = await resp.json();
+      const extracted = (data.content?.[0]?.text || '').trim().replace(/[^A-Z0-9]/gi, '').toUpperCase();
+
+      if (!extracted || extracted === 'NOTFOUND' || extracted.length < 8) {
+        return res.json({ utr: null, message: 'UTR not found in image' });
+      }
+      res.json({ utr: extracted });
+    } catch(e) {
+      console.error('[UTR Extract]', e.message);
+      res.status(500).json({ error: 'Failed to extract UTR' });
     }
   });
 
