@@ -1389,7 +1389,12 @@ async function startServer() {
         if (creditRow.rows[0]) {
           const currentBalance = parseFloat(creditRow.rows[0].balance) || 0;
           const limit = parseFloat(creditRow.rows[0].credit_limit) || 0;
-          if (limit > 0 && (currentBalance + sale.amount) > limit) {
+          // FIX FIND-CR2: limit=0 means "no credit facility" (on hold), not "unlimited".
+          // Old: `limit > 0` allowed limit=0 to bypass check entirely.
+          // New: treat 0 as blocked, positive as capped.
+          if (limit === 0 || (currentBalance + sale.amount) > limit) {
+            // limit===0: customer on hold — no credit allowed
+            // otherwise: would exceed configured limit
             await client.query('ROLLBACK');
             client.release();
             return res.status(422).json({

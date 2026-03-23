@@ -552,7 +552,8 @@ function dataRoutes(db) {
             const currentBalance = parseFloat(balance) || 0;
             const limit = parseFloat(credit_limit) || 0;
             const saleAmount = parseFloat(data.amount) || 0;
-            if (limit > 0 && (currentBalance + saleAmount) > limit) {
+            // FIX FIND-CR2: limit=0 = on hold (no credit). Was bypassing check when limit=0.
+            if (limit === 0 || (currentBalance + saleAmount) > limit) {
               await client.query('ROLLBACK');
               client.release();
               // FIX #14: standardize on error: field (not message:) for consistent API shape
