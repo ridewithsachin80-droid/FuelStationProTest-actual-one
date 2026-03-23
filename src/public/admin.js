@@ -2469,6 +2469,10 @@ function rosterNavWeek(dir) {
 }
 function rosterAssign(date, shiftName, empId) {
   if (!empId) return;
+  // FIX FIND-UR1: Guard against console/script bypass of UI-level read-only protection
+  const _today = (()=>{const _d=new Date();return _d.getFullYear()+'-'+String(_d.getMonth()+1).padStart(2,'0')+'-'+String(_d.getDate()).padStart(2,'0');})();
+  const _thisMonday = (()=>{const _d=new Date(),_dow=_d.getDay()===0?6:_d.getDay()-1,_m=new Date(_d);_m.setDate(_d.getDate()-_dow);_m.setHours(0,0,0,0);return _m.getFullYear()+'-'+String(_m.getMonth()+1).padStart(2,'0')+'-'+String(_m.getDate()).padStart(2,'0');})();
+  if (date < _today) { if (typeof toast==='function') toast('Cannot assign to a past date', 'error'); return; }
   const key = date + '_' + shiftName;
   if (!window._rosterData) window._rosterData = {};
   if (!window._rosterData[key]) window._rosterData[key] = [];
