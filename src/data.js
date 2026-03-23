@@ -637,6 +637,13 @@ function dataRoutes(db) {
     const meta = STORE_MAP[req.params.store];
     if (!meta) return res.status(404).json({ error: 'Unknown store' });
     try {
+      // FIX FIND-B5: validate credit_limit is non-negative when saving credit customer
+      if (req.params.store === 'creditCustomers' && req.body) {
+        const rawLimit = req.body.credit_limit !== undefined ? req.body.credit_limit : req.body.limit;
+        if (rawLimit !== undefined && parseFloat(rawLimit) < 0) {
+          return res.status(400).json({ error: 'Credit limit cannot be negative' });
+        }
+      }
       // FIX 35: idempotency check for sales — prevents duplicate records when
       // the admin client retries after a network drop. The idempotencyKey is
       // generated client-side (Fix 34) and stored in the idempotency_key column.
