@@ -606,6 +606,8 @@ async function initDatabase() {
     `CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token)`,
     `CREATE INDEX IF NOT EXISTS idx_sales_tenant_date ON sales(tenant_id, date DESC)`,
     `CREATE INDEX IF NOT EXISTS idx_login_attempts_ip ON login_attempts(ip_address, attempted_at)`,
+    // PERF FIX FIND-PERF1: composite index for PIN lockout query (tenant_id+username)
+    `CREATE INDEX IF NOT EXISTS idx_login_attempts_tenant_user ON login_attempts(tenant_id, username, attempted_at DESC)`,
     `CREATE INDEX IF NOT EXISTS idx_audit_log_tenant ON audit_log(tenant_id, created_at DESC)`,
     `CREATE INDEX IF NOT EXISTS idx_credit_tx_customer ON credit_transactions(customer_id, tenant_id)`,
     `CREATE INDEX IF NOT EXISTS idx_employees_tenant ON employees(tenant_id, active)`,
