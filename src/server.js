@@ -1956,11 +1956,27 @@ Pack decoding: "300x40ML-POU"=packQty:300,packSize:"40ml",packType:"Pouch",isCar
         'sales', 'tanks', 'pumps', 'dip_readings', 'meter_readings', 'pump_readings',
         'expenses', 'fuel_purchases', 'credit_customers', 'credit_transactions',
         'employees', 'shifts', 'settings', 'audit_log', 'lubes_products', 'lubes_sales',
-        'alerts', 'push_subscriptions', 'dms_transactions', 'subscriptions', 'subscription_payments',
+        'alerts', 'push_subscriptions', 'dms_transactions',
+        'login_attempts',  // FIX FIND-DEL3: orphaned rows after tenant deletion
+        // NOTE: subscriptions, subscription_payments, and audit_log are intentionally
+        // excluded from hard-delete — see archive logic below (FIND-DEL1, FIND-DEL2 fixes)
       ];
       for (const tbl of TENANT_TABLES) {
         await client.query(`DELETE FROM ${tbl} WHERE tenant_id = $1`, [tid]);
       }
+      // FIX FIND-DEL1: Archive subscription records instead of deleting them.
+      // Billing history and payment proof must be retained for accounting/compliance.
+      await client.query(
+        `UPDATE subscriptions SET status = 'deleted', plan = 'deleted' WHERE tenant_id = $1`,
+        [tid]
+      );
+      // subscription_payments: keep intact (immutable financial records)
+
+      // FIX FIND-DEL2: Archive audit_log instead of deleting — retain forensic trail.
+      // The DELETE_TENANT event logged above is stored in this table and must not be erased.
+      // Audit records are purged by the 90-day maintenance job, not by tenant deletion.
+      // (audit_log is intentionally excluded from TENANT_TABLES above)
+
       await client.query('DELETE FROM admin_users WHERE tenant_id = $1', [tid]);
       await client.query('DELETE FROM sessions WHERE tenant_id = $1', [tid]);
       await client.query('DELETE FROM tenants WHERE id = $1', [tid]);
