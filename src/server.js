@@ -2352,20 +2352,15 @@ Pack decoding: "300x40ML-POU"=packQty:300,packSize:"40ml",packType:"Pouch",isCar
     try {
       const tenantId = req.params.tenantId;
       const { deductions, shiftDate, idempotencyKey } = req.body;
-      if (!deductions || typeof deductions !== 'object') {
+
+      // FIX FIND-IDEM-3: Reject arrays (typeof [] === 'object' in JS, must check explicitly)
+      if (!deductions || typeof deductions !== 'object' || Array.isArray(deductions)) {
         return res.status(400).json({ error: 'Missing deductions' });
       }
 
-      // Idempotency check — prevent duplicate deductions on network retry
-      if (idempotencyKey) {
-        const existing = await pool.query(
-          'SELECT value FROM settings WHERE tenant_id = $1 AND key = $2',
-          [tenantId, `tank_deduct_idem_${idempotencyKey}`]
-        );
-        if (existing.rows.length > 0) {
-          console.log(`[tank-deduct] Idempotency: Already processed ${idempotencyKey}`);
-          return res.json({ success: true, duplicate: true, message: 'Already processed' });
-        }
+      // FIX FIND-IDEM-2: Require idempotency key — prevents unprotected retries
+      if (!idempotencyKey) {
+        return res.status(400).json({ error: 'idempotencyKey is required to prevent duplicate deductions' });
       }
 
       const today = shiftDate || istDate();
@@ -2385,6 +2380,29 @@ Pack decoding: "300x40ML-POU"=packQty:300,packSize:"40ml",packType:"Pouch",isCar
       const clientTankDeduct = await pool.connect();
       try {
         await clientTankDeduct.query('BEGIN');
+
+        // FIX FIND-IDEM-1 (TOCTOU): INSERT idempotency key as the FIRST operation inside
+        // the transaction, BEFORE any tank UPDATE. The settings table has PRIMARY KEY(key, tenant_id)
+        // so this INSERT is atomic. If it conflicts (key already exists), ROLLBACK immediately
+        // and return a duplicate response — no tank is touched.
+        //
+        // OLD (vulnerable): SELECT idem (outside tx) → BEGIN → UPDATE tanks → COMMIT → INSERT idem
+        //   TOCTOU window: concurrent request passes SELECT before either INSERT completes.
+        //
+        // NEW (safe):       BEGIN → INSERT idem (conflict = duplicate, ROLLBACK) → UPDATE tanks → COMMIT
+        //   No window: only the transaction that wins the INSERT can deduct the tank.
+        const idemInsert = await clientTankDeduct.query(
+          'INSERT INTO settings(tenant_id, key, value) VALUES($1,$2,$3) ON CONFLICT DO NOTHING',
+          [tenantId, `tank_deduct_idem_${idempotencyKey}`,
+           JSON.stringify({ date: today, status: 'processing' })]
+        );
+        if (idemInsert.rowCount === 0) {
+          // Key already exists — this is a duplicate request
+          await clientTankDeduct.query('ROLLBACK');
+          clientTankDeduct.release();
+          console.log(`[tank-deduct] Idempotency: Already processed ${idempotencyKey}`);
+          return res.json({ success: true, duplicate: true, message: 'Already processed' });
+        }
 
         for (const [rawFuelType, liters] of Object.entries(deductions)) {
           if (!liters || liters <= 0) continue;
@@ -2419,6 +2437,12 @@ Pack decoding: "300x40ML-POU"=packQty:300,packSize:"40ml",packType:"Pouch",isCar
           results.push({ fuelType: tank.fuel_type, before, deducted: liters, after });
         }
 
+        // Update idem key with final results (was set to 'processing' at transaction start)
+        await clientTankDeduct.query(
+          'UPDATE settings SET value=$1 WHERE tenant_id=$2 AND key=$3',
+          [JSON.stringify({ date: today, results }), tenantId, `tank_deduct_idem_${idempotencyKey}`]
+        );
+
         await clientTankDeduct.query('COMMIT');
         console.log(`[tank-deduct] COMMIT success. Results: ${JSON.stringify(results)}`);
       } catch (txErr) {
@@ -2428,16 +2452,6 @@ Pack decoding: "300x40ML-POU"=packQty:300,packSize:"40ml",packType:"Pouch",isCar
         throw txErr;
       }
       clientTankDeduct.release();
-
-      // Save idempotency key to prevent retries
-      if (idempotencyKey) {
-        try {
-          await pool.query(
-            'INSERT INTO settings(tenant_id, key, value) VALUES($1,$2,$3) ON CONFLICT DO NOTHING',
-            [tenantId, `tank_deduct_idem_${idempotencyKey}`, JSON.stringify({ date: today, results })]
-          );
-        } catch(e) { /* non-critical */ }
-      }
 
       // Post-commit: fire push notifications (outside transaction)
       for (const r of results) {
