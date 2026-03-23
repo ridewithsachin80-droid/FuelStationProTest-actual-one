@@ -1240,7 +1240,38 @@ async function startServer() {
       const tenantCheck = await client.query('SELECT id FROM tenants WHERE id = $1', [tenantId]);
       if (!tenantCheck.rows.length) { client.release(); return res.status(404).json({ error: 'Tenant not found' }); }
 
-      // TC-019: Server-side tank stock enforcement — prevents overselling.
+      // SECURITY FIX FIND-02: Server-side price sanity check.
+      // Prevents an attacker who bypasses the UI from recording ₹1 for 100L of ₹105 petrol.
+      // Tolerates up to 20% deviation from configured price to allow discounts, rounding, and
+      // short fills. If no price is configured for this fuel, the check is skipped.
+      try {
+        const pricesRow = await client.query(
+          "SELECT value FROM settings WHERE key = 'prices' AND tenant_id = $1",
+          [tenantId]
+        );
+        if (pricesRow.rows[0]) {
+          const prices = JSON.parse(pricesRow.rows[0].value || '{}');
+          // Match price key case-insensitively (petrol, Petrol, premium_petrol, etc.)
+          const priceKey = Object.keys(prices).find(k => k.toLowerCase() === (sale.fuelType||'').toLowerCase());
+          const configuredPrice = priceKey ? parseFloat(prices[priceKey]) : 0;
+          if (configuredPrice > 0) {
+            const expectedAmount = liters * configuredPrice;
+            const deviation = Math.abs(amount - expectedAmount) / expectedAmount;
+            if (deviation > 0.20) { // >20% off
+              client.release();
+              return res.status(422).json({
+                error: `Amount ₹${amount.toFixed(2)} deviates too far from expected ₹${expectedAmount.toFixed(2)} (${liters}L × ₹${configuredPrice}/L). Max allowed deviation is 20%.`,
+                expectedAmount,
+                configuredPrice,
+                deviation: (deviation * 100).toFixed(1) + '%',
+              });
+            }
+          }
+        }
+      } catch(priceErr) {
+        // Non-critical — if price check fails (e.g. no prices configured), allow the sale
+        console.warn('[sales] Price check skipped:', priceErr.message);
+      }
       //
       // GUARD LOGIC — uses last_dip as the authoritative indicator:
       //   • last_dip is EMPTY  → tank has never been measured (brand-new station setup)
