@@ -643,6 +643,12 @@ async function startServer() {
   
   app.post('/api/public/verify-pin/:tenantId', pinVerifyLimiter, async (req, res) => {
     try {
+      // SECURITY FIX SC9: Validate tenant exists before processing any PIN attempt.
+      // Prevents DB pollution from attacks using fake tenantIds.
+      if (!(await checkTenantExists(req.params.tenantId))) {
+        return res.status(404).json({ valid: false });
+      }
+
       // BUG-16 CRITICAL FIX:
       // ROOT CAUSE: The client sends pinHash = SHA-256(pin) via utils.js hashPassword().
       // The server stores pin_hash = bcrypt(pin) via schema.js hashPassword().
@@ -727,9 +733,17 @@ async function startServer() {
           match = false;
         }
       } else if (pinHash) {
-        // Legacy client sending SHA-256 only (no raw pin) — direct compare
-        match = storedHash === pinHash;
-        // Auto-upgrade not possible here (no raw pin available)
+        // SECURITY FIX SC7: Legacy client sending SHA-256 only (no raw pin available).
+        // Only allow this path if the STORED hash is also SHA-256 format.
+        // Reject if stored hash is bcrypt — prevents any cross-format collision attack.
+        if (isSha256) {
+          match = storedHash === pinHash;
+        } else {
+          // Stored is bcrypt but client sent SHA-256 — cannot compare, deny.
+          // This path should not occur with current clients (all send raw pin now).
+          console.warn('[verify-pin] Legacy pinHash sent but stored hash is bcrypt — denying.', 'emp:', r.rows[0].id);
+          match = false;
+        }
       }
       
       // Log the attempt
