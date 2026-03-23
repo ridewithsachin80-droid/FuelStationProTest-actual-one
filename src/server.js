@@ -1246,6 +1246,11 @@ async function startServer() {
       // Comparing in IST date strings avoids this — Indian night shifts work correctly.
       if (sale.date) {
         const saleDateStr = String(sale.date).slice(0, 10); // YYYY-MM-DD
+        // FIX FIND-VAL3: Validate date format before comparison — "invalid-date" would otherwise pass
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(saleDateStr)) {
+          client.release();
+          return res.status(400).json({ error: 'Invalid date format. Use YYYY-MM-DD.' });
+        }
         const istToday = istDate(); // server's IST today string
         const istTomorrow = (() => {
           const d = new Date();
