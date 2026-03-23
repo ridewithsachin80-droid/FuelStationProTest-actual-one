@@ -1811,6 +1811,7 @@ async function emp_doLogin() {
       });
     });
     empState.openReadings = freshOpenings;
+    window._empCarryForwardReadings = Object.assign({}, freshOpenings); // snapshot for mismatch warning
     empState.closeReadings = {}; empState.sales = []; empState.dipReadings = [];
     empState.page = 'readings';
   } else {
@@ -1845,6 +1846,17 @@ function emp_saveReading(mode, key, value) {
     if (v > 9999999) { toast('Reading value too large', 'error'); return; }
     if (mode === 'open') {
       empState.openReadings[key] = v;
+      // OPENING-MISMATCH FIX: warn if employee overrides carry-forward by >1L.
+      // The carry-forward is stored in empState.openReadings before any edits,
+      // so we compare new value against the previously loaded carry-forward.
+      // This catches typos (123400 instead of 123456) and unexplained gaps.
+      const carryForwardVal = window._empCarryForwardReadings?.[key];
+      if (carryForwardVal !== undefined && carryForwardVal > 0) {
+        const gap = Math.abs(v - carryForwardVal);
+        if (gap > 1) {
+          toast(`⚠️ Opening ${v.toLocaleString('en-IN')} differs from previous closing ${carryForwardVal.toLocaleString('en-IN')} by ${gap.toFixed(1)}L — please verify`, 'warning');
+        }
+      }
       // OPENING-READING FIX: persist opening reading to server immediately.
       // This saves it as nozzleOpen in the pump's data_json so if the session
       // is lost, the reading is still in DB and next login can reference it.
@@ -1859,7 +1871,7 @@ function emp_saveReading(mode, key, value) {
         toast('Reading difference exceeds 50,000L — please verify the meter value.', 'error');
         return;
       }
-      if (ov !== undefined && (v - ov) > 10000) {
+      if (ov !== undefined && (v - ov) >= 10000) {
         // Large but plausible — show warning and let manager confirm
         const diff = (v - ov).toFixed(0);
         if (!window._largeReadingConfirmed || window._largeReadingConfirmed !== key + '_' + v) {
