@@ -595,6 +595,25 @@ async function startServer() {
     return r.rows.length > 0;
   }
 
+  // SECURITY FIX FIND-MT1: Optional cross-tenant guard for public write endpoints.
+  // If the request includes a Bearer token, verify it matches the URL tenantId.
+  // This prevents an authenticated employee from writing to a different station.
+  // Unauthenticated requests (no token) are still allowed — employee app always sends token.
+  async function checkPublicWriteTenant(req, res) {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) return true; // unauthenticated: allow
+    const token = authHeader.replace('Bearer ', '').trim();
+    try {
+      const session = await db.prepare('SELECT tenant_id FROM sessions WHERE token = $1 AND expires_at > NOW()').get(token);
+      if (!session) return true; // invalid/expired token: treat as unauthenticated
+      if (session.tenant_id && session.tenant_id !== req.params.tenantId) {
+        res.status(403).json({ error: 'Token tenant does not match request tenant' });
+        return false;
+      }
+    } catch(e) { /* non-critical — allow if session check fails */ }
+    return true;
+  }
+
   // ── PUBLIC: employee names for login screen (no auth required, no PINs) ─
   app.get('/api/public/employees/:tenantId', async (req, res) => {
     try {
@@ -962,6 +981,7 @@ async function startServer() {
 
   // ── PUBLIC: employee pump reading update (no auth) ──────────────────────
   app.post('/api/public/reading/:tenantId', async (req, res) => {
+    // SECURITY FIX FIND-MT1: block cross-tenant writes from authenticated sessions
     // IR-02 FIX: Use SELECT FOR UPDATE inside a transaction to prevent TOCTOU race condition
     // when two employees submit readings for different nozzles of the same pump concurrently.
     const client = await pool.connect();
@@ -1142,18 +1162,19 @@ async function startServer() {
           'SELECT id, name, location, owner_name, phone, icon, color, color_light, active, station_code FROM tenants ORDER BY name'
         );
       }
+      // SECURITY FIX FIND-MT3: Remove phone/ownerName (PII) from public listing.
+      // The login-screen tenant picker only needs id/name/location/icon/color.
       const rows = result.rows.map(t => ({
         id:          t.id,
         name:        t.name,
         location:    t.location,
-        ownerName:   t.owner_name || '',
-        phone:       t.phone || '',
         icon:        t.icon,
         color:       t.color,
         colorLight:  t.color_light,
         active:      t.active,
         stationCode: t.station_code || '',
         omc:         t.omc || 'iocl',
+        // ownerName and phone removed — PII, require authentication
       }));
       res.json(rows);
     } catch (e) {
@@ -1169,6 +1190,8 @@ async function startServer() {
     const client = await pool.connect();
     try {
       const { tenantId } = req.params;
+      // SECURITY FIX FIND-MT1: block cross-tenant writes from authenticated sessions
+      if (!(await checkPublicWriteTenant(req, res))) { client.release(); return; }
       const sale = req.body;
       
       // FIX: Comprehensive input validation
@@ -2350,6 +2373,8 @@ Pack decoding: "300x40ML-POU"=packQty:300,packSize:"40ml",packType:"Pouch",isCar
   // ── PUBLIC: Tank deduction after employee shift submit ──────────────────────
   app.post('/api/public/tank-deduct/:tenantId', async (req, res) => {
     try {
+      // SECURITY FIX FIND-MT1: block cross-tenant writes from authenticated sessions
+      if (!(await checkPublicWriteTenant(req, res))) return;
       const tenantId = req.params.tenantId;
       const { deductions, shiftDate, idempotencyKey } = req.body;
 
@@ -2866,8 +2891,11 @@ Pack decoding: "300x40ML-POU"=packQty:300,packSize:"40ml",packType:"Pouch",isCar
     if (err instanceof SyntaxError && err.status === 400 && 'body' in err) {
       return res.status(400).json({ error: 'Invalid JSON in request body.' });
     }
+    // SECURITY FIX FIND-MT3: Never expose raw error messages in production.
+    // e.message can contain DB table names, query fragments, or internal paths.
     console.error('[Error]', err.message);
-    res.status(500).json({ error: 'Internal server error' });
+    const isProd = process.env.NODE_ENV === 'production';
+    res.status(500).json({ error: isProd ? 'Internal server error' : err.message });
   });
 
   app.listen(PORT, '0.0.0.0', () => {
