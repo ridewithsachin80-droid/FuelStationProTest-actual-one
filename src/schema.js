@@ -605,11 +605,27 @@ async function initDatabase() {
     `CREATE INDEX IF NOT EXISTS idx_sub_payments_tenant ON subscription_payments(tenant_id)`,
     `CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token)`,
     `CREATE INDEX IF NOT EXISTS idx_sales_tenant_date ON sales(tenant_id, date DESC)`,
+    // PERF FIX FIND-DB3: covering index for P&L GROUP BY fuel_type — eliminates heap fetch
+    `CREATE INDEX IF NOT EXISTS idx_sales_analytics ON sales(tenant_id, date, fuel_type)  INCLUDE (amount, liters)`,
     `CREATE INDEX IF NOT EXISTS idx_login_attempts_ip ON login_attempts(ip_address, attempted_at)`,
     // PERF FIX FIND-PERF1: composite index for PIN lockout query (tenant_id+username)
     `CREATE INDEX IF NOT EXISTS idx_login_attempts_tenant_user ON login_attempts(tenant_id, username, attempted_at DESC)`,
+    // QUERY OPT: Missing indexes identified in DB optimization audit
+    // meter_readings — no index at all, seq scan on every tenant page load
+    `CREATE INDEX IF NOT EXISTS idx_meter_readings_tenant_date ON meter_readings(tenant_id, date DESC)`,
+    // pump_readings — no index at all
+    `CREATE INDEX IF NOT EXISTS idx_pump_readings_tenant_date ON pump_readings(tenant_id, recorded_at DESC)`,
+    // tanks — frequent single-table SELECT by tenant_id (tanks page, shift submit, sales validation)
+    `CREATE INDEX IF NOT EXISTS idx_tanks_tenant ON tanks(tenant_id)`,
+    // credit_transactions — missing tenant_id-first index for date-range listing
+    // (existing idx has customer_id first — good for balance lookup, bad for listing all)
+    `CREATE INDEX IF NOT EXISTS idx_credit_tx_tenant_date ON credit_transactions(tenant_id, date DESC)`,
+    // credit_transactions — fix column order: tenant_id first for multi-tenant isolation
+    `CREATE INDEX IF NOT EXISTS idx_credit_tx_tenant_customer ON credit_transactions(tenant_id, customer_id)`,
     `CREATE INDEX IF NOT EXISTS idx_audit_log_tenant ON audit_log(tenant_id, created_at DESC)`,
-    `CREATE INDEX IF NOT EXISTS idx_credit_tx_customer ON credit_transactions(customer_id, tenant_id)`,
+    // REMOVED: idx_credit_tx_customer (customer_id, tenant_id) — REDUNDANT (FIND-DB2)
+    // idx_credit_tx_tenant_customer(tenant_id, customer_id) fully covers all credit queries.
+    // No app query uses customer_id as leading filter without tenant_id.
     `CREATE INDEX IF NOT EXISTS idx_employees_tenant ON employees(tenant_id, active)`,
     `CREATE INDEX IF NOT EXISTS idx_shifts_tenant_date ON shifts(tenant_id, date DESC)`,
     `CREATE INDEX IF NOT EXISTS idx_expenses_tenant_date ON expenses(tenant_id, date DESC)`,
