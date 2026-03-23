@@ -613,6 +613,12 @@ function dataRoutes(db) {
   // accepts the RAW 4-digit PIN and bcrypts it server-side before storing, ensuring the
   // stored hash is always bcrypt-compatible with verifyPassword() in verify-pin.
   router.post('/employees/:id/set-pin', async (req, res) => {
+    // FIX FIND-AUTH2: Only admin/super OR the employee setting their own PIN
+    if (req.userType !== 'admin' && req.userType !== 'super') {
+      if (String(req.userId) !== String(req.params.id)) {
+        return res.status(403).json({ error: 'Employees can only change their own PIN' });
+      }
+    }
     try {
       const { pin } = req.body;
       if (!pin || !/^\d{4,8}$/.test(String(pin))) {
@@ -636,6 +642,11 @@ function dataRoutes(db) {
   router.post('/:store', checkDayLock, async (req, res) => {
     const meta = STORE_MAP[req.params.store];
     if (!meta) return res.status(404).json({ error: 'Unknown store' });
+    // FIX FIND-AUTH1: Employee (userType=employee) must not write to admin-managed stores
+    const ADMIN_ONLY_STORES = new Set(['employees','shifts','tanks','pumps','settings','fuelPurchases','auditLog']);
+    if (req.userType === 'employee' && ADMIN_ONLY_STORES.has(req.params.store)) {
+      return res.status(403).json({ error: 'Insufficient permissions' });
+    }
     try {
       // FIX FIND-B5: validate credit_limit is non-negative when saving credit customer
       if (req.params.store === 'creditCustomers' && req.body) {
