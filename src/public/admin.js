@@ -8245,10 +8245,7 @@ function renderPage() {
       case 'finance': html = renderFinance(D); break;
       case 'lubes':
         // STOCK FIX: refresh lubes products from DB on every visit to pick up employee sales
-        // DELETION FIX: skip if a save is in progress — reading old DB state here would
-        // restore a just-deleted product over the admin's intent (same guard as the 30s timer).
         db.getSetting('lubes_products').then(function(prods) {
-          if (window._lubesSaveInProgress) return;
           if (Array.isArray(prods) && prods.length > 0) {
             window._lubesProducts = prods;
             var el3 = document.getElementById('content');
