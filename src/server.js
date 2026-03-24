@@ -1,0 +1,3135 @@
+/**
+ * FuelBunk Pro — Express Server (PostgreSQL)
+ */
+const express = require('express');
+const helmet = require('helmet');
+const cors = require('cors');
+const rateLimit = require('express-rate-limit');
+const path = require('path');
+
+const { initDatabase } = require('./schema');
+const { authMiddleware, inputSanitizerMiddleware } = require('./security');
+const authRoutes = require('./auth');
+const dataRoutes = require('./data');
+
+// ── Cleanup route secret — set CLEANUP_SECRET env var in Railway to override ──
+// CLEANUP_SECRET must be set in Railway env vars. No default — routes disabled if not configured.
+const CLEANUP_SECRET = process.env.CLEANUP_SECRET || null;
+
+// ── ENHANCED FEATURES ──────────────────────────────────────────────
+const { startMonitoring, getActiveAlerts, acknowledgeAlert, getAlertStats } = require('./alerts');
+const { autoCloseShift, getShiftSummary } = require('./shift-close-enhanced');
+const whatsapp = require('./whatsapp');
+// ────────────────────────────────────────────────────────────────────
+
+// FIX #30: Use toLocaleString('en-CA') for IST date — more reliable than manual +5.5h offset
+// (avoids DST edge cases and is consistent with the same helper in data.js)
+function istDate() {
+  return new Date().toLocaleString('en-CA', { timeZone: 'Asia/Kolkata' }).slice(0, 10);
+}
+
+async function startServer() {
+  const db = await initDatabase();
+  const app = express();
+  const PORT = process.env.PORT || 3000;
+
+  app.locals.db = db;
+  app.set('trust proxy', 1);
+  
+  console.log('[Server] Initializing FuelStation Pro Enhanced Edition...');
+  console.log(`[WhatsApp] ${whatsapp.enabled ? 'Enabled ✓' : 'Disabled (set WHATSAPP_API_KEY to enable)'}`);
+  
+  // Start alert monitoring for all active tenants
+  try {
+    const { pool } = require('./schema');
+    const tenants = await pool.query('SELECT id FROM tenants WHERE active = 1');
+    for (const tenant of tenants.rows) {
+      await startMonitoring(tenant.id);
+    }
+    console.log(`[Alerts] Monitoring started for ${tenants.rows.length} tenant(s) ✓`);
+  } catch (e) {
+    console.error('[Alerts] Failed to start monitoring:', e.message);
+  }
+
+  // L-01 FIX: Enforce HTTPS in production — Railway sets x-forwarded-proto
+  app.use((req, res, next) => {
+    if (process.env.NODE_ENV === 'production' &&
+        req.headers['x-forwarded-proto'] &&
+        req.headers['x-forwarded-proto'] !== 'https') {
+      return res.redirect(301, 'https://' + req.headers.host + req.url);
+    }
+    next();
+  });
+
+  // BUG-08 FIX: CSP was fully disabled to allow inline scripts. Instead, enable CSP
+  // with unsafe-inline only for scripts (required for SPA), keeping all other protections.
+  app.use(helmet({
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc:    ["'self'"],
+        // FIX: Added 'wasm-unsafe-eval' — required for Tesseract.js WebAssembly (number plate OCR).
+        // Without this, the browser refuses to compile the .wasm file and plate scanning silently fails.
+        // Also added 'unsafe-eval' for same reason (older browser fallback).
+        scriptSrc:     ["'self'", "'unsafe-inline'", "'unsafe-eval'", "'wasm-unsafe-eval'", 'blob:', 'https://cdn.jsdelivr.net', 'https://cdnjs.cloudflare.com', 'https://checkout.razorpay.com', 'https://unpkg.com'],
+        scriptSrcAttr: ["'unsafe-inline'"],
+        styleSrc:      ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
+        fontSrc:       ["'self'", 'data:', 'https://fonts.gstatic.com'],
+        imgSrc:        ["'self'", 'data:', 'blob:'],
+        // FIX: Added 'data:' to connectSrc — Tesseract.js loads the .wasm binary as a data: URL.
+        // Also added unpkg.com as Tesseract CDN fallback and blob: for worker fetch.
+        connectSrc:    ["'self'", 'data:', 'blob:', 'https://cdn.jsdelivr.net', 'https://cdnjs.cloudflare.com', 'https://unpkg.com', 'https://api.callmebot.com', 'https://api.razorpay.com', 'https://api.anthropic.com'],
+        // FIX: Added blob: and data: for Tesseract Web Worker which is loaded as a blob URL
+        workerSrc:     ["'self'", 'blob:', 'data:'],
+        manifestSrc:   ["'self'"],
+        objectSrc:     ["'none'"],
+        frameSrc:      ["'self'", 'blob:'],
+        // FIX: child-src needed for Tesseract worker in some browsers
+        childSrc:      ["'self'", 'blob:', 'data:'],
+      }
+    },
+    crossOriginEmbedderPolicy: false,
+  }));
+  // BUG-07 FIX: CORS wildcard (origin: true) with credentials: true is a security risk.
+  // Use explicit CORS_ORIGIN env var in production; fall back to same-origin only.
+  const corsOrigin = process.env.CORS_ORIGIN || false; // false = same-origin only
+  app.use(cors({
+    origin: corsOrigin || false,
+    credentials: corsOrigin ? true : false,
+  }));
+  
+  // ── TIERED RATE LIMITING ────────────────────────────────────────────────────
+  // SECURITY FIX: Replaced single blunt 5000 req/min global limiter (effectively
+  // no protection) with three purpose-fit tiers:
+  //
+  //  Tier A — API data endpoints  : 300 req/min per IP+tenant  (~5 req/sec per station)
+  //  Tier B — Auth endpoints      : 30 attempts / 5 min        (existing, kept as-is)
+  //  Tier C — Public/offline paths: 120 req/min per IP+tenant  (health + public sales)
+  //
+  // A fuel station app has ~5–20 active users per station at peak. 300 req/min = 5/sec
+  // which comfortably handles aggressive polling and background syncs while blocking
+  // credential-stuffing, scraping, and DDoS at the data layer.
+  //
+  // keyGenerator: IP alone is too coarse on Railway's shared proxy.
+  // IP + tenantId gives fair per-station bucketing without hurting legitimate users.
+
+  const _rlKeyGen = (req) => {
+    const tenantId = req.body?.tenantId || req.params?.tenantId || req.params?.tid || '';
+    const ip = (req.headers['x-forwarded-for'] || req.ip || 'unknown').split(',')[0].trim();
+    return tenantId ? `${ip}:${tenantId}` : ip;
+  };
+  const _rlErrMsg = { error: 'Too many requests — please wait a moment and try again.' };
+
+  // Tier A: General API — data reads, writes, syncs
+  const apiDataLimiter = rateLimit({
+    windowMs: 60_000,         // 1 minute
+    max: 300,                 // 300 req/min per IP+tenant (5 req/sec) — ample for legit use
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: _rlKeyGen,
+    skip: (req) => req.path === '/api/health' || req.path === '/api/health/detailed',
+    message: _rlErrMsg,
+  });
+
+  // Tier C: Public/static-serving paths — higher limit, no auth required
+  const publicPathLimiter = rateLimit({
+    windowMs: 60_000,
+    max: 120,                 // 120 req/min for unauthenticated public endpoints
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: _rlKeyGen,
+    message: _rlErrMsg,
+  });
+
+  // Apply Tier A to all /api/* routes (Tier B for /api/auth is applied separately below)
+  app.use('/api', apiDataLimiter);
+  // Apply Tier C to public static file serving and health checks
+  app.use('/api/health',  publicPathLimiter);
+  app.use('/api/public',  publicPathLimiter);
+  
+  app.use(express.json({ limit: '2mb' }));
+  app.use(express.urlencoded({ extended: false }));
+  app.use(inputSanitizerMiddleware);
+
+  // TIMEOUT FIX: scan-invoice sends base64 image data which can be up to ~2MB even after
+  // compression. Override the 2mb JSON limit specifically for this route with a higher limit
+  // so large invoices aren't silently rejected with a 413 before reaching the handler.
+  app.use('/api/data/scan-invoice', express.json({ limit: '10mb' }));
+  app.use('/api/utr-extract', express.json({ limit: '5mb' }));
+
+  // Serve frontend — index.html is in root directory
+  const publicDir = require('fs').existsSync(path.join(__dirname, 'public'))
+    ? path.join(__dirname, 'public')
+    : __dirname;
+
+  // Serve PWA manifest + service worker with correct headers
+  app.get('/manifest.json', (req, res) => {
+    res.setHeader('Content-Type', 'application/manifest+json');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.sendFile(path.join(publicDir, 'manifest.json'));
+  });
+  app.get('/sw.js', (req, res) => {
+    res.setHeader('Content-Type', 'application/javascript');
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Service-Worker-Allowed', '/');
+    res.sendFile(path.join(publicDir, 'sw.js'));
+  });
+
+  // FIX F-07: Serve self-hosted Chart.js so SW can cache it for offline use
+  // Download: npm run setup (see package.json) or manually copy chart.umd.min.js → public/chart.min.js
+  app.get('/chart.min.js', (req, res) => {
+    const f = path.join(publicDir, 'chart.min.js');
+    const fs = require('fs');
+    if (fs.existsSync(f)) {
+      res.setHeader('Content-Type', 'application/javascript');
+      res.setHeader('Cache-Control', 'public, max-age=2592000'); // 30 days — Chart.js rarely changes
+      res.sendFile(f);
+    } else {
+      // Graceful fallback: redirect to CDN if file not yet downloaded
+      res.redirect(302, 'https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js');
+    }
+  });
+
+  // FIX F-02: Screenshots route for manifest.json screenshots field
+  // Place actual PNG screenshots in public/screenshots/ directory
+  app.get('/screenshots/:file', (req, res) => {
+    const fs = require('fs');
+    const f = path.join(publicDir, 'screenshots', path.basename(req.params.file));
+    if (fs.existsSync(f)) {
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      res.sendFile(f);
+    } else {
+      // FIX #8: Don't set image/png MIME type when returning a text error — causes browser decode errors
+      res.status(404).json({ error: 'Screenshot not found. Add PNG files to public/screenshots/' });
+    }
+  });
+
+  // ── Split JS bundle (Option A refactor) ─────────────────────────────────
+  // Each file is versioned via query string (?v=) in index.html for cache busting
+  // BUG-15 FIX: Added api-client.js, bridge.js, autosave.js — they were served only
+  // through express.static() without explicit cache headers and SW pre-cache support.
+  const JS_BUNDLE_FILES = ['multitenant.js', 'utils.js', 'admin.js', 'employee.js', 'app.js', 'api-client.js', 'bridge.js', 'autosave.js'];
+  JS_BUNDLE_FILES.forEach(fname => {
+    app.get('/' + fname, (req, res) => {
+      res.setHeader('Content-Type', 'application/javascript');
+      res.setHeader('Cache-Control', 'public, max-age=3600'); // 1hr; SW handles offline
+      res.sendFile(path.join(publicDir, fname));
+    });
+  });
+  app.get('/icon-:size.png', (req, res) => {
+    const f = path.join(publicDir, `icon-${req.params.size}.png`);
+    if (require('fs').existsSync(f)) {
+      res.setHeader('Cache-Control', 'public, max-age=604800');
+      res.sendFile(f);
+    } else res.sendStatus(404);
+  });
+  app.get('/apple-touch-icon.png', (req, res) => {
+    const f = path.join(publicDir, 'apple-touch-icon.png');
+    if (require('fs').existsSync(f)) {
+      res.setHeader('Cache-Control', 'public, max-age=604800');
+      res.sendFile(f);
+    } else res.sendStatus(404);
+  });
+
+  app.use(express.static(publicDir, {
+    maxAge: 0,
+    setHeaders: (res, fp) => {
+      if (fp.endsWith('.html')) res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      if (fp.endsWith('.png') || fp.endsWith('.svg')) res.setHeader('Cache-Control', 'public, max-age=604800');
+    }
+  }));
+
+  // FIX #37: pool must be imported BEFORE the /api/health handler that uses it
+  const { pool } = require('./schema');
+
+  // /api/health is in publicPaths (security.js) — no auth required
+  app.get('/api/health', async (req, res) => {
+    try {
+      await pool.query('SELECT 1');
+      res.json({ status: 'ok', database: 'connected', uptime: process.uptime() });
+    } catch (e) {
+      res.status(503).json({ status: 'degraded', database: 'error', error: e.message, uptime: process.uptime() });
+    }
+  });
+
+  // ── QA Test Dashboard — served from same origin (avoids CORS) ──────────
+  // Access: /qa-test?secret=YOUR_CLEANUP_SECRET
+  // Served from same origin so fetch() calls to /api/* work without CORS issues.
+  app.get('/qa-test', (req, res) => {
+    if (!CLEANUP_SECRET || req.query.secret !== CLEANUP_SECRET) {
+      return res.status(403).send('<h2>403 — QA dashboard disabled. Set CLEANUP_SECRET in Railway.</h2>');
+    }
+    res.sendFile(path.join(__dirname, 'public', 'qa-test.html'));
+  });
+  // ── END QA TEST DASHBOARD ────────────────────────────────────────────────
+
+  // ── MANUAL TANK SYNC: Admin can force-sync tank levels from today's sales ─────
+  // GET /api/cleanup/sync-tanks?secret=YOUR_CLEANUP_SECRET&tenantId=stn_xxx
+  // This is a one-time fix for when tank-deduct calls failed silently
+  app.get('/api/cleanup/sync-tanks', async (req, res) => {
+    if (req.query.secret !== CLEANUP_SECRET) return res.status(403).json({ error: 'Forbidden' });
+    const tenantId = req.query.tenantId;
+    if (!tenantId) return res.status(400).json({ error: 'tenantId required' });
+    try {
+      const today = istDate();
+      // Sum all sales by fuel type for today
+      const salesRows = await pool.query(
+        `SELECT COALESCE(fuel_type,'petrol') AS ft,
+                COALESCE(SUM(COALESCE(liters,quantity,0)),0) AS total_liters
+         FROM sales
+         WHERE tenant_id=$1 AND date=$2
+         GROUP BY fuel_type`,
+        [tenantId, today]
+      );
+      const tanks = await pool.query(
+        'SELECT id, fuel_type, current_level, capacity FROM tanks WHERE tenant_id=$1',
+        [tenantId]
+      );
+      const tankMap = {};
+      tanks.rows.forEach(t => { tankMap[t.fuel_type.toLowerCase()] = t; });
+
+      const results = [];
+      for (const row of salesRows.rows) {
+        const ft = (row.ft||'').toLowerCase();
+        const liters = parseFloat(row.total_liters) || 0;
+        const tank = tankMap[ft];
+        if (!tank || liters <= 0) { results.push({ ft, liters, skipped: true }); continue; }
+        const before = parseFloat(tank.current_level) || 0;
+        // Only deduct if today's sales haven't been deducted yet (tank still near capacity)
+        const after = Math.max(0, before - liters);
+        await pool.query(
+          `UPDATE tanks SET current_level=$1, last_dip=$2, last_dip_source='manual_sync', updated_at=NOW()
+           WHERE tenant_id=$3 AND id=$4`,
+          [after, today, tenantId, tank.id]
+        );
+        results.push({ ft: tank.fuel_type, before, deducted: liters, after });
+      }
+      res.json({ success: true, today, results });
+    } catch(e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ── TANK DEBUG: Show actual DB tank state ──────────────────────────────────
+  app.get('/api/cleanup/tank-debug', async (req, res) => {
+    if (req.query.secret !== CLEANUP_SECRET) return res.status(403).json({ error: 'Forbidden' });
+    const tenantId = req.query.tenantId;
+    if (!tenantId) return res.status(400).json({ error: 'tenantId required' });
+    try {
+      const tanks = await pool.query(
+        'SELECT id, fuel_type, current_level, capacity, last_dip, last_dip_source FROM tanks WHERE tenant_id=$1 ORDER BY id',
+        [tenantId]
+      );
+      const today = istDate();
+      const sales = await pool.query(
+        `SELECT COALESCE(fuel_type,'?') AS ft, COUNT(*) AS cnt,
+                COALESCE(SUM(COALESCE(liters,quantity,0)),0) AS total_liters
+         FROM sales WHERE tenant_id=$1 AND date=$2 GROUP BY fuel_type`,
+        [tenantId, today]
+      );
+      res.json({ tanks: tanks.rows, todaySales: sales.rows, today });
+    } catch(e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ── LUBES DEBUG: Show actual lubes_products and lubes_sales from DB ──────
+  app.get('/api/cleanup/lubes-debug', async (req, res) => {
+    if (req.query.secret !== CLEANUP_SECRET) return res.status(403).json({ error: 'Forbidden' });
+    const tenantId = req.query.tenantId;
+    if (!tenantId) return res.status(400).json({ error: 'tenantId required' });
+    try {
+      const prodsRow = await pool.query(
+        "SELECT value, updated_at FROM settings WHERE key='lubes_products' AND tenant_id=$1",
+        [tenantId]
+      );
+      const salesRow = await pool.query(
+        "SELECT value, updated_at FROM settings WHERE key='lubes_sales' AND tenant_id=$1",
+        [tenantId]
+      );
+      const prods = prodsRow.rows[0] ? JSON.parse(prodsRow.rows[0].value || '[]') : [];
+      const sales = salesRow.rows[0] ? JSON.parse(salesRow.rows[0].value || '[]') : [];
+      res.json({
+        productsCount: prods.length,
+        productsUpdatedAt: prodsRow.rows[0]?.updated_at,
+        products: prods.map(p => ({ id: p.id, name: p.name, stock: p.stock })),
+        salesCount: sales.length,
+        salesUpdatedAt: salesRow.rows[0]?.updated_at,
+        recentSales: sales.slice(0, 10).map(s => ({ date: s.date, product: s.productName, qty: s.qty, amount: s.amount, employee: s.employee })),
+      });
+    } catch(e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ── ONE-TIME CLEANUP: Wipe all lubes products + sales for a tenant ────────────
+  // Use when stale lube data (from a deleted station) reappears after station recreate.
+  // Visit: /api/cleanup/wipe-lubes?secret=YOUR_SECRET&tenantId=stn_xxx
+  // This deletes lubes_products and lubes_sales settings rows AND the lubes_sales table rows.
+  // The admin will need to re-add their lube catalogue from scratch.
+  app.get('/api/cleanup/wipe-lubes', async (req, res) => {
+    if (req.query.secret !== CLEANUP_SECRET) return res.status(403).json({ error: 'Forbidden' });
+    const tenantId = req.query.tenantId;
+    if (!tenantId) return res.status(400).json({ error: 'tenantId required' });
+    try {
+      // Delete from settings table (lubes_products and lubes_sales are stored as JSON here)
+      const delSettings = await pool.query(
+        "DELETE FROM settings WHERE tenant_id = $1 AND key IN ('lubes_products','lubes_sales')",
+        [tenantId]
+      );
+      // Delete from dedicated lubes_sales table (used by the lube-sale endpoint)
+      const delSalesTable = await pool.query(
+        'DELETE FROM lubes_sales WHERE tenant_id = $1',
+        [tenantId]
+      );
+      // Delete from lubes_products table if it exists
+      const delProdsTable = await pool.query(
+        'DELETE FROM lubes_products WHERE tenant_id = $1',
+        [tenantId]
+      ).catch(() => ({ rowCount: 0 }));
+      res.json({
+        success: true,
+        tenantId,
+        deletedSettingsRows: delSettings.rowCount,
+        deletedSalesTableRows: delSalesTable.rowCount,
+        deletedProductsTableRows: delProdsTable.rowCount,
+        message: 'Lube catalogue and sales wiped. Reload the admin app to see the clean state.',
+      });
+    } catch(e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ── ONE-TIME CLEANUP: Unlock super admin (clear login_attempts lockout) ──
+  // Visit /api/cleanup/unlock-admin?secret=YOUR_CLEANUP_SECRET to clear lockout instantly.
+  app.get('/api/cleanup/unlock-admin', async (req, res) => {
+    if (req.query.secret !== CLEANUP_SECRET) {
+      return res.status(403).json({ error: 'Invalid secret' });
+    }
+    try {
+      // Clear ALL failed login attempts for 'admin' username
+      const r1 = await pool.query(
+        `DELETE FROM login_attempts WHERE username = 'admin' AND success = 0`
+      );
+      // Also clear recent IP-based attempts to unblock IP lockout
+      const r2 = await pool.query(
+        `DELETE FROM login_attempts WHERE success = 0 AND attempted_at > NOW() - INTERVAL '30 minutes'`
+      );
+      res.json({
+        success: true,
+        message: 'Admin lockout cleared — you can now log in',
+        adminAttemptsCleared: r1.rowCount,
+        recentAttemptsCleared: r2.rowCount,
+      });
+    } catch (e) {
+      console.error('[Cleanup] unlock-admin error:', e.message);
+      res.status(500).json({ error: e.message });
+    }
+  });
+  // ── END UNLOCK ────────────────────────────────────────────────────────────
+  // Visit /api/cleanup/dedup-expenses?secret=YOUR_CLEANUP_SECRET once to fix duplicates.
+  // This endpoint is safe to call multiple times — it is idempotent.
+  app.get('/api/cleanup/dedup-expenses', async (req, res) => {
+    if (req.query.secret !== CLEANUP_SECRET) {
+      return res.status(403).json({ error: 'Invalid secret' });
+    }
+    try {
+      // Count before
+      const before = await pool.query(
+        `SELECT COUNT(*) as total FROM expenses WHERE category = 'Fuel Purchase'`
+      );
+
+      // Strategy 1: dedup by data_json purchaseId — keep LATEST (highest id = most recent edit)
+      const r1 = await pool.query(`
+        DELETE FROM expenses e1
+        USING expenses e2
+        WHERE e1.tenant_id = e2.tenant_id
+          AND e1.data_json::jsonb->>'purchaseId' IS NOT NULL
+          AND e1.data_json::jsonb->>'purchaseId' != ''
+          AND e1.data_json::jsonb->>'purchaseId' = e2.data_json::jsonb->>'purchaseId'
+          AND e1.category = 'Fuel Purchase'
+          AND e2.category = 'Fuel Purchase'
+          AND e1.id < e2.id
+      `);
+
+      // Strategy 2: dedup by description+amount+date — keep LATEST (highest id)
+      // because editing a purchase creates a newer expense entry with the updated values.
+      // Keeping the oldest would restore the pre-edit stale amount.
+      const r2 = await pool.query(`
+        DELETE FROM expenses e1
+        USING expenses e2
+        WHERE e1.tenant_id = e2.tenant_id
+          AND e1.category = 'Fuel Purchase'
+          AND e2.category = 'Fuel Purchase'
+          AND e1.description = e2.description
+          AND e1.amount = e2.amount
+          AND e1.date = e2.date
+          AND e1.id < e2.id
+      `);
+
+      // Count after
+      const after = await pool.query(
+        `SELECT COUNT(*) as total FROM expenses WHERE category = 'Fuel Purchase'`
+      );
+
+      // Strategy 3: For edited purchases, old and new entries have different amounts
+      // but same description prefix (e.g. "Diesel — 20,000L @") — keep the latest.
+      // Uses LIKE matching on description up to the "@" sign.
+      const r3 = await pool.query(`
+        DELETE FROM expenses e1
+        USING expenses e2
+        WHERE e1.tenant_id = e2.tenant_id
+          AND e1.category = 'Fuel Purchase'
+          AND e2.category = 'Fuel Purchase'
+          AND e1.date = e2.date
+          AND e1.id < e2.id
+          AND SPLIT_PART(e1.description, '@', 1) = SPLIT_PART(e2.description, '@', 1)
+          AND SPLIT_PART(e1.description, '@', 1) != ''
+      `);
+
+      const deleted = (r1.rowCount || 0) + (r2.rowCount || 0) + (r3.rowCount || 0);
+      res.json({
+        success: true,
+        message: deleted > 0
+          ? `Removed ${deleted} duplicate fuel purchase expense entries`
+          : 'No duplicates found — database is already clean',
+        before: parseInt(before.rows[0].total),
+        after: parseInt(after.rows[0].total),
+        deleted,
+      });
+    } catch (e) {
+      console.error('[Cleanup] dedup-expenses error:', e.message);
+      res.status(500).json({ error: e.message });
+    }
+  });
+  // ── END ONE-TIME CLEANUP ──────────────────────────────────────────────────
+
+  // PRODUCTION ENHANCEMENT: Detailed health check with metrics
+  // Provides comprehensive system status for monitoring and alerting
+  app.get('/api/health/detailed', async (req, res) => {
+    const health = {
+      status: 'healthy',
+      timestamp: new Date().toISOString(),
+      version: '1.2.0',
+      uptime: Math.floor(process.uptime()),
+      environment: process.env.NODE_ENV || 'development',
+      
+      // Memory metrics
+      memory: {
+        used: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
+        total: Math.round(process.memoryUsage().heapTotal / 1024 / 1024),
+        rss: Math.round(process.memoryUsage().rss / 1024 / 1024),
+        unit: 'MB'
+      },
+      
+      // Database health
+      database: {
+        connected: false,
+        responseTime: 0,
+        pool: {
+          total: 0,
+          idle: 0,
+          waiting: 0
+        }
+      }
+    };
+    
+    try {
+      // Test database connectivity and measure response time
+      const start = Date.now();
+      await pool.query('SELECT 1');
+      health.database.connected = true;
+      health.database.responseTime = Date.now() - start;
+      
+      // Get connection pool stats
+      health.database.pool = {
+        total: pool.totalCount || 0,
+        idle: pool.idleCount || 0,
+        waiting: pool.waitingCount || 0
+      };
+      
+      // Alert if pool utilization is high (>80%)
+      const poolUtilization = health.database.pool.total > 0
+        ? ((health.database.pool.total - health.database.pool.idle) / health.database.pool.total) * 100
+        : 0;
+      if (poolUtilization > 80) {
+        health.warnings = health.warnings || [];
+        health.warnings.push(`High pool utilization: ${poolUtilization.toFixed(1)}%`);
+      }
+      
+      // Alert if memory usage is high (>85%)
+      const memoryUtilization = (process.memoryUsage().heapUsed / process.memoryUsage().heapTotal) * 100;
+      if (memoryUtilization > 85) {
+        health.warnings = health.warnings || [];
+        health.warnings.push(`High memory usage: ${memoryUtilization.toFixed(1)}%`);
+      }
+      
+      // Alert if database response is slow (>100ms)
+      if (health.database.responseTime > 100) {
+        health.warnings = health.warnings || [];
+        health.warnings.push(`Slow database response: ${health.database.responseTime}ms`);
+      }
+      
+    } catch (e) {
+      health.status = 'unhealthy';
+      health.database.error = e.message;
+    }
+    
+    // Set appropriate HTTP status code
+    const statusCode = health.status === 'healthy' ? 200 : 503;
+    res.status(statusCode).json(health);
+  });
+
+  // FIX #19: Rate limiter for all /api/public/* routes — prevents abuse / DDoS
+  const publicRouteLimiter = rateLimit({
+    windowMs: 60000,
+    max: 100,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many requests, please slow down.' },
+  });
+  app.use('/api/public', publicRouteLimiter);
+
+  // FIX #11: Shared tenant existence check — prevents tenant enumeration on public routes
+  async function checkTenantExists(tenantId) {
+    const r = await pool.query('SELECT id FROM tenants WHERE id = $1 AND active = 1', [tenantId]);
+    return r.rows.length > 0;
+  }
+
+  // SECURITY FIX FIND-MT1: Optional cross-tenant guard for public write endpoints.
+  // If the request includes a Bearer token, verify it matches the URL tenantId.
+  // This prevents an authenticated employee from writing to a different station.
+  // Unauthenticated requests (no token) are still allowed — employee app always sends token.
+  async function checkPublicWriteTenant(req, res) {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) return true; // unauthenticated: allow
+    const token = authHeader.replace('Bearer ', '').trim();
+    try {
+      const session = await db.prepare('SELECT tenant_id FROM sessions WHERE token = $1 AND expires_at > NOW()').get(token);
+      if (!session) return true; // invalid/expired token: treat as unauthenticated
+      if (session.tenant_id && session.tenant_id !== req.params.tenantId) {
+        res.status(403).json({ error: 'Token tenant does not match request tenant' });
+        return false;
+      }
+    } catch(e) { /* non-critical — allow if session check fails */ }
+    return true;
+  }
+
+  // ── PUBLIC: employee names for login screen (no auth required, no PINs) ─
+  app.get('/api/public/employees/:tenantId', async (req, res) => {
+    try {
+      if (!(await checkTenantExists(req.params.tenantId))) return res.json([]);
+      // PERMANENT FIX: Removed "AND pin_hash IS NOT NULL AND pin_hash != ''" filter.
+      // That filter caused the login screen to show "No employees with PIN set" when
+      // employees existed but had old SHA-256 hashes (not bcrypt) or no hash yet.
+      // The login screen should always show all active employees — PIN verification
+      // happens server-side at /api/public/verify-pin, not by filtering here.
+      const r = await pool.query(
+        'SELECT id, name, role, shift, data_json FROM employees WHERE tenant_id = $1 AND active = 1 ORDER BY name',
+        [req.params.tenantId]
+      );
+      res.json(r.rows.map(e => {
+        let permissions = {};
+        try { const d = JSON.parse(e.data_json || '{}'); permissions = d.permissions || {}; } catch {}
+        return {
+          id: e.id, name: e.name, role: e.role, shift: e.shift || '',
+          permissions
+        };
+      }));
+    } catch (e) {
+      res.json([]);
+    }
+  });
+
+  // ── IR-01 FIX: Server-side PIN verification — hash never leaves DB ───────────
+  // FIX: CRITICAL - Strengthen PIN rate limiting to prevent brute force (was 15/5min, now 10/1min per employee)
+  const pinVerifyLimiter = rateLimit({ 
+    windowMs: 60000,  // 1 minute (reduced from 5 minutes)
+    max: 10,          // Only 10 attempts per minute (reduced from 15)
+    standardHeaders: true, 
+    legacyHeaders: false,
+    keyGenerator: (req) => {
+      // FIX: Rate limit per tenant + employee combination (not per IP)
+      // This prevents an attacker from trying different employee PINs from same IP
+      return `${req.params.tenantId}-${req.body.employeeId || 'unknown'}`;
+    },
+    handler: (req, res) => {
+      res.status(429).json({ 
+        valid: false, 
+        error: 'Too many PIN attempts. Please wait 1 minute before trying again.' 
+      });
+    }
+  });
+  
+  app.post('/api/public/verify-pin/:tenantId', pinVerifyLimiter, async (req, res) => {
+    try {
+      // SECURITY FIX SC9: Validate tenant exists before processing any PIN attempt.
+      // Prevents DB pollution from attacks using fake tenantIds.
+      if (!(await checkTenantExists(req.params.tenantId))) {
+        return res.status(404).json({ valid: false });
+      }
+
+      // BUG-16 CRITICAL FIX:
+      // ROOT CAUSE: The client sends pinHash = SHA-256(pin) via utils.js hashPassword().
+      // The server stores pin_hash = bcrypt(pin) via schema.js hashPassword().
+      // The old code did: pin_hash === pinHash  →  bcrypt_string === sha256_string  → ALWAYS FALSE.
+      // This caused every employee PIN login to fail with "Incorrect PIN."
+      //
+      // FIX STRATEGY: Accept both `pin` (raw, preferred) and legacy `pinHash` (SHA-256).
+      // If raw `pin` is provided → use bcrypt verifyPassword() (correct, secure).
+      // If only `pinHash` (SHA-256) provided → fall back to direct compare for legacy cached hashes.
+      // Client updated below to send raw `pin` instead of pre-hashed value.
+      const { employeeId, pin, pinHash } = req.body;
+      if (!employeeId || (!pin && !pinHash)) {
+        return res.status(400).json({ valid: false, error: 'Missing fields' });
+      }
+
+      // Check failed attempts in login_attempts table
+      const recentAttempts = await pool.query(
+        `SELECT COUNT(*) as count FROM login_attempts 
+         WHERE tenant_id = $1 AND username = $2 AND success = 0 
+         AND attempted_at > NOW() - INTERVAL '15 minutes'`,
+        [req.params.tenantId, employeeId]
+      );
+      
+      const failedCount = parseInt(recentAttempts.rows[0]?.count || 0);
+      
+      if (failedCount >= 5) {
+        return res.status(429).json({ 
+          valid: false, 
+          error: 'Account temporarily locked due to multiple failed attempts. Please try again in 15 minutes or contact your administrator.',
+          locked: true
+        });
+      }
+      
+      const r = await pool.query(
+        'SELECT id, pin_hash FROM employees WHERE id = $1 AND tenant_id = $2 AND active = 1',
+        [String(employeeId), req.params.tenantId]
+      );
+      
+      if (!r.rows[0]) {
+        await pool.query(
+          'INSERT INTO login_attempts (tenant_id, username, ip_address, success, attempted_at) VALUES ($1, $2, $3, 0, NOW())',
+          [req.params.tenantId, employeeId, req.ip]
+        );
+        return res.json({ valid: false });
+      }
+      
+      if (!r.rows[0].pin_hash) {
+        await pool.query(
+          'INSERT INTO login_attempts (tenant_id, username, ip_address, success, attempted_at) VALUES ($1, $2, $3, 0, NOW())',
+          [req.params.tenantId, employeeId, req.ip]
+        );
+        return res.json({ valid: false });
+      }
+
+      // Verify: smart detection of hash type — bcrypt ($2b$) or legacy SHA-256 (64-char hex)
+      const { verifyPassword: verifyPinPw, hashPassword: hashPinPw } = require('./schema');
+      let match = false;
+      const storedHash = r.rows[0].pin_hash || '';
+      const isBcrypt = storedHash.startsWith('$2');
+      const isSha256 = /^[0-9a-f]{64}$/.test(storedHash);
+
+      if (pin) {
+        if (isBcrypt) {
+          // Standard path: bcrypt.compare
+          match = await verifyPinPw(String(pin), storedHash);
+        } else if (isSha256) {
+          // Legacy SHA-256 stored — compute SHA-256 of raw pin and compare
+          // Then auto-upgrade to bcrypt so future logins use bcrypt
+          const crypto = require('crypto');
+          const sha256ofPin = crypto.createHash('sha256').update(String(pin)).digest('hex');
+          match = sha256ofPin === storedHash;
+          if (match) {
+            // Auto-upgrade: store bcrypt hash so future logins are secure
+            const newHash = await hashPinPw(String(pin));
+            await pool.query('UPDATE employees SET pin_hash = $1 WHERE id = $2 AND tenant_id = $3',
+              [newHash, r.rows[0].id, req.params.tenantId]).catch(() => {});
+            console.log('[verify-pin] Auto-upgraded SHA-256 → bcrypt for employee', r.rows[0].id);
+          }
+        } else {
+          // Unknown hash format — deny and log
+          console.warn('[verify-pin] Unknown hash format for employee', r.rows[0].id, 'len:', storedHash.length);
+          match = false;
+        }
+      } else if (pinHash) {
+        // SECURITY FIX SC7: Legacy client sending SHA-256 only (no raw pin available).
+        // Only allow this path if the STORED hash is also SHA-256 format.
+        // Reject if stored hash is bcrypt — prevents any cross-format collision attack.
+        if (isSha256) {
+          match = storedHash === pinHash;
+        } else {
+          // Stored is bcrypt but client sent SHA-256 — cannot compare, deny.
+          // This path should not occur with current clients (all send raw pin now).
+          console.warn('[verify-pin] Legacy pinHash sent but stored hash is bcrypt — denying.', 'emp:', r.rows[0].id);
+          match = false;
+        }
+      }
+      
+      // Log the attempt
+      await pool.query(
+        'INSERT INTO login_attempts (tenant_id, username, ip_address, success, attempted_at) VALUES ($1, $2, $3, $4, NOW())',
+        [req.params.tenantId, employeeId, req.ip, match ? 1 : 0]
+      );
+      
+      res.json({ valid: match });
+    } catch (e) {
+      console.error('[verify-pin]', e.message);
+      res.status(500).json({ valid: false, error: 'Server error' });
+    }
+  });
+
+  // ── PUBLIC: allocations for employee portal (no auth, no sensitive data) ─
+  app.get('/api/public/allocations/:tenantId', async (req, res) => {
+    try {
+      const r = await pool.query(
+        "SELECT value FROM settings WHERE key = 'allocations' AND tenant_id = $1",
+        [req.params.tenantId]
+      );
+      if (!r.rows[0]) return res.json({});
+      let val = r.rows[0].value;
+      try { val = JSON.parse(val); } catch {}
+      res.json(val || {});
+    } catch (e) {
+      res.json({});
+    }
+  });
+
+  // ── PUBLIC: pump/nozzle info for employee portal (no sensitive data) ──────
+  app.get('/api/public/pumps/:tenantId', async (req, res) => {
+    try {
+      const tenantId = req.params.tenantId;
+      const r = await pool.query(
+        'SELECT id, name, fuel_type, data_json FROM pumps WHERE tenant_id = $1 AND status != $2 ORDER BY id',
+        [tenantId, 'inactive']
+      );
+      // OPENING-READING FIX: also load settings fallback readings for each pump
+      const fallbackRows = await pool.query(
+        "SELECT key, value FROM settings WHERE tenant_id=$1 AND key LIKE 'last_closing_readings_%'",
+        [tenantId]
+      ).catch(() => ({ rows: [] }));
+      const fallbackMap = {};
+      fallbackRows.rows.forEach(row => {
+        const pumpId = row.key.replace('last_closing_readings_', '');
+        try { fallbackMap[pumpId] = JSON.parse(row.value || '{}').nozzleReadings || {}; } catch {}
+      });
+
+      const pumps = r.rows.map(row => {
+        let d = {};
+        try { d = JSON.parse(row.data_json || '{}'); } catch {}
+        const nozzleLabels = d.nozzleLabels || ['A', 'B'];
+        const nozzleFuels = d.nozzleFuels || {};
+        // Merge: pump data_json readings take priority; fallback fills missing nozzles
+        const nozzleReadings = { ...(fallbackMap[String(row.id)] || {}), ...(d.nozzleReadings || {}) };
+        return {
+          id: String(row.id),
+          name: row.name,
+          fuelType: row.fuel_type,
+          nozzles: nozzleLabels.length,
+          nozzleLabels: nozzleLabels,
+          nozzleFuels: nozzleFuels,
+          nozzleReadings: nozzleReadings,
+          nozzleOpen: d.nozzleOpen || {},
+          readingUpdatedAt: d.readingUpdatedAt || '',
+        };
+      });
+      res.json(pumps);
+    } catch (e) {
+      res.json([]);
+    }
+  });
+
+  // ── PUBLIC: fuel prices for employee sales (no sensitive data) ─────────────
+  app.get('/api/public/prices/:tenantId', async (req, res) => {
+    try {
+      const r = await pool.query(
+        "SELECT value FROM settings WHERE key = 'prices' AND tenant_id = $1",
+        [req.params.tenantId]
+      );
+      if (!r.rows[0]) return res.json({});
+      let val = r.rows[0].value;
+      try { val = JSON.parse(val); } catch {}
+      res.json(val || {});
+    } catch (e) {
+      res.json({});
+    }
+  });
+
+  // ── PUBLIC: credit customers for employee sales (name + limit only) ────────
+  app.get('/api/public/creditcustomers/:tenantId', async (req, res) => {
+    try {
+      const r = await pool.query(
+        'SELECT id, name, credit_limit, balance FROM credit_customers WHERE tenant_id = $1 AND active = 1 ORDER BY name',
+        [req.params.tenantId]
+      );
+      res.json(r.rows.map(c => ({ id: c.id, name: c.name, limit: parseFloat(c.credit_limit)||0, outstanding: parseFloat(c.balance)||0 })));
+    } catch (e) {
+      res.json([]);
+    }
+  });
+
+  // ── PUBLIC: staff data for Shift Manager portal (no auth) ────────────────
+  // Returns employees + shifts + roster + attendance — no PINs or salary data
+  app.get('/api/public/staff-data/:tenantId', async (req, res) => {
+    try {
+      const tid = req.params.tenantId;
+      const now = new Date();
+      const py = now.getFullYear();
+      const payrollKey = `payroll_${py}_${now.getMonth()+1}`;
+
+      const [empRows, shiftRows, pumpRows, tankRows, rosterRow, attRow, pricesRow, lubeProdsRow, lubeSalesRow, advancesRow, payrollRow, lubesTableRows] = await Promise.all([
+        pool.query('SELECT id, name, role, shift, phone, data_json FROM employees WHERE tenant_id = $1 AND active = 1 ORDER BY name', [tid]),
+        pool.query('SELECT * FROM shifts WHERE tenant_id = $1 ORDER BY start_time', [tid]),
+        // STAFF-DATA FIX: pumps and tanks were missing — employee portal needs them for pump buttons + price calc
+        pool.query('SELECT * FROM pumps WHERE tenant_id = $1 ORDER BY id', [tid]),
+        pool.query('SELECT * FROM tanks WHERE tenant_id = $1 ORDER BY id', [tid]),
+        pool.query("SELECT value FROM settings WHERE key = 'shift_roster' AND tenant_id = $1", [tid]),
+        pool.query("SELECT value FROM settings WHERE key = 'attendance_data' AND tenant_id = $1", [tid]),
+        pool.query("SELECT value FROM settings WHERE key = 'prices' AND tenant_id = $1", [tid]),
+        pool.query("SELECT value FROM settings WHERE key = 'lubes_products' AND tenant_id = $1", [tid]),
+        pool.query("SELECT value FROM settings WHERE key = 'lubes_sales' AND tenant_id = $1", [tid]),
+        pool.query("SELECT value FROM settings WHERE key = 'advances_data' AND tenant_id = $1", [tid]),
+        pool.query("SELECT value FROM settings WHERE key = $1 AND tenant_id = $2", [payrollKey, tid]),
+        pool.query('SELECT * FROM lubes_products WHERE tenant_id = $1 AND active != 0 ORDER BY name', [tid]),
+      ]);
+
+      const employees = empRows.rows.map(e => {
+        let color = '', permissions = {};
+        try { const d = JSON.parse(e.data_json || '{}'); color = d.color || ''; permissions = d.permissions || {}; } catch {}
+        return { id: e.id, name: e.name, role: e.role, shift: e.shift || '', phone: e.phone || '', color, permissions };
+      });
+
+      const parse = (row, fallback) => { try { return row.rows[0] ? JSON.parse(row.rows[0].value || 'null') || fallback : fallback; } catch { return fallback; } };
+
+      // Normalize pump rows
+      const pumps = pumpRows.rows.map(p => {
+        let extra = {}; try { extra = JSON.parse(p.data_json || '{}'); } catch {}
+        return {
+          id: p.id, name: p.name || `Pump ${p.id}`,
+          fuelType: p.fuel_type || extra.fuelType || 'petrol',
+          nozzles: extra.nozzles || ['A'],
+          nozzleFuels: extra.nozzleFuels || {},
+          nozzleLabels: extra.nozzleLabels || ['A'],
+          nozzleReadings: extra.nozzleReadings || {},
+          nozzleOpen: extra.nozzleOpen || {},
+          status: p.status || 'active',
+          ...extra,
+        };
+      });
+
+      // Normalize tank rows
+      const tanks = tankRows.rows.map(t => {
+        let extra = {}; try { extra = JSON.parse(t.data_json || '{}'); } catch {}
+        return {
+          id: t.id, name: t.name || `Tank ${t.id}`,
+          fuelType: t.fuel_type || extra.fuelType || 'petrol',
+          capacity: parseFloat(t.capacity) || 10000,
+          current: parseFloat(t.current) || 0,
+          lastDip: t.last_dip || '',
+          ...extra,
+        };
+      });
+
+      // Get prices — from settings key or fallback defaults
+      const pricesFromDB = parse(pricesRow, null);
+      const prices = pricesFromDB || { petrol: 102.86, diesel: 88.62, premium_petrol: 112.50 };
+
+      res.json({
+        employees,
+        shifts: shiftRows.rows.map(s => ({
+          id: s.id, name: s.name,
+          start: s.start_time || s.start || '',
+          end: s.end_time || s.end || '',
+          start_time: s.start_time || s.start || '',
+          end_time: s.end_time || s.end || '',
+          status: s.status || 'open',
+        })),
+        pumps,
+        tanks,
+        prices,
+        roster:     parse(rosterRow, {}),
+        attendance: parse(attRow, {}),
+        lubesProducts: (() => {
+          const fromSettings = parse(lubeProdsRow, null);
+          if (fromSettings && fromSettings.length > 0) return fromSettings;
+          return (lubesTableRows?.rows || []).map(p => {
+            let extra = {}; try { extra = JSON.parse(p.data_json || '{}'); } catch {}
+            return {
+              id: p.id, name: p.name || '', brand: p.brand || '',
+              category: p.category || '', unit: p.unit || 'Nos',
+              costPrice: parseFloat(p.cost_price) || 0,
+              sellingPrice: parseFloat(p.selling_price) || 0,
+              stock: parseFloat(p.stock) || 0,
+              minStock: parseFloat(p.min_stock) || 5,
+              hsn: p.hsn || '', gstPct: parseFloat(p.gst_pct) || 18,
+              expiryDate: p.expiry_date || '', active: p.active !== 0,
+              _fromTemplate: true,
+            };
+          });
+        })(),
+        lubesSales: parse(lubeSalesRow, []),
+        advances:   parse(advancesRow, []),
+        payroll:    parse(payrollRow, {}),
+      });
+    } catch (e) {
+      console.error('[staff-data]', e.message);
+      res.json({ employees: [], shifts: [], pumps: [], tanks: [], prices: {}, roster: {}, attendance: {}, lubesProducts: [], lubesSales: [], advances: [], payroll: {} });
+    }
+  });
+
+  // /api/public/sales/:tenantId (plural) below. bridge.js uses the plural form.
+  // The singular endpoint had a credit-balance update the plural lacked — merged below.
+
+  // ── PUBLIC: employee pump reading update (no auth) ──────────────────────
+  app.post('/api/public/reading/:tenantId', async (req, res) => {
+    // SECURITY FIX FIND-MT1: block cross-tenant writes from authenticated sessions
+    // IR-02 FIX: Use SELECT FOR UPDATE inside a transaction to prevent TOCTOU race condition
+    // when two employees submit readings for different nozzles of the same pump concurrently.
+    const client = await pool.connect();
+    try {
+      const tenantId = req.params.tenantId;
+      const { pumpId } = req.body;
+      const nozzleReadings = req.body.nozzleReadings || {};
+      if (!pumpId) { client.release(); return res.status(400).json({ error: 'Missing pumpId' }); }
+
+      await client.query('BEGIN');
+      // Row-level lock prevents concurrent writers from clobbering each other
+      const r = await client.query(
+        'SELECT data_json FROM pumps WHERE tenant_id=$1 AND id=$2 FOR UPDATE',
+        [tenantId, String(pumpId)]
+      );
+      if (!r.rows[0]) {
+        await client.query('ROLLBACK'); client.release();
+        return res.status(404).json({ error: 'Pump not found' });
+      }
+
+      let d = {};
+      try { d = JSON.parse(r.rows[0].data_json || '{}'); } catch {}
+
+      // Merge per-nozzle readings (only update nozzles present in this request)
+      d.nozzleReadings = { ...(d.nozzleReadings || {}), ...nozzleReadings };
+      if (req.body.nozzleOpen) {
+        d.nozzleOpen = { ...(d.nozzleOpen || {}), ...req.body.nozzleOpen };
+      }
+      // FA-03 FIX: stamp when readings were last updated so employees can see carry-forward date
+      d.readingUpdatedAt = istDate() + ' ' + new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Kolkata' });
+
+      const currentReading = Object.values(d.nozzleReadings).reduce((a, v) => a + (parseFloat(v) || 0), 0);
+      const openReading    = Object.values(d.nozzleOpen || {}).reduce((a, v) => a + (parseFloat(v) || 0), 0);
+
+      await client.query(
+        'UPDATE pumps SET data_json=$1, current_reading=$2, reading_updated_at=$3 WHERE tenant_id=$4 AND id=$5',
+        [JSON.stringify(d), currentReading, d.readingUpdatedAt, tenantId, String(pumpId)]
+      );
+      await client.query('COMMIT');
+      client.release();
+
+      // OPENING-READING FIX: also persist nozzleReadings to a settings key
+      // so doEmpLogin can fall back to it if pump data_json is stale/empty
+      try {
+        const settKey = `last_closing_readings_${pumpId}`;
+        const existing = await pool.query(
+          'SELECT id FROM settings WHERE tenant_id=$1 AND key=$2', [tenantId, settKey]
+        );
+        const settVal = JSON.stringify({ nozzleReadings, savedAt: new Date().toISOString() });
+        if (existing.rows.length > 0) {
+          await pool.query('UPDATE settings SET value=$1 WHERE tenant_id=$2 AND key=$3',
+            [settVal, tenantId, settKey]);
+        } else {
+          await pool.query('INSERT INTO settings(tenant_id,key,value) VALUES($1,$2,$3)',
+            [tenantId, settKey, settVal]);
+        }
+      } catch(settErr) { /* non-critical */ }
+
+      res.json({ success: true, currentReading, openReading });
+    } catch (e) {
+      try { await client.query('ROLLBACK'); } catch {}
+      client.release();
+      console.error('[public/reading]', e.message);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ── PUBLIC: lube sale — atomically deduct stock & record sale (no auth needed) ──
+  // This is the AUTHORITATIVE stock deduction path. Instead of relying on the client
+  // to read→mutate→write the full products array (race-prone), we do it server-side:
+  // 1. Read current lubes_products from settings
+  // 2. Find product by id, deduct qty
+  // 3. Append to lubes_sales
+  // 4. Write both back atomically in one transaction
+  app.post('/api/public/lube-sale/:tenantId', async (req, res) => {
+    const { tenantId } = req.params;
+    const { productId, qty, rate, mode, customer, employee, date, time, idempotencyKey } = req.body;
+    if (!tenantId || !productId || !qty || qty <= 0 || !rate || rate <= 0) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      // Idempotency: prevent double-recording on network retry
+      if (idempotencyKey) {
+        const idem = await client.query(
+          "SELECT value FROM settings WHERE tenant_id=$1 AND key=$2",
+          [tenantId, `lube_sale_idem_${idempotencyKey}`]
+        );
+        if (idem.rows.length > 0) {
+          await client.query('ROLLBACK');
+          client.release();
+          return res.json({ success: true, duplicate: true });
+        }
+      }
+      // Read current products
+      const prodsRow = await client.query(
+        "SELECT value FROM settings WHERE key='lubes_products' AND tenant_id=$1 FOR UPDATE",
+        [tenantId]
+      );
+      const products = prodsRow.rows[0] ? JSON.parse(prodsRow.rows[0].value || '[]') : [];
+      // Find product — match by id (number or string)
+      const prod = products.find(p => String(p.id) === String(productId));
+      if (!prod) {
+        await client.query('ROLLBACK');
+        client.release();
+        return res.status(404).json({ error: 'Product not found: ' + productId });
+      }
+      const currentStock = parseFloat(prod.stock) || 0;
+      if (qty > currentStock) {
+        await client.query('ROLLBACK');
+        client.release();
+        return res.status(400).json({ error: `Insufficient stock: have ${currentStock}, need ${qty}` });
+      }
+      // Deduct stock
+      prod.stock = +(currentStock - qty).toFixed(3);
+      const amount = +(qty * rate).toFixed(2);
+      // Save products back
+      await client.query(
+        "INSERT INTO settings(key,tenant_id,value,updated_at) VALUES('lubes_products',$1,$2,NOW()) ON CONFLICT(key,tenant_id) DO UPDATE SET value=$2,updated_at=NOW()",
+        [tenantId, JSON.stringify(products)]
+      );
+      // Read and append to sales
+      const salesRow = await client.query(
+        "SELECT value FROM settings WHERE key='lubes_sales' AND tenant_id=$1 FOR UPDATE",
+        [tenantId]
+      );
+      const sales = salesRow.rows[0] ? JSON.parse(salesRow.rows[0].value || '[]') : [];
+      const saleRecord = {
+        id: Date.now() * 1000 + Math.floor(Math.random() * 999),
+        date: date || istDate(),
+        time: time || new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Kolkata' }),
+        productId, productName: prod.name,
+        qty, unit: prod.unit || '',
+        rate, amount, customer: customer || '', mode: mode || 'cash',
+        employee: employee || '',
+      };
+      sales.unshift(saleRecord);
+      await client.query(
+        "INSERT INTO settings(key,tenant_id,value,updated_at) VALUES('lubes_sales',$1,$2,NOW()) ON CONFLICT(key,tenant_id) DO UPDATE SET value=$2,updated_at=NOW()",
+        [tenantId, JSON.stringify(sales)]
+      );
+      // Save idempotency key
+      if (idempotencyKey) {
+        await client.query(
+          "INSERT INTO settings(key,tenant_id,value,updated_at) VALUES($1,$2,$3,NOW()) ON CONFLICT DO NOTHING",
+          [`lube_sale_idem_${idempotencyKey}`, tenantId, JSON.stringify({ date: istDate(), amount })]
+        );
+      }
+      await client.query('COMMIT');
+      client.release();
+      console.log(`[lube-sale] ${tenantId}: sold ${qty} ${prod.name} (${prod.stock + qty} → ${prod.stock})`);
+      res.json({ success: true, product: { id: prod.id, name: prod.name, newStock: prod.stock }, amount, sale: saleRecord });
+    } catch (e) {
+      await client.query('ROLLBACK').catch(() => {});
+      client.release();
+      console.error('[lube-sale]', e.message);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Public tenant list aliases (supports both legacy and new frontend clients)
+  // BUG-03 FIX: Use pool.query directly — db.prepare() runs convertSql() which
+  // appends "RETURNING id" to any INSERT, but it also runs on SELECT here causing
+  // "SELECT...RETURNING id" which is invalid PostgreSQL syntax.
+  const listTenantsPublic = async (req, res) => {
+    try {
+      // Try with omc column first; fall back gracefully if column not yet migrated
+      let result;
+      try {
+        result = await pool.query(
+          'SELECT id, name, location, owner_name, phone, icon, color, color_light, active, station_code, omc FROM tenants ORDER BY name'
+        );
+      } catch(colErr) {
+        // omc column may not exist on older deployments — retry without it
+        console.warn('[Tenants] omc column missing, falling back:', colErr.message.slice(0,60));
+        result = await pool.query(
+          'SELECT id, name, location, owner_name, phone, icon, color, color_light, active, station_code FROM tenants ORDER BY name'
+        );
+      }
+      // SECURITY FIX FIND-MT3: Remove phone/ownerName (PII) from public listing.
+      // The login-screen tenant picker only needs id/name/location/icon/color.
+      const rows = result.rows.map(t => ({
+        id:          t.id,
+        name:        t.name,
+        location:    t.location,
+        icon:        t.icon,
+        color:       t.color,
+        colorLight:  t.color_light,
+        active:      t.active,
+        stationCode: t.station_code || '',
+        omc:         t.omc || 'iocl',
+        // ownerName and phone removed — PII, require authentication
+      }));
+      res.json(rows);
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  };
+
+  app.get(['/api/tenants', '/api/tenants/list', '/api/data/tenants', '/api/data/tenants/list'], listTenantsPublic);
+
+
+  // ── PUBLIC: save employee sale (tenantId auth only — no JWT needed as fallback) ──
+  app.post('/api/public/sales/:tenantId', async (req, res) => {
+    const client = await pool.connect();
+    try {
+      const { tenantId } = req.params;
+      // SECURITY FIX FIND-MT1: block cross-tenant writes from authenticated sessions
+      if (!(await checkPublicWriteTenant(req, res))) { client.release(); return; }
+      const sale = req.body;
+      
+      // FIX: Comprehensive input validation
+      if (!tenantId || !sale || !sale.fuelType || !sale.liters || !sale.amount) {
+        client.release();
+        return res.status(400).json({ error: 'Missing required fields' });
+      }
+      
+      // FIX: Validate amounts are positive and reasonable
+      const liters = parseFloat(sale.liters);
+      const amount = parseFloat(sale.amount);
+      
+      if (isNaN(liters) || liters <= 0 || liters > 50000) {
+        client.release();
+        return res.status(400).json({ error: 'Invalid liters: must be between 0 and 50,000' });
+      }
+      
+      if (isNaN(amount) || amount <= 0 || amount > 10000000) {
+        client.release();
+        return res.status(400).json({ error: 'Invalid amount: must be between 0 and ₹1 crore' });
+      }
+      
+      // FIX: Validate fuel type
+      // BUG-01 FIX: Added premium_petrol, premium, speed, power variants that frontend sends
+      const validFuelTypes = [
+        'Petrol', 'petrol',
+        'Diesel', 'diesel',
+        'CNG', 'cng',
+        'premium_petrol', 'Premium_Petrol', 'premium', 'Premium',
+        'speed', 'Speed', 'power', 'Power',
+      ];
+      if (!validFuelTypes.includes(sale.fuelType)) {
+        client.release();
+        return res.status(400).json({ error: 'Invalid fuel type' });
+      }
+      
+      // FIX: Validate vehicle number format (Indian format) if provided
+      // Accepts: KA06AB1234, MH12CD5678, DL3CAF1234, TN01A1234 etc.
+      // Rejects: clearly malformed values like INVALID123, random strings
+      if (sale.vehicle && sale.vehicle.trim() !== '') {
+        const vehicleRegex = /^[A-Z]{2}[0-9]{1,2}[A-Z]{1,3}[0-9]{1,4}$/i;
+        const cleanVehicle = sale.vehicle.trim().replace(/[\s-]/g, '');
+        if (!vehicleRegex.test(cleanVehicle)) {
+          client.release();
+          return res.status(400).json({ error: 'Invalid vehicle number format. Use format: KA06AB1234' });
+        }
+      }
+
+      // FIX: Validate date is not in the future — compare in IST (UTC+5:30)
+      // CRITICAL: new Date('2026-03-18') is parsed as UTC midnight.
+      // At 00:21 IST = 18:51 UTC prev day, this makes a valid IST date appear "in the future".
+      // Comparing in IST date strings avoids this — Indian night shifts work correctly.
+      if (sale.date) {
+        const saleDateStr = String(sale.date).slice(0, 10); // YYYY-MM-DD
+        // FIX FIND-VAL3: Validate date format before comparison — "invalid-date" would otherwise pass
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(saleDateStr)) {
+          client.release();
+          return res.status(400).json({ error: 'Invalid date format. Use YYYY-MM-DD.' });
+        }
+        const istToday = istDate(); // server's IST today string
+        const istTomorrow = (() => {
+          const d = new Date();
+          // add 1 day in UTC, then get IST date
+          d.setDate(d.getDate() + 1);
+          return d.toLocaleString('en-CA', { timeZone: 'Asia/Kolkata' }).slice(0, 10);
+        })();
+        if (saleDateStr > istTomorrow) {
+          client.release();
+          return res.status(400).json({ error: 'Sale date cannot be in the future' });
+        }
+      }
+      
+      // Verify tenant exists
+      const tenantCheck = await client.query('SELECT id FROM tenants WHERE id = $1', [tenantId]);
+      if (!tenantCheck.rows.length) { client.release(); return res.status(404).json({ error: 'Tenant not found' }); }
+
+      // SECURITY FIX FIND-02: Server-side price sanity check.
+      // Prevents an attacker who bypasses the UI from recording ₹1 for 100L of ₹105 petrol.
+      // Tolerates up to 20% deviation from configured price to allow discounts, rounding, and
+      // short fills. If no price is configured for this fuel, the check is skipped.
+      try {
+        const pricesRow = await client.query(
+          "SELECT value FROM settings WHERE key = 'prices' AND tenant_id = $1",
+          [tenantId]
+        );
+        if (pricesRow.rows[0]) {
+          const prices = JSON.parse(pricesRow.rows[0].value || '{}');
+          // Match price key case-insensitively (petrol, Petrol, premium_petrol, etc.)
+          const priceKey = Object.keys(prices).find(k => k.toLowerCase() === (sale.fuelType||'').toLowerCase());
+          const configuredPrice = priceKey ? parseFloat(prices[priceKey]) : 0;
+          if (configuredPrice > 0) {
+            const expectedAmount = liters * configuredPrice;
+            const deviation = Math.abs(amount - expectedAmount) / expectedAmount;
+            if (deviation > 0.20) { // >20% off
+              client.release();
+              return res.status(422).json({
+                error: `Amount ₹${amount.toFixed(2)} deviates too far from expected ₹${expectedAmount.toFixed(2)} (${liters}L × ₹${configuredPrice}/L). Max allowed deviation is 20%.`,
+                expectedAmount,
+                configuredPrice,
+                deviation: (deviation * 100).toFixed(1) + '%',
+              });
+            }
+          }
+        }
+      } catch(priceErr) {
+        // Non-critical — if price check fails (e.g. no prices configured), allow the sale
+        console.warn('[sales] Price check skipped:', priceErr.message);
+      }
+      //
+      // GUARD LOGIC — uses last_dip as the authoritative indicator:
+      //   • last_dip is EMPTY  → tank has never been measured (brand-new station setup)
+      //                          → allow sale so staff can test the system before first dip
+      //   • last_dip is SET    → admin has physically measured this tank at least once
+      //                          → enforce strictly against REAL available stock
+      //
+      // CRITICAL FIX: The original guard compared `liters > current_level` directly
+      // against the DB value. Tank deduction (tank-deduct endpoint) only fires at
+      // SHIFT CLOSE — so during an active shift, current_level in the DB is never
+      // reduced between sales. This meant an employee could sell 10,000 L three times
+      // in a row against a 15,000 L tank because every check saw the same 15,000 L.
+      //
+      // Fix: subtract today's already-recorded sales for this fuel type from
+      // current_level to get the true in-shift available stock before comparing.
+      // Uses IST date to match the same timezone logic as the rest of the app.
+      if (sale.fuelType && liters > 0) {
+        const tankRow = await client.query(
+          'SELECT current_level, capacity, last_dip FROM tanks WHERE tenant_id=$1 AND LOWER(fuel_type)=LOWER($2)',
+          [tenantId, sale.fuelType]
+        );
+        if (tankRow.rows[0]) {
+          const tankLevel = parseFloat(tankRow.rows[0].current_level) || 0;
+          const lastDip   = tankRow.rows[0].last_dip || '';
+          // Only enforce when a dip has been recorded — skips brand-new unfilled tanks
+          if (lastDip) {
+            // Sum all sales recorded today for this fuel type that have not yet been
+            // deducted from the tank (tank deduction happens at shift close, not per-sale).
+            // This gives us the TRUE available stock mid-shift.
+            const todayIst = istDate();
+            const soldTodayRow = await client.query(
+              `SELECT COALESCE(SUM(liters), 0) AS sold
+               FROM sales
+               WHERE tenant_id = $1
+                 AND LOWER(fuel_type) = LOWER($2)
+                 AND date = $3`,
+              [tenantId, sale.fuelType, todayIst]
+            );
+            const soldToday  = parseFloat(soldTodayRow.rows[0]?.sold) || 0;
+            const available  = Math.max(0, tankLevel - soldToday);
+
+            if (liters > available) {
+              client.release();
+              return res.status(422).json({
+                error: `Insufficient stock: ${sale.fuelType} tank has ${available.toFixed(0)}L available (${tankLevel.toFixed(0)}L physical − ${soldToday.toFixed(0)}L sold today), sale requires ${liters}L.`,
+                available,
+                tankLevel,
+                soldToday,
+                requested: liters,
+              });
+            }
+          }
+        }
+      }
+
+      // TC-018 FIX: Validate pump is not inactive before accepting sale
+      if (sale.pump) {
+        const pumpCheck = await client.query(
+          'SELECT status FROM pumps WHERE id = $1 AND tenant_id = $2',
+          [String(sale.pump), tenantId]
+        );
+        if (pumpCheck.rows[0] && pumpCheck.rows[0].status === 'inactive') {
+          client.release();
+          return res.status(409).json({ error: 'Pump is inactive — sale not permitted', pump: sale.pump });
+        }
+      }
+
+      // UR-05 NOTE: One-sale-per-employee-per-day check is DISABLED by default.
+      // UR-05 requirement means one SHIFT SUMMARY submission per employee, not one
+      // individual vehicle transaction. Blocking per-transaction caused legitimate
+      // per-vehicle sales to fail and pile up in pendingSales queue.
+      //
+      // The check can be re-enabled as an OPT-IN via admin Settings toggle
+      // (allow_multi_sale_per_day = '0' would mean enforce, but default is off).
+      // For now: no per-day duplicate block — idempotency keys handle exact retries.
+      //
+      // REVERTED: BUG-04 check removed after it broke normal operations —
+      // employees sell fuel to many vehicles per day; blocking after the first sale
+      // caused ~1,900L of tank deductions with only 500L recorded in sales,
+      // and zeroed out credit balances for customers who were served after the first sale.
+
+      await client.query('BEGIN');
+
+      // BUG-B FIX: Credit limit enforcement INSIDE a transaction with SELECT FOR UPDATE
+      // prevents TOCTOU race — two concurrent credit sales can no longer both pass the
+      // limit check against the same pre-update balance.
+      if ((sale.mode || 'cash') === 'credit' && sale.customer) {
+        const creditRow = await client.query(
+          'SELECT id, balance, credit_limit FROM credit_customers WHERE tenant_id = $1 AND name = $2 AND active = 1 FOR UPDATE',
+          [tenantId, sale.customer]
+        );
+        if (creditRow.rows[0]) {
+          const currentBalance = parseFloat(creditRow.rows[0].balance) || 0;
+          const limit = parseFloat(creditRow.rows[0].credit_limit) || 0;
+          // FIX FIND-CR2: limit=0 means "no credit facility" (on hold), not "unlimited".
+          // Old: `limit > 0` allowed limit=0 to bypass check entirely.
+          // New: treat 0 as blocked, positive as capped.
+          if (limit === 0 || (currentBalance + sale.amount) > limit) {
+            // limit===0: customer on hold — no credit allowed
+            // otherwise: would exceed configured limit
+            await client.query('ROLLBACK');
+            client.release();
+            return res.status(422).json({
+              error: 'Credit limit exceeded',
+              outstanding: currentBalance,
+              limit,
+              available: Math.max(0, limit - currentBalance),
+            });
+          }
+          // Update balance atomically within the same transaction
+          await client.query(
+            `UPDATE credit_customers SET balance = COALESCE(balance, 0) + $1
+             WHERE tenant_id = $2 AND name = $3 AND active = 1`,
+            [sale.amount, tenantId, sale.customer]
+          );
+        }
+      }
+
+      // BUG-01 FIX: 'employee' bare column does not exist in sales — use employee_id + employee_name
+      // M-02 FIX: Idempotency key prevents duplicate sales on network retry.
+      // Client generates a UUID per sale attempt; duplicate key = silent no-op, returns existing id.
+      const idemKey = sale.idempotencyKey || sale.idempotency_key || '';
+      let saleId;
+      if (idemKey) {
+        // Check for existing sale with this idempotency key first
+        const existing = await client.query(
+          'SELECT id FROM sales WHERE tenant_id = $1 AND idempotency_key = $2',
+          [tenantId, idemKey]
+        );
+        if (existing.rows[0]) {
+          await client.query('COMMIT');
+          client.release();
+          return res.json({ id: existing.rows[0].id, duplicate: true });
+        }
+      }
+      const r = await client.query(
+        `INSERT INTO sales (tenant_id, date, time, fuel_type, liters, amount, mode, pump, nozzle, vehicle, customer, shift, employee_id, employee_name, idempotency_key)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id`,
+        [tenantId, sale.date||'', sale.time||'', sale.fuelType||'', sale.liters||0, sale.amount||0,
+         sale.mode||'cash', sale.pump||'', sale.nozzle||'A', sale.vehicle||'',
+         sale.customer||'', sale.shift||'', sale.employeeId||0,
+         sale.employeeName||(sale.employee||''), idemKey]
+      );
+      saleId = r.rows[0].id;
+
+      // FIX #10: COMMIT + release BEFORE sending response — if res.json() ever throws,
+      // the catch block would attempt a second client.release() causing pool corruption.
+      await client.query('COMMIT');
+      client.release();
+      return res.json({ id: saleId });
+    } catch (e) {
+      // Only ROLLBACK if the transaction is still open (client wasn't released yet)
+      try { await client.query('ROLLBACK'); } catch {}
+      client.release();
+      console.error('[public/sales]', e.message);
+      res.status(500).json({ error: 'Failed to save sale' });
+    }
+  });
+
+  // Rate limit ONLY login/super-login/employee-login — NOT session checks
+  // Session endpoint is called on every page load; rate limiting it causes false lockouts
+  const loginOnlyLimiter = rateLimit({
+    windowMs: 300000,   // 5-minute window
+    max: 30,            // 30 login attempts per 5 min per IP — generous for shared Railway proxy
+    standardHeaders: true,
+    legacyHeaders: false,
+    skip: (req) => req.path === '/session' || req.method === 'GET', // never rate-limit session checks
+    keyGenerator: (req) => {
+      // Key by username if available, else IP — avoids shared-proxy false lockouts
+      const username = req.body?.username;
+      const ip = (req.headers['x-forwarded-for'] || req.ip || 'unknown').split(',')[0].trim();
+      return username ? `user:${username.toLowerCase()}` : `ip:${ip}`;
+    },
+    handler: (req, res) => {
+      res.status(429).json({ error: 'Too many login attempts. Please wait a few minutes and try again.' });
+    },
+  });
+  app.use('/api/auth', loginOnlyLimiter, authRoutes(db));
+
+  // ── Settings routes ──────────────────────────────────────────────────────
+  // BUG-06 FIX: These routes were duplicated here AND in data.js router.
+  // The data.js router (mounted at /api/data with authMiddleware) handles these correctly.
+  // Keeping them here caused confusion — removed. data.js routes are canonical.
+
+  // ── Explicit tenant CRUD routes (authenticated, requireRole super) ───────
+  // These are registered BEFORE the generic dataRoutes mounts to avoid
+  // any routing ambiguity from double-mounting.
+  const { requireRole: reqRole, auditLog: auLog } = require('./security');
+  const { hashPassword: hashPw, verifyPassword: verifyPw } = require('./schema');
+
+  // GET tenant admins
+  // BUG-07 FIX: Allow station Owner/admin to list admins in their own tenant (needed for the
+  // saveAdminPassword bridge fix which fetches real DB IDs before calling reset-password).
+  app.get('/api/data/tenants/:id/admins', authMiddleware(db), async (req, res) => {
+    const isSuperUser = req.userType === 'super';
+    const isOwnerOfTenant = req.userType === 'admin' && req.tenantId === req.params.id;
+    if (!isSuperUser && !isOwnerOfTenant) {
+      return res.status(403).json({ error: 'Insufficient permissions' });
+    }
+    try {
+      const admins = await db.prepare('SELECT id, name, username, role, active, created_at FROM admin_users WHERE tenant_id = $1').all(req.params.id);
+      res.json(admins);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // POST add tenant admin
+  // POST add tenant admin — super can add to any tenant; Owner can add to their own
+  app.post('/api/data/tenants/:id/admins', authMiddleware(db), async (req, res) => {
+    // Allow super OR an Owner managing their own tenant
+    const isSuperUser = req.userType === 'super';
+    const isOwnerOfTenant = req.userType === 'admin' &&
+                            (req.userRole === 'Owner' || req.userRole === 'owner') &&
+                            req.tenantId === req.params.id;
+    if (!isSuperUser && !isOwnerOfTenant) {
+      return res.status(403).json({ error: 'Only Super Admin or Owner can add admin users' });
+    }
+    const { name, username, password, role, phone, email } = req.body;
+    if (!name || !username || !password) return res.status(400).json({ error: 'All fields required' });
+    if (password.length < 6) return res.status(400).json({ error: 'Password too short' });
+    // Normalise phone (optional if email provided)
+    const normPhone = phone ? String(phone).replace(/\D/g,'').replace(/^(91|0)/,'').trim() : '';
+    const normEmail = email ? String(email).trim().toLowerCase() : '';
+    if (!normPhone && !normEmail) {
+      return res.status(400).json({ error: 'A phone number or email address is required for OTP login' });
+    }
+    if (normPhone && normPhone.length !== 10) {
+      return res.status(400).json({ error: 'Phone must be exactly 10 digits' });
+    }
+    if (normEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normEmail)) {
+      return res.status(400).json({ error: 'Enter a valid email address' });
+    }
+    try {
+      const exists = await db.prepare('SELECT id FROM admin_users WHERE tenant_id = $1 AND username = $2').get(req.params.id, username);
+      if (exists) return res.status(409).json({ error: 'Username already exists' });
+      if (normPhone) {
+        const phoneExists = await db.prepare('SELECT id FROM admin_users WHERE phone = $1').get(normPhone);
+        if (phoneExists) return res.status(409).json({ error: 'This phone number is already registered to another user' });
+      }
+      if (normEmail) {
+        const emailExists = await db.prepare('SELECT id FROM admin_users WHERE email = $1').get(normEmail);
+        if (emailExists) return res.status(409).json({ error: 'This email is already registered to another user' });
+      }
+      const adminHash = await hashPw(password);
+      const result = await db.prepare(
+        'INSERT INTO admin_users (tenant_id, name, username, pass_hash, role, phone, email) VALUES ($1,$2,$3,$4,$5,$6,$7)'
+      ).run(req.params.id, name, username, adminHash, role||'Manager', normPhone||'', normEmail||'');
+      res.json({ success: true, id: result.lastInsertRowid });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // DELETE remove tenant admin
+  app.delete('/api/data/tenants/:tid/admins/:uid', authMiddleware(db), reqRole('super'), async (req, res) => {
+    try {
+      await db.prepare('DELETE FROM admin_users WHERE id = $1 AND tenant_id = $2').run(req.params.uid, req.params.tid);
+      res.json({ success: true });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // POST reset admin password
+  // BUG-06 FIX: Previously required reqRole('super') only, but the "Change Password" button
+  // is visible to station admins (Owner/Manager) in admin settings. Allow station Owner to
+  // reset passwords within their own tenant — with cross-tenant attack prevention.
+  app.post('/api/data/tenants/:tid/admins/:uid/reset-password', authMiddleware(db), async (req, res) => {
+    const isSuperUser = req.userType === 'super';
+    const isOwnerOfTenant = req.userType === 'admin' &&
+                            (req.userRole === 'Owner' || req.userRole === 'owner') &&
+                            req.tenantId === req.params.tid;
+    if (!isSuperUser && !isOwnerOfTenant) {
+      return res.status(403).json({ error: 'Only Super Admin or station Owner can reset admin passwords' });
+    }
+    const { newPassword } = req.body;
+    if (!newPassword || newPassword.length < 6) return res.status(400).json({ error: 'Password too short' });
+    try {
+      // Verify target admin belongs to this tenant (prevent cross-tenant attack)
+      const target = await db.prepare('SELECT id FROM admin_users WHERE id = $1 AND tenant_id = $2').get(req.params.uid, req.params.tid);
+      if (!target) return res.status(404).json({ error: 'Admin user not found in this tenant' });
+      const resetHash = await hashPw(newPassword);
+      await db.prepare('UPDATE admin_users SET pass_hash = $1 WHERE id = $2 AND tenant_id = $3').run(resetHash, req.params.uid, req.params.tid);
+      // SESSION INVALIDATION FIX: Revoke ALL sessions for the target admin user.
+      // When a super admin or Owner resets someone else's password (often a security response),
+      // any active attacker session for that account must be immediately terminated.
+      // Unlike self-password-change, we revoke ALL sessions (including any current one).
+      await db.prepare(
+        "DELETE FROM sessions WHERE user_type = 'admin' AND user_id = $1 AND tenant_id = $2"
+      ).run(req.params.uid, req.params.tid).catch(() => {});
+      try { await auLog(req, 'RESET_ADMIN_PASSWORD', 'admin_users', req.params.uid, `Reset by ${req.userType}/${req.userName} — sessions revoked`); } catch {}
+      res.json({ success: true });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // POST create tenant
+  app.post('/api/data/tenants', authMiddleware(db), reqRole('super'), async (req, res) => {
+    const { id, name, location, ownerName, phone, ownerPhone, ownerEmail, icon, color, colorLight, stationCode,
+            omc, adminUser, adminPass } = req.body;
+    if (!name || name.length < 2) return res.status(400).json({ error: 'Station name required' });
+    try {
+      const tenantId  = id || ('stn_' + Date.now());
+      const omcValue  = (omc || 'iocl').toLowerCase();
+      const existing  = await db.prepare('SELECT id FROM tenants WHERE name = $1').get(name);
+      if (existing) return res.status(409).json({ error: 'Station name already exists' });
+      await db.prepare('INSERT INTO tenants (id, name, location, owner_name, phone, icon, color, color_light, station_code, omc, active) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)')
+        .run(tenantId, name, location||'', ownerName||'', phone||'', icon||'⛽', color||'#d4940f', colorLight||'#f0b429', stationCode||'', omcValue, 1);
+      if (adminUser && adminPass) {
+        try {
+          // Normalise owner phone for login credential
+          const rawOwnerPhone = ownerPhone || phone || '';
+          const normOwnerPhone = rawOwnerPhone.replace(/\D/g,'').replace(/^(91|0)/,'').trim();
+          const normOwnerEmail = (ownerEmail || '').trim().toLowerCase();
+          const ownerHash = await hashPw(adminPass);
+          await db.prepare('INSERT INTO admin_users (tenant_id, name, username, pass_hash, role, phone, email) VALUES ($1,$2,$3,$4,$5,$6,$7)')
+            .run(tenantId, ownerName||adminUser, adminUser, ownerHash, 'Owner', normOwnerPhone||'', normOwnerEmail||'');
+        } catch (e2) { console.warn('[Tenant] Admin creation failed:', e2.message); }
+      }
+      await auLog(req, 'CREATE_TENANT', 'tenants', tenantId, name);
+
+      // STALE DATA FIX: On station creation, explicitly purge any settings rows that may
+      // have survived from a previous station with the same tenant_id (deleted + recreated).
+      // This prevents old lubes_sales, lubes_products, prices etc from reappearing.
+      // Server delete cascade removes settings rows, but if the client wrote stale
+      // IndexedDB data back to the server before the station was marked deleted, orphaned
+      // rows may exist. Clear them all here so the new station starts completely clean.
+      try {
+        await pool.query("DELETE FROM settings WHERE tenant_id = $1", [tenantId]);
+        await pool.query("DELETE FROM lubes_sales WHERE tenant_id = $1", [tenantId]);
+        await pool.query("DELETE FROM lubes_products WHERE tenant_id = $1", [tenantId]);
+        console.log('[Tenant] Cleared stale data for new station:', tenantId);
+      } catch(cleanErr) {
+        console.warn('[Tenant] Stale data cleanup failed (non-fatal):', cleanErr.message);
+      }
+
+      // ── Auto-seed lube catalog based on OMC ────────────────────────────────
+      // Pre-loads the correct brand's products (SERVO/MAK/HP/APSARA) into the
+      // station's lubes_products table with price=0 and stock=0.
+      // Station admin sets prices on first login. HSN codes and GST are pre-filled.
+      const OMC_CATALOGS = {
+        iocl: [
+          { name:'Servo 2T Supreme(JFC) 300×40ml', brand:'Indian Oil / Servo', category:'Engine Oil', unit:'Nos', hsn:'271019', gst_pct:18, sku:'2900125' },
+          { name:'Servo 2T Supreme(JFC) 200×60ml', brand:'Indian Oil / Servo', category:'Engine Oil', unit:'Nos', hsn:'271019', gst_pct:18, sku:'2900145' },
+          { name:'Servo 2T Supreme 600×20ml',      brand:'Indian Oil / Servo', category:'Engine Oil', unit:'Nos', hsn:'271019', gst_pct:18, sku:'2900103' },
+          { name:'Servo Super 20W-40 MG 20×1L',   brand:'Indian Oil / Servo', category:'Engine Oil', unit:'L',   hsn:'271019', gst_pct:18, sku:'7485184' },
+          { name:'Servo Pride TC 15W-40 HDPE 20L', brand:'Indian Oil / Servo', category:'Engine Oil', unit:'L',   hsn:'271019', gst_pct:18, sku:'7556184' },
+          { name:'IOCL Clear Blue 5 Ltr',          brand:'IOCL',               category:'Coolant',    unit:'Nos', hsn:'31021000', gst_pct:18, sku:'' },
+          { name:'IOCL Clear Blue 10 Ltr',         brand:'IOCL',               category:'Coolant',    unit:'Nos', hsn:'31021000', gst_pct:18, sku:'' },
+          { name:'IOCL Clear Blue 20 Ltr',         brand:'IOCL',               category:'Coolant',    unit:'Nos', hsn:'31021000', gst_pct:18, sku:'' },
+          { name:'Servo Gear MP80 EP 90',          brand:'Indian Oil / Servo', category:'Gear Oil',   unit:'L',   hsn:'271019', gst_pct:18, sku:'' },
+          { name:'Servo Brake Fluid FL3',          brand:'Indian Oil / Servo', category:'Brake Fluid',unit:'Nos', hsn:'271019', gst_pct:18, sku:'' },
+        ],
+        bpcl: [
+          { name:'MAK 2T Extra',             brand:'BPCL / MAK', category:'Engine Oil', unit:'Nos', hsn:'271019', gst_pct:18, sku:'' },
+          { name:'MAK Cruise 20W-40 1L',     brand:'BPCL / MAK', category:'Engine Oil', unit:'L',   hsn:'271019', gst_pct:18, sku:'' },
+          { name:'MAK Activ 4T 10W-30',      brand:'BPCL / MAK', category:'Engine Oil', unit:'L',   hsn:'271019', gst_pct:18, sku:'' },
+          { name:'MAK Activ 4T 20W-40',      brand:'BPCL / MAK', category:'Engine Oil', unit:'L',   hsn:'271019', gst_pct:18, sku:'' },
+          { name:'MAK Protec 4T 10W-40',     brand:'BPCL / MAK', category:'Engine Oil', unit:'L',   hsn:'271019', gst_pct:18, sku:'' },
+          { name:'MAK Coolant EG 1L',        brand:'BPCL / MAK', category:'Coolant',    unit:'Nos', hsn:'38200000', gst_pct:18, sku:'' },
+          { name:'MAK Gear EP90 1L',         brand:'BPCL / MAK', category:'Gear Oil',   unit:'L',   hsn:'271019', gst_pct:18, sku:'' },
+          { name:'MAK Brake Fluid DOT3 500ml',brand:'BPCL / MAK',category:'Brake Fluid',unit:'Nos', hsn:'271019', gst_pct:18, sku:'' },
+          { name:'MAK Hydraulic 46 1L',      brand:'BPCL / MAK', category:'Hydraulic Oil',unit:'L', hsn:'271019', gst_pct:18, sku:'' },
+        ],
+        hpcl: [
+          { name:'HP 2T Plus',               brand:'HPCL / HP Lubricants', category:'Engine Oil', unit:'Nos', hsn:'271019', gst_pct:18, sku:'' },
+          { name:'HP Milcy 4T 20W-40 1L',   brand:'HPCL / HP Lubricants', category:'Engine Oil', unit:'L',   hsn:'271019', gst_pct:18, sku:'' },
+          { name:'HP Racer4 10W-40 1L',     brand:'HPCL / HP Lubricants', category:'Engine Oil', unit:'L',   hsn:'271019', gst_pct:18, sku:'' },
+          { name:'HP Milcy 4T 10W-30 1L',   brand:'HPCL / HP Lubricants', category:'Engine Oil', unit:'L',   hsn:'271019', gst_pct:18, sku:'' },
+          { name:'HP Coolant 1L',            brand:'HPCL / HP Lubricants', category:'Coolant',    unit:'Nos', hsn:'38200000', gst_pct:18, sku:'' },
+          { name:'HP Gear EP90 1L',          brand:'HPCL / HP Lubricants', category:'Gear Oil',   unit:'L',   hsn:'271019', gst_pct:18, sku:'' },
+          { name:'HP Brake Fluid DOT3',      brand:'HPCL / HP Lubricants', category:'Brake Fluid',unit:'Nos', hsn:'271019', gst_pct:18, sku:'' },
+          { name:'HP Enklo 46 Hydraulic 1L', brand:'HPCL / HP Lubricants', category:'Hydraulic Oil',unit:'L',hsn:'271019', gst_pct:18, sku:'' },
+        ],
+        mrpl: [
+          { name:'Apsara 2T',                brand:'MRPL / Apsara', category:'Engine Oil', unit:'Nos', hsn:'271019', gst_pct:18, sku:'' },
+          { name:'Apsara 4T 20W-40 1L',     brand:'MRPL / Apsara', category:'Engine Oil', unit:'L',   hsn:'271019', gst_pct:18, sku:'' },
+          { name:'Apsara 4T 10W-30 1L',     brand:'MRPL / Apsara', category:'Engine Oil', unit:'L',   hsn:'271019', gst_pct:18, sku:'' },
+          { name:'Apsara Gear Oil EP90 1L',  brand:'MRPL / Apsara', category:'Gear Oil',   unit:'L',   hsn:'271019', gst_pct:18, sku:'' },
+          { name:'Apsara Hydraulic 46 1L',   brand:'MRPL / Apsara', category:'Hydraulic Oil',unit:'L',hsn:'271019', gst_pct:18, sku:'' },
+          { name:'Apsara Brake Fluid DOT3',  brand:'MRPL / Apsara', category:'Brake Fluid',unit:'Nos', hsn:'271019', gst_pct:18, sku:'' },
+        ],
+      };
+      const catalog = OMC_CATALOGS[omcValue] || OMC_CATALOGS.iocl;
+      try {
+        for (const prod of catalog) {
+          await pool.query(
+            `INSERT INTO lubes_products
+               (id, tenant_id, name, brand, category, unit, cost_price, selling_price,
+                stock, min_stock, hsn, gst_pct, data_json)
+             VALUES ($1,$2,$3,$4,$5,$6,0,0,0,5,$7,$8,$9)
+             ON CONFLICT (id, tenant_id) DO NOTHING`,
+            [
+              'lp_' + tenantId + '_' + Date.now() + '_' + Math.random().toString(36).slice(2,7),
+              tenantId, prod.name, prod.brand, prod.category, prod.unit,
+              prod.hsn, prod.gst_pct,
+              JSON.stringify({ sku: prod.sku, source: 'omc_template', omc: omcValue })
+            ]
+          );
+        }
+        console.log(`[Tenant] Seeded ${catalog.length} ${omcValue.toUpperCase()} lube products for ${tenantId}`);
+      } catch(ce) { console.warn('[Tenant] Catalog seed failed:', ce.message); }
+
+      // Auto-create subscription record from request body if provided
+      const { trialDays, trialEnabled, selectedPlan, graceDays, ownerWA,
+              planPrices, subStatus, subStart, subEnd, priceMonthly } = req.body;
+      if (selectedPlan || trialDays !== undefined) {
+        try {
+          const td   = trialEnabled === false ? 0 : (parseInt(trialDays) || 30);
+          const st   = subStatus || (selectedPlan && selectedPlan !== 'trialonly' && !trialEnabled ? 'active' : 'trial');
+          const plan = (!selectedPlan || selectedPlan === 'trialonly') ? 'trial' : selectedPlan;
+          const pm   = parseFloat(priceMonthly) || 0;
+          const gd   = parseInt(graceDays) || 3;
+          const op   = ownerWA || '';
+          await pool.query(`
+            INSERT INTO subscriptions (tenant_id, plan, status, trial_days, price_monthly, grace_days, owner_phone, sub_start, sub_end, trial_start, updated_at)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW(),NOW())
+            ON CONFLICT(tenant_id) DO UPDATE SET
+              plan=$2, status=$3, trial_days=$4, price_monthly=$5, grace_days=$6,
+              owner_phone=$7, sub_start=COALESCE($8,subscriptions.sub_start),
+              sub_end=COALESCE($9,subscriptions.sub_end), updated_at=NOW()
+          `, [tenantId, plan, st, td, pm, gd, op, subStart||null, subEnd||null]);
+          console.log('[Tenant] Subscription created:', tenantId, plan, st);
+        } catch(se) { console.warn('[Tenant] Subscription creation failed:', se.message); }
+      }
+
+      res.json({ success: true, id: tenantId });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // PUT update admin user role (Owner can do this for their own tenant)
+  app.put('/api/data/tenants/:tid/admins/:uid/role', authMiddleware(db), async (req, res) => {
+    // Super can update any tenant; Owner can only update their own
+    if (req.userType !== 'super' && req.tenantId !== req.params.tid) {
+      return res.status(403).json({ error: 'Insufficient permissions' });
+    }
+    const { role } = req.body;
+    if (!role || !['Owner','Manager','Accountant','Cashier'].includes(role)) {
+      return res.status(400).json({ error: 'Invalid role' });
+    }
+    try {
+      await db.prepare(
+        'UPDATE admin_users SET role = $1 WHERE id = $2 AND tenant_id = $3'
+      ).run(role, req.params.uid, req.params.tid);
+      res.json({ success: true });
+    } catch(e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // PUT update admin user phone (login credential)
+  app.put('/api/data/tenants/:tid/admins/:uid/phone', authMiddleware(db), async (req, res) => {
+    if (req.userType !== 'super' && req.tenantId !== req.params.tid) {
+      return res.status(403).json({ error: 'Insufficient permissions' });
+    }
+    const rawPhone = (req.body.phone || '').replace(/\D/g,'').replace(/^(91|0)/,'').trim();
+    if (!rawPhone || rawPhone.length !== 10) {
+      return res.status(400).json({ error: 'Enter a valid 10-digit phone number' });
+    }
+    try {
+      const phoneExists = await db.prepare(
+        'SELECT id FROM admin_users WHERE phone = $1 AND id != $2'
+      ).get(rawPhone, req.params.uid);
+      if (phoneExists) return res.status(409).json({ error: 'This phone number is already registered to another user' });
+      await db.prepare(
+        'UPDATE admin_users SET phone = $1 WHERE id = $2 AND tenant_id = $3'
+      ).run(rawPhone, req.params.uid, req.params.tid);
+      res.json({ success: true });
+    } catch(e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // PUT update admin user email
+  app.put('/api/data/tenants/:tid/admins/:uid/email', authMiddleware(db), async (req, res) => {
+    if (req.userType !== 'super' && req.tenantId !== req.params.tid) {
+      return res.status(403).json({ error: 'Insufficient permissions' });
+    }
+    const normEmail = (req.body.email || '').trim().toLowerCase();
+    if (!normEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normEmail)) {
+      return res.status(400).json({ error: 'Enter a valid email address' });
+    }
+    try {
+      const emailExists = await db.prepare(
+        'SELECT id FROM admin_users WHERE email = $1 AND id != $2'
+      ).get(normEmail, req.params.uid);
+      if (emailExists) return res.status(409).json({ error: 'This email is already registered to another user' });
+      await db.prepare(
+        'UPDATE admin_users SET email = $1 WHERE id = $2 AND tenant_id = $3'
+      ).run(normEmail, req.params.uid, req.params.tid);
+      res.json({ success: true });
+    } catch(e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // PUT update tenant
+  app.put('/api/data/tenants/:id', authMiddleware(db), reqRole('super'), async (req, res) => {
+    const { name, location, ownerName, phone, icon, active, stationCode, omc } = req.body;
+    try {
+      await db.prepare('UPDATE tenants SET name=COALESCE($1,name), location=COALESCE($2,location), owner_name=COALESCE($3,owner_name), phone=COALESCE($4,phone), icon=COALESCE($5,icon), active=COALESCE($6,active), station_code=COALESCE($7,station_code), omc=COALESCE($9,omc), updated_at=NOW() WHERE id=$8')
+        .run(name, location, ownerName, phone, icon, active !== undefined ? (active ? 1 : 0) : null, stationCode, req.params.id, omc||null);
+      res.json({ success: true });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+
+  // ── AI Invoice Scanner ──────────────────────────────────────────────────────
+  const INVOICE_SCAN_PROMPT = `You are reading a tax invoice from an Indian fuel station lubricant supplier supplying SERVO/IOCL products.
+Extract ALL product line items and return ONLY valid JSON — no explanation, no markdown, no backticks.
+Structure: {"supplier":"","invoiceNo":"","invoiceDate":"DD-MM-YYYY","supplierGSTIN":"","totalAmount":0,"products":[{"name":"clean product name","sku":"","hsn":"","packQty":300,"packSize":"40ml","packType":"Pouch","isCartonPacked":true,"cartonsOrdered":5,"ratePerCarton":3226.27,"mrp":5400,"gstPct":18,"netTotal":0,"totalPieces":1500}]}
+Pack decoding: "300x40ML-POU"=packQty:300,packSize:"40ml",packType:"Pouch",isCartonPacked:true. "20X1L"=packQty:20,packSize:"1L",packType:"Bottle",isCartonPacked:true. "Clear Blue 10 LTR" with unit Nos=packQty:1,packSize:"10L",packType:"Can",isCartonPacked:false. Unit CAR=cartons(isCartonPacked:true). Unit Nos=individual(isCartonPacked:false). Return ONLY JSON.`;
+
+  app.post('/api/data/scan-invoice', authMiddleware(db), async (req, res) => {
+    const { imageData, mimeType, filename } = req.body;
+    if (!imageData) return res.status(400).json({ error: 'No image data provided' });
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not set on server. Add it in Railway → Variables.' });
+    try {
+      const isPdf = (mimeType === 'application/pdf') || (filename||'').toLowerCase().endsWith('.pdf');
+
+      // Guard: base64 size check — Anthropic hard limit is 5MB decoded (~6.7MB base64)
+      const base64SizeBytes = Math.ceil(imageData.length * 0.75);
+      if (base64SizeBytes > 5 * 1024 * 1024) {
+        return res.status(400).json({
+          error: `Image too large (${(base64SizeBytes/1024/1024).toFixed(1)} MB decoded). Please use a smaller or lower-resolution image.`
+        });
+      }
+
+      // Normalise mimeType — client now always sends image/jpeg for non-PDF, but guard anyway
+      const safeMime = (() => {
+        if (isPdf) return 'application/pdf';
+        const m = (mimeType || 'image/jpeg').toLowerCase();
+        if (m === 'image/jpg') return 'image/jpeg';
+        if (['image/jpeg','image/png','image/gif','image/webp'].includes(m)) return m;
+        return 'image/jpeg';
+      })();
+
+      console.log(`[Bill Scan] ${filename||'image'} | mime:${safeMime} | size:${(base64SizeBytes/1024).toFixed(0)}KB`);
+
+      const contentBlock = isPdf
+        ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: imageData } }
+        : { type: 'image',    source: { type: 'base64', media_type: safeMime, data: imageData } };
+
+      // FIX: Model was 'claude-sonnet-4-20250514' — that model string is deprecated and returns 404.
+      // Updated to current claude-sonnet-4-5 which supports vision/document inputs.
+      // TIMEOUT FIX: Raised from 25s to 55s — Claude can legitimately take 15-25s for
+      // image analysis. 55s stays safely under Railway's 60s proxy timeout.
+      // Client image is now 960px@0.75 (~150KB) so typical response is 5-12s.
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 55000);
+
+      let apiResp;
+      try {
+        // TIMEOUT FIX: Send periodic keep-alive comments to prevent Railway's proxy
+        // from closing the connection during long Claude API calls (>30s).
+        // We set the response to chunked transfer so Railway keeps the connection open.
+        res.setHeader('X-Accel-Buffering', 'no'); // disable nginx buffering on Railway
+        res.setHeader('Transfer-Encoding', 'chunked');
+
+        apiResp = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          signal: controller.signal,
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': apiKey,
+            'anthropic-version': '2023-06-01'
+          },
+          body: JSON.stringify({
+            model: 'claude-sonnet-4-5',
+            max_tokens: 2000,
+            messages: [{ role: 'user', content: [ contentBlock, { type: 'text', text: INVOICE_SCAN_PROMPT } ] }],
+          }),
+        });
+      } finally {
+        clearTimeout(timeoutId);
+      }
+
+      if (!apiResp.ok) {
+        const errBody = await apiResp.text();
+        // FIX: Expose actual API error status + message so admin can diagnose
+        let friendlyError = `Invoice scan failed (HTTP ${apiResp.status})`;
+        try {
+          const errJson = JSON.parse(errBody);
+          if (errJson?.error?.message) friendlyError += ': ' + errJson.error.message;
+          else if (errJson?.error?.type) friendlyError += ': ' + errJson.error.type;
+        } catch { friendlyError += ': ' + errBody.slice(0, 150); }
+        console.error('[Bill Scan] API error:', apiResp.status, errBody.slice(0, 300));
+        return res.status(502).json({ error: friendlyError });
+      }
+
+      const apiData = await apiResp.json();
+      const rawText = (apiData.content || []).filter(b=>b.type==='text').map(b=>b.text).join('');
+      const clean   = rawText.replace(/```json|```/g, '').trim();
+      let parsed;
+      try { parsed = JSON.parse(clean); }
+      catch(pe) {
+        console.error('[Bill Scan] JSON parse failed. Raw:', clean.slice(0, 300));
+        return res.status(422).json({ error: 'Could not parse AI response as JSON', raw: clean.slice(0, 500) });
+      }
+      res.json({ success: true, data: parsed });
+    } catch (e) {
+      if (e.name === 'AbortError') {
+        return res.status(504).json({ error: 'Invoice scan timed out (55s). The server is busy — please try again in a moment.' });
+      }
+      console.error('[Bill Scan]', e.message);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ── UTR EXTRACTION: Read UTR from customer's payment success screenshot ──
+  // Called from employee sale screen when employee uploads a payment screenshot.
+  // Uses Claude Vision to extract the UTR/transaction reference number.
+  // No auth required — employee token is valid, just verify it exists.
+  app.post('/api/utr-extract', authMiddleware(db), async (req, res) => {
+    const { image, mimeType } = req.body;
+    if (!image) return res.status(400).json({ error: 'No image provided' });
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+
+    try {
+      const safeMime = (() => {
+        const m = (mimeType || 'image/jpeg').toLowerCase();
+        if (m === 'image/jpg') return 'image/jpeg';
+        if (['image/jpeg','image/png','image/webp'].includes(m)) return m;
+        return 'image/jpeg';
+      })();
+
+      const resp = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01'
+        },
+        body: JSON.stringify({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 100,
+          messages: [{
+            role: 'user',
+            content: [
+              { type: 'image', source: { type: 'base64', media_type: safeMime, data: image } },
+              { type: 'text', text: 'This is a UPI payment success screenshot (PhonePe, Google Pay, or Paytm). Extract the UTR number or transaction reference number. UTR is typically 12 digits or alphanumeric. Reply with ONLY the UTR/reference number, nothing else. If you cannot find it, reply with "NOT_FOUND".' }
+            ]
+          }]
+        })
+      });
+
+      if (!resp.ok) return res.status(500).json({ error: 'Vision API failed' });
+      const data = await resp.json();
+      const extracted = (data.content?.[0]?.text || '').trim().replace(/[^A-Z0-9]/gi, '').toUpperCase();
+
+      if (!extracted || extracted === 'NOTFOUND' || extracted.length < 8) {
+        return res.json({ utr: null, message: 'UTR not found in image' });
+      }
+      res.json({ utr: extracted });
+    } catch(e) {
+      console.error('[UTR Extract]', e.message);
+      res.status(500).json({ error: 'Failed to extract UTR' });
+    }
+  });
+
+  // DELETE tenant — this is the critical route that was failing
+  app.delete('/api/data/tenants/:id', authMiddleware(db), reqRole('super'), async (req, res) => {
+    const client = await pool.connect();
+    try {
+      // FIX #26: don't log tenant name/username — use role only to avoid info leakage in logs
+      console.log('[Server] DELETE tenant:', req.params.id, 'by role:', req.userRole);
+      await auLog(req, 'DELETE_TENANT', 'tenants', req.params.id, '');
+
+      await client.query('BEGIN');
+      // BUG-E FIX: Cascade delete all tenant data to prevent orphaned rows.
+      // No FK constraints exist, so manual cleanup is required.
+      const tid = req.params.id;
+      const TENANT_TABLES = [
+        'sales', 'tanks', 'pumps', 'dip_readings', 'meter_readings', 'pump_readings',
+        'expenses', 'fuel_purchases', 'credit_customers', 'credit_transactions',
+        'employees', 'shifts', 'settings', 'audit_log', 'lubes_products', 'lubes_sales',
+        'alerts', 'push_subscriptions', 'dms_transactions',
+        'login_attempts',  // FIX FIND-DEL3: orphaned rows after tenant deletion
+        // NOTE: subscriptions, subscription_payments, and audit_log are intentionally
+        // excluded from hard-delete — see archive logic below (FIND-DEL1, FIND-DEL2 fixes)
+      ];
+      for (const tbl of TENANT_TABLES) {
+        await client.query(`DELETE FROM ${tbl} WHERE tenant_id = $1`, [tid]);
+      }
+      // FIX FIND-DEL1: Archive subscription records instead of deleting them.
+      // Billing history and payment proof must be retained for accounting/compliance.
+      await client.query(
+        `UPDATE subscriptions SET status = 'deleted', plan = 'deleted' WHERE tenant_id = $1`,
+        [tid]
+      );
+      // subscription_payments: keep intact (immutable financial records)
+
+      // FIX FIND-DEL2: Archive audit_log instead of deleting — retain forensic trail.
+      // The DELETE_TENANT event logged above is stored in this table and must not be erased.
+      // Audit records are purged by the 90-day maintenance job, not by tenant deletion.
+      // (audit_log is intentionally excluded from TENANT_TABLES above)
+
+      await client.query('DELETE FROM admin_users WHERE tenant_id = $1', [tid]);
+      await client.query('DELETE FROM sessions WHERE tenant_id = $1', [tid]);
+      await client.query('DELETE FROM tenants WHERE id = $1', [tid]);
+      await client.query('COMMIT');
+      client.release();
+      res.json({ success: true });
+    } catch (e) {
+      try { await client.query('ROLLBACK'); } catch {}
+      client.release();
+      console.error('[Server] DELETE tenant error:', e.message);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ── SUBSCRIPTION MANAGEMENT ROUTES ─────────────────────────────────────────
+
+  // GET subscription status for a tenant (super admin or own tenant)
+  app.get('/api/subscriptions/:tenantId', authMiddleware(db), async (req, res) => {
+    const tid = req.params.tenantId;
+    if (req.userType !== 'super' && req.tenantId !== tid)
+      return res.status(403).json({ error: 'Forbidden' });
+    try {
+      let sub = await pool.query('SELECT * FROM subscriptions WHERE tenant_id=$1', [tid]);
+      if (!sub.rows[0]) {
+        // Auto-create trial record for tenants without one
+        await pool.query(
+          'INSERT INTO subscriptions (tenant_id, plan, status, trial_days, trial_start) VALUES ($1,$2,$3,$4,NOW()) ON CONFLICT(tenant_id) DO NOTHING',
+          [tid, 'trial', 'trial', 30]
+        );
+        sub = await pool.query('SELECT * FROM subscriptions WHERE tenant_id=$1', [tid]);
+      }
+      const row = sub.rows[0];
+      // Compute effective status
+      const now = new Date();
+      let effectiveStatus = row.status;
+      if (row.status === 'trial') {
+        const trialEnd = new Date(row.trial_start);
+        trialEnd.setDate(trialEnd.getDate() + (row.trial_days || 30));
+        const daysLeft = Math.ceil((trialEnd - now) / 86400000);
+        effectiveStatus = daysLeft > 0 ? 'trial' : 'expired';
+        row.trial_end = trialEnd.toISOString();
+        row.trial_days_left = Math.max(0, daysLeft);
+      } else if (row.status === 'active' && row.sub_end) {
+        const subEnd = new Date(row.sub_end);
+        const graceEnd = new Date(subEnd);
+        graceEnd.setDate(graceEnd.getDate() + (row.grace_days || 3));
+        const daysLeft = Math.ceil((subEnd - now) / 86400000);
+        if (now > graceEnd) effectiveStatus = 'expired';
+        else if (now > subEnd) effectiveStatus = 'grace';
+        row.days_left = Math.max(0, daysLeft);
+      }
+      row.effective_status = effectiveStatus;
+      row.is_read_only = effectiveStatus === 'expired';
+      res.json(row);
+    } catch(e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // GET all subscriptions (super admin only)
+  app.get('/api/subscriptions', authMiddleware(db), reqRole('super'), async (req, res) => {
+    try {
+      // Auto-create trial subscription records for any tenant that doesn't have one
+      await pool.query(`
+        INSERT INTO subscriptions (tenant_id, plan, status, trial_days, trial_start, grace_days)
+        SELECT id, 'trial', 'trial', 30, NOW(), 3
+        FROM tenants
+        WHERE active = 1
+          AND id NOT IN (SELECT tenant_id FROM subscriptions)
+        ON CONFLICT (tenant_id) DO NOTHING
+      `);
+
+      const rows = await pool.query(`
+        SELECT s.*, t.name AS station_name, t.location, t.owner_name,
+          COALESCE(p.total_paid, 0) AS total_paid,
+          COALESCE(p.last_payment, NULL) AS last_payment
+        FROM subscriptions s
+        JOIN tenants t ON t.id = s.tenant_id
+        LEFT JOIN (
+          SELECT tenant_id, SUM(amount) AS total_paid, MAX(payment_date) AS last_payment
+          FROM subscription_payments GROUP BY tenant_id
+        ) p ON p.tenant_id = s.tenant_id
+        ORDER BY t.name ASC
+      `);
+      // Compute effective status for each
+      const now = new Date();
+      const result = rows.rows.map(row => {
+        let effectiveStatus = row.status;
+        let daysLeft = null;
+        if (row.status === 'trial') {
+          const trialEnd = new Date(row.trial_start);
+          trialEnd.setDate(trialEnd.getDate() + (row.trial_days || 30));
+          daysLeft = Math.ceil((trialEnd - now) / 86400000);
+          effectiveStatus = daysLeft > 0 ? 'trial' : 'expired';
+          row.trial_end = trialEnd.toISOString();
+        } else if (row.status === 'active' && row.sub_end) {
+          const subEnd = new Date(row.sub_end);
+          const graceEnd = new Date(subEnd);
+          graceEnd.setDate(graceEnd.getDate() + (row.grace_days || 3));
+          daysLeft = Math.ceil((subEnd - now) / 86400000);
+          if (now > graceEnd) effectiveStatus = 'expired';
+          else if (now > subEnd) effectiveStatus = 'grace';
+        }
+        return { ...row, effective_status: effectiveStatus, days_left: daysLeft };
+      });
+      res.json(result);
+    } catch(e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // PUT upsert subscription settings (super admin only)
+  app.put('/api/subscriptions/:tenantId', authMiddleware(db), reqRole('super'), async (req, res) => {
+    const tid = req.params.tenantId;
+    const { plan, status, trial_days, price_monthly, grace_days, owner_phone, notes, sub_start, sub_end } = req.body;
+    try {
+      await pool.query(`
+        INSERT INTO subscriptions (tenant_id, plan, status, trial_days, price_monthly, grace_days, owner_phone, notes, sub_start, sub_end, trial_start, updated_at)
+        VALUES ($1, COALESCE($2,'trial'), COALESCE($3,'trial'), COALESCE($4,30), COALESCE($5,0), COALESCE($6,3), COALESCE($7,''), COALESCE($8,''), $9, $10, NOW(), NOW())
+        ON CONFLICT(tenant_id) DO UPDATE SET
+          plan = COALESCE($2, subscriptions.plan),
+          status = COALESCE($3, subscriptions.status),
+          trial_days = COALESCE($4, subscriptions.trial_days),
+          price_monthly = COALESCE($5, subscriptions.price_monthly),
+          grace_days = COALESCE($6, subscriptions.grace_days),
+          owner_phone = COALESCE($7, subscriptions.owner_phone),
+          notes = COALESCE($8, subscriptions.notes),
+          sub_start = COALESCE($9, subscriptions.sub_start),
+          sub_end = COALESCE($10, subscriptions.sub_end),
+          updated_at = NOW()
+      `, [tid, plan, status, trial_days, price_monthly, grace_days, owner_phone, notes, sub_start||null, sub_end||null]);
+      res.json({ success: true });
+    } catch(e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // POST record a payment and activate/extend subscription
+  app.post('/api/subscriptions/:tenantId/payments', authMiddleware(db), reqRole('super'), async (req, res) => {
+    const tid = req.params.tenantId;
+    const { plan, amount, payment_mode, reference, months, notes } = req.body;
+    if (!amount || !months) return res.status(400).json({ error: 'amount and months required' });
+    try {
+      // Calculate new subscription period
+      const existing = await pool.query('SELECT * FROM subscriptions WHERE tenant_id=$1', [tid]);
+      const now = new Date();
+      let periodStart = now;
+      if (existing.rows[0]?.sub_end && new Date(existing.rows[0].sub_end) > now) {
+        periodStart = new Date(existing.rows[0].sub_end); // extend from current end
+      }
+      const periodEnd = new Date(periodStart);
+      periodEnd.setMonth(periodEnd.getMonth() + parseInt(months));
+
+      // Record payment
+      await pool.query(`
+        INSERT INTO subscription_payments (tenant_id, plan, amount, payment_mode, reference, months, period_start, period_end, notes, recorded_by)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+      `, [tid, plan||'monthly', amount, payment_mode||'upi', reference||'', months, periodStart.toISOString(), periodEnd.toISOString(), notes||'', req.adminUser?.name||'super']);
+
+      // Update subscription status to active
+      await pool.query(`
+        UPDATE subscriptions SET status='active', plan=$1, sub_start=COALESCE(sub_start,$2), sub_end=$3, updated_at=NOW()
+        WHERE tenant_id=$4
+      `, [plan||'monthly', periodStart.toISOString(), periodEnd.toISOString(), tid]);
+
+      res.json({ success: true, period_start: periodStart, period_end: periodEnd });
+    } catch(e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // GET payment history for a tenant
+  app.get('/api/subscriptions/:tenantId/payments', authMiddleware(db), reqRole('super'), async (req, res) => {
+    try {
+      const rows = await pool.query('SELECT * FROM subscription_payments WHERE tenant_id=$1 ORDER BY payment_date DESC', [req.params.tenantId]);
+      res.json(rows.rows);
+    } catch(e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // Public endpoint — station checks its own subscription status on login
+  app.get('/api/public/subscription/:tenantId', async (req, res) => {
+    try {
+      const sub = await pool.query('SELECT * FROM subscriptions WHERE tenant_id=$1', [req.params.tenantId]);
+      if (!sub.rows[0]) return res.json({ status: 'trial', days_left: 30, is_read_only: false });
+      const row = sub.rows[0];
+      const now = new Date();
+      let effectiveStatus = row.status;
+      let daysLeft = null;
+      if (row.status === 'trial') {
+        const trialEnd = new Date(row.trial_start);
+        trialEnd.setDate(trialEnd.getDate() + (row.trial_days || 30));
+        daysLeft = Math.ceil((trialEnd - now) / 86400000);
+        effectiveStatus = daysLeft > 0 ? 'trial' : 'expired';
+      } else if (row.status === 'active' && row.sub_end) {
+        const subEnd = new Date(row.sub_end);
+        const graceEnd = new Date(subEnd);
+        graceEnd.setDate(graceEnd.getDate() + (row.grace_days || 3));
+        daysLeft = Math.ceil((subEnd - now) / 86400000);
+        if (now > graceEnd) effectiveStatus = 'expired';
+        else if (now > subEnd) effectiveStatus = 'grace';
+      }
+      res.json({
+        plan: row.plan, status: effectiveStatus, days_left: daysLeft,
+        sub_end: row.sub_end, is_read_only: effectiveStatus === 'expired',
+        price_monthly: row.price_monthly
+      });
+    } catch(e) { res.json({ status: 'trial', days_left: 30, is_read_only: false }); }
+  });
+
+  // Keep legacy /api/data/* and new /api/* route styles working together.
+  app.get('/api/data/compare/summary', authMiddleware(db), async (req, res) => {
+    try {
+      // FIX 27: use istDate() — UTC date can be yesterday in IST after midnight UTC
+      const today = istDate();
+      const sevenDaysAgo = (() => {
+        const d = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+        d.setDate(d.getDate() - 7);
+        return d.toISOString().slice(0, 10);
+      })();
+      const isSuperUser = req.userType === 'super';
+      const ownerTenantId = req.tenantId;
+
+      // Query 1: all active tenants
+      const tenantRows = await pool.query(
+        'SELECT id, name, location FROM tenants WHERE active = 1 ORDER BY name'
+      );
+      if (!tenantRows.rows.length) return res.json({ stations: [], benchmark: null });
+
+      // Query 2: today sales — aggregated across ALL tenants in one shot
+      const salesTodayRows = await pool.query(
+        `SELECT tenant_id,
+                COALESCE(SUM(amount),0) AS revenue,
+                COALESCE(SUM(liters),0) AS liters,
+                COUNT(*)                AS txns
+         FROM sales WHERE date = $1 GROUP BY tenant_id`, [today]
+      );
+      const salesTodayMap = {};
+      salesTodayRows.rows.forEach(r => { salesTodayMap[r.tenant_id] = r; });
+
+      // Query 3: 7-day sales average — aggregated across all tenants
+      const sales7Rows = await pool.query(
+        `SELECT tenant_id,
+                COALESCE(SUM(amount),0)/7 AS avg_revenue,
+                COALESCE(SUM(liters),0)/7 AS avg_liters
+         FROM sales WHERE date >= $1 AND date < $2 GROUP BY tenant_id`,
+        [sevenDaysAgo, today]
+      );
+      const sales7Map = {};
+      sales7Rows.rows.forEach(r => { sales7Map[r.tenant_id] = r; });
+
+      // Query 4: tank levels — all tenants
+      const tankRows = await pool.query(
+        'SELECT tenant_id, name, fuel_type, current_level, capacity, low_alert FROM tanks ORDER BY tenant_id, name'
+      );
+      const tanksMap = {};
+      tankRows.rows.forEach(r => {
+        if (!tanksMap[r.tenant_id]) tanksMap[r.tenant_id] = [];
+        tanksMap[r.tenant_id].push(r);
+      });
+
+      // Query 5: employee counts — all tenants
+      const empRows = await pool.query(
+        'SELECT tenant_id, COUNT(*) AS cnt FROM employees WHERE active = 1 GROUP BY tenant_id'
+      );
+      const empMap = {};
+      empRows.rows.forEach(r => { empMap[r.tenant_id] = parseInt(r.cnt) || 0; });
+
+      // Assemble per-station data from maps (no DB calls inside loop)
+      const stationData = tenantRows.rows.map(t => {
+        const s  = salesTodayMap[t.id] || {};
+        const s7 = sales7Map[t.id]     || {};
+        const tanks = (tanksMap[t.id]  || []).map(tk => ({
+          name:     tk.name || '',
+          fuelType: tk.fuel_type,
+          current:  parseFloat(tk.current_level) || 0,
+          capacity: parseFloat(tk.capacity) || 1,
+          lowAlert: parseFloat(tk.low_alert) || 500,
+          pct: Math.round((parseFloat(tk.current_level)||0) / Math.max(parseFloat(tk.capacity)||1, 1) * 100),
+        }));
+        return {
+          tenantId:  t.id,
+          name:      t.name,
+          location:  t.location || '',
+          today:     { revenue: parseFloat(s.revenue)||0, liters: parseFloat(s.liters)||0, txns: parseInt(s.txns)||0 },
+          avg7:      { revenue: parseFloat(s7.avg_revenue)||0, liters: parseFloat(s7.avg_liters)||0 },
+          tanks,
+          employees: empMap[t.id] || 0,
+          isOwn:     !isSuperUser && t.id === ownerTenantId,
+        };
+      });
+
+      const allRev = stationData.map(s => s.today.revenue);
+      const allLit = stationData.map(s => s.today.liters);
+      const benchmark = {
+        avgRevenue:   allRev.reduce((a,b)=>a+b,0) / (allRev.length||1),
+        avgLiters:    allLit.reduce((a,b)=>a+b,0) / (allLit.length||1),
+        maxRevenue:   Math.max(...allRev, 0),
+        stationCount: stationData.length,
+      };
+
+      const visible = isSuperUser ? stationData : stationData.filter(s => s.tenantId === ownerTenantId);
+      res.json({ stations: visible, benchmark, isSuperUser, today });
+    } catch (err) {
+      console.error('[compare/summary]', err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.use('/api/data', authMiddleware(db), dataRoutes(db));
+  // NOTE: /api/data is the canonical path — do not add /api/* catch-all to avoid double processing
+
+  // ── PUSH NOTIFICATION ENDPOINTS ─────────────────────────────────────────
+  // FIX: Implement server-side VAPID push so station manager is notified
+  //      when the app is CLOSED (background push — previously missing, bug F-01).
+  //
+  // SETUP REQUIRED:
+  //   1. npm install web-push
+  //   2. node -e "const wp=require('web-push'); const k=wp.generateVAPIDKeys(); console.log(JSON.stringify(k))"
+  //   3. Set env vars: VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_MAILTO
+  //
+  // The client subscribes via POST /api/push/subscribe (auth required).
+  // Server triggers push via sendPushToTenant() (called from tank deduction + dip routes).
+  (function setupPushRoutes() {
+    let webpush = null;
+    try {
+      webpush = require('web-push');
+      if (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) {
+        webpush.setVapidDetails(
+          process.env.VAPID_MAILTO || 'mailto:admin@fuelbunk.app',
+          process.env.VAPID_PUBLIC_KEY,
+          process.env.VAPID_PRIVATE_KEY
+        );
+        console.log('[Push] VAPID keys loaded — background push enabled');
+      } else {
+        console.warn('[Push] VAPID keys not set — background push disabled. Set VAPID_PUBLIC_KEY + VAPID_PRIVATE_KEY env vars.');
+        webpush = null;
+      }
+    } catch(e) {
+      console.warn('[Push] web-push not installed — run: npm install web-push');
+      webpush = null;
+    }
+
+    // Expose VAPID public key to client (needed to create push subscription)
+    app.get('/api/push/vapid-public-key', authMiddleware(db), (req, res) => {
+      const key = process.env.VAPID_PUBLIC_KEY || '';
+      if (!key) return res.status(503).json({ error: 'Push notifications not configured on this server.' });
+      res.json({ publicKey: key });
+    });
+
+    // Save a push subscription for the current tenant + user
+    app.post('/api/push/subscribe', authMiddleware(db), async (req, res) => {
+      const { subscription } = req.body;
+      if (!subscription?.endpoint) return res.status(400).json({ error: 'Invalid subscription object' });
+      try {
+        // FIX #5: authMiddleware sets req.tenantId and req.userId — req.user does not exist
+        const tenantId = req.tenantId;
+        const userId   = req.userId || 'unknown';
+        const key = 'push_sub_' + Buffer.from(subscription.endpoint).toString('base64').slice(0, 40);
+        await pool.query(
+          'INSERT INTO settings (key, tenant_id, value, updated_at) VALUES ($1, $2, $3, NOW()) ON CONFLICT (key, tenant_id) DO UPDATE SET value=$3, updated_at=NOW()',
+          [key, tenantId, JSON.stringify({ subscription, userId, createdAt: new Date().toISOString() })]
+        );
+        // FIX 23: audit trail — push subscriptions are security-relevant (who receives tank alerts)
+        const { auditLog: auLog } = require('./security');
+        await auLog(req, 'PUSH_SUBSCRIBE', 'settings', key, `userId:${userId} endpoint:${subscription.endpoint.slice(-20)}`).catch(() => {});
+        res.json({ ok: true, message: 'Push subscription saved' });
+      } catch(e) {
+        res.status(500).json({ error: e.message });
+      }
+    });
+
+    // Unsubscribe (remove push subscription)
+    app.post('/api/push/unsubscribe', authMiddleware(db), async (req, res) => {
+      const { endpoint } = req.body;
+      if (!endpoint) return res.status(400).json({ error: 'Missing endpoint' });
+      try {
+        // FIX #6: same as #5 — use req.tenantId set by authMiddleware
+        const tenantId = req.tenantId;
+        const key = 'push_sub_' + Buffer.from(endpoint).toString('base64').slice(0, 40);
+        await pool.query('DELETE FROM settings WHERE key=$1 AND tenant_id=$2', [key, tenantId]);
+        // FIX 23: audit trail for unsubscribe
+        const { auditLog: auLog } = require('./security');
+        await auLog(req, 'PUSH_UNSUBSCRIBE', 'settings', key, `endpoint:${endpoint.slice(-20)}`).catch(() => {});
+        res.json({ ok: true });
+      } catch(e) { res.status(500).json({ error: e.message }); }
+    });
+
+    // Internal helper — called when tank level drops below threshold after dip/deduction
+    // Usage: await sendPushToTenant(pool, tenantId, { title, body, tag, url, urgency })
+    app.locals.sendPushToTenant = async function sendPushToTenant(pool, tenantId, payload) {
+      if (!webpush) return;
+      try {
+        const rows = await pool.query(
+          "SELECT value FROM settings WHERE tenant_id=$1 AND key LIKE 'push_sub_%'",
+          [tenantId]
+        );
+        const sends = rows.rows.map(async row => {
+          try {
+            const { subscription } = JSON.parse(row.value);
+            await webpush.sendNotification(subscription, JSON.stringify(payload));
+          } catch(e) {
+            // If subscription is expired/invalid, remove it
+            if (e.statusCode === 410 || e.statusCode === 404) {
+              const key = 'push_sub_' + Buffer.from(subscription?.endpoint || '').toString('base64').slice(0,40);
+              pool.query('DELETE FROM settings WHERE key=$1 AND tenant_id=$2', [key, tenantId]).catch(()=>{});
+            }
+          }
+        });
+        await Promise.allSettled(sends);
+      } catch(e) {
+        console.warn('[Push] sendPushToTenant error:', e.message);
+      }
+    };
+  })();
+  // ── END PUSH NOTIFICATION ENDPOINTS ─────────────────────────────────────
+
+
+  // ── PUBLIC: Tank deduction after employee shift submit ──────────────────────
+  app.post('/api/public/tank-deduct/:tenantId', async (req, res) => {
+    try {
+      // SECURITY FIX FIND-MT1: block cross-tenant writes from authenticated sessions
+      if (!(await checkPublicWriteTenant(req, res))) return;
+      const tenantId = req.params.tenantId;
+      const { deductions, shiftDate, idempotencyKey } = req.body;
+
+      // FIX FIND-IDEM-3: Reject arrays (typeof [] === 'object' in JS, must check explicitly)
+      if (!deductions || typeof deductions !== 'object' || Array.isArray(deductions)) {
+        return res.status(400).json({ error: 'Missing deductions' });
+      }
+
+      // FIX FIND-IDEM-2: Require idempotency key — prevents unprotected retries
+      if (!idempotencyKey) {
+        return res.status(400).json({ error: 'idempotencyKey is required to prevent duplicate deductions' });
+      }
+
+      const today = shiftDate || istDate();
+      const results = [];
+      const errors = [];
+
+      // Verify tenant exists and log deduction attempt
+      console.log(`[tank-deduct] tenantId=${tenantId} deductions=${JSON.stringify(deductions)} date=${today}`);
+
+      // Check what tanks actually exist for this tenant
+      const tankCheck = await pool.query(
+        'SELECT id, fuel_type, current_level, capacity FROM tanks WHERE tenant_id = $1',
+        [tenantId]
+      );
+      console.log(`[tank-deduct] Found ${tankCheck.rows.length} tanks: ${tankCheck.rows.map(t => t.fuel_type + '=' + t.current_level).join(', ')}`);
+
+      const clientTankDeduct = await pool.connect();
+      try {
+        await clientTankDeduct.query('BEGIN');
+
+        // FIX FIND-IDEM-1 (TOCTOU): INSERT idempotency key as the FIRST operation inside
+        // the transaction, BEFORE any tank UPDATE. The settings table has PRIMARY KEY(key, tenant_id)
+        // so this INSERT is atomic. If it conflicts (key already exists), ROLLBACK immediately
+        // and return a duplicate response — no tank is touched.
+        //
+        // OLD (vulnerable): SELECT idem (outside tx) → BEGIN → UPDATE tanks → COMMIT → INSERT idem
+        //   TOCTOU window: concurrent request passes SELECT before either INSERT completes.
+        //
+        // NEW (safe):       BEGIN → INSERT idem (conflict = duplicate, ROLLBACK) → UPDATE tanks → COMMIT
+        //   No window: only the transaction that wins the INSERT can deduct the tank.
+        const idemInsert = await clientTankDeduct.query(
+          'INSERT INTO settings(tenant_id, key, value) VALUES($1,$2,$3) ON CONFLICT DO NOTHING',
+          [tenantId, `tank_deduct_idem_${idempotencyKey}`,
+           JSON.stringify({ date: today, status: 'processing' })]
+        );
+        if (idemInsert.rowCount === 0) {
+          // Key already exists — this is a duplicate request
+          await clientTankDeduct.query('ROLLBACK');
+          clientTankDeduct.release();
+          console.log(`[tank-deduct] Idempotency: Already processed ${idempotencyKey}`);
+          return res.json({ success: true, duplicate: true, message: 'Already processed' });
+        }
+
+        for (const [rawFuelType, liters] of Object.entries(deductions)) {
+          if (!liters || liters <= 0) continue;
+
+          // FUEL TYPE FIX: Use LOWER() for case-insensitive matching
+          // Handles 'petrol' vs 'Petrol', 'premium_petrol' vs 'Premium_Petrol', etc.
+          const tankRow = await clientTankDeduct.query(
+            'SELECT id, fuel_type, last_dip, last_dip_source, current_level, capacity FROM tanks WHERE tenant_id = $1 AND LOWER(fuel_type) = LOWER($2) FOR UPDATE',
+            [tenantId, rawFuelType]
+          );
+          const tank = tankRow.rows[0];
+          if (!tank) {
+            const msg = `No tank found for fuel_type='${rawFuelType}' (tried LOWER match). Available: ${tankCheck.rows.map(t=>t.fuel_type).join(', ')}`;
+            console.warn(`[tank-deduct] ${msg}`);
+            errors.push(msg);
+            continue;
+          }
+
+          const before = parseFloat(tank.current_level) || 0;
+          const after = Math.max(0, before - liters);
+          console.log(`[tank-deduct] ${tank.fuel_type}: ${before}L - ${liters}L = ${after}L`);
+
+          await clientTankDeduct.query(
+            `UPDATE tanks
+             SET current_level = GREATEST(0, COALESCE(current_level, 0) - $1),
+                 last_dip = $2,
+                 last_dip_source = 'shift_close',
+                 updated_at = NOW()
+             WHERE tenant_id = $3 AND id = $4`,
+            [liters, today, tenantId, tank.id]
+          );
+          results.push({ fuelType: tank.fuel_type, before, deducted: liters, after });
+        }
+
+        // Update idem key with final results (was set to 'processing' at transaction start)
+        await clientTankDeduct.query(
+          'UPDATE settings SET value=$1 WHERE tenant_id=$2 AND key=$3',
+          [JSON.stringify({ date: today, results }), tenantId, `tank_deduct_idem_${idempotencyKey}`]
+        );
+
+        await clientTankDeduct.query('COMMIT');
+        console.log(`[tank-deduct] COMMIT success. Results: ${JSON.stringify(results)}`);
+      } catch (txErr) {
+        await clientTankDeduct.query('ROLLBACK').catch(() => {});
+        clientTankDeduct.release();
+        console.error(`[tank-deduct] ROLLBACK: ${txErr.message}`);
+        throw txErr;
+      }
+      clientTankDeduct.release();
+
+      // Post-commit: fire push notifications (outside transaction)
+      for (const r of results) {
+        try {
+          if (app.locals.sendPushToTenant) {
+            const capacity = r.after > 0 ? (r.after / (r.after + r.deducted) * 100) : 0;
+            const pct = Math.round((r.after / Math.max(r.before + r.deducted, 1)) * 100);
+            if (pct < 20) {
+              app.locals.sendPushToTenant(tenantId, {
+                title: `⚠️ Low Tank: ${r.fuelType}`,
+                body: `${r.fuelType} tank at ${pct}% (${r.after.toFixed(0)}L remaining)`
+              });
+            }
+          }
+        } catch(e) { /* non-critical */ }
+      }
+
+      res.json({ success: true, results, errors: errors.length ? errors : undefined });
+    } catch(e) {
+      console.error('[tank-deduct] FATAL:', e.message);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+
+  // ── PUBLIC: Save employee shift history summary ──────────────────────────────
+  app.get('/api/public/sales-summary/:tenantId', async (req, res) => {
+    try {
+      const { tenantId } = req.params;
+      const { from, to } = req.query;
+      const today = istDate();
+      const fromDate = from || today;
+      const toDate = to || today;
+      // SCHEMA FIX: old schema uses 'quantity', new schema uses 'liters'
+      // Use COALESCE to support both during migration
+      const rows = await pool.query(
+        `SELECT COALESCE(SUM(amount),0) AS revenue,
+                COALESCE(SUM(COALESCE(liters, quantity, 0)),0) AS liters,
+                COUNT(*) AS txns
+         FROM sales WHERE tenant_id=$1 AND date>=$2 AND date<=$3`,
+        [tenantId, fromDate, toDate]
+      );
+      const tankRows = await pool.query(
+        // tanks table always uses current_level (confirmed in schema.js)
+        // NOTE: 'current' is a PostgreSQL reserved word — never use it bare in SQL
+        'SELECT fuel_type, current_level, capacity FROM tanks WHERE tenant_id=$1', [tenantId]
+      );
+      const empRows = await pool.query(
+        'SELECT COUNT(*) AS cnt FROM employees WHERE tenant_id=$1 AND active=1', [tenantId]
+      );
+      const r = rows.rows[0] || {};
+      res.json({
+        revenue: parseFloat(r.revenue)||0,
+        liters: parseFloat(r.liters)||0,
+        totalRevenue: parseFloat(r.revenue)||0,
+        totalSales: parseInt(r.txns)||0,
+        txns: parseInt(r.txns)||0,
+        count: parseInt(r.txns)||0,
+        employees: parseInt(empRows.rows[0]?.cnt)||0,
+        tanks: tankRows.rows.map(t => ({
+          fuel_type: t.fuel_type,
+          current_level: parseFloat(t.current_level)||0,
+          capacity: parseFloat(t.capacity)||0,
+        })),
+      });
+    } catch(e) {
+      console.error('[public/sales-summary]', e.message);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/public/shift-history/:tenantId', async (req, res) => {
+    try {
+      const tenantId = req.params.tenantId;
+      const h = req.body;
+      if (!h || !h.employeeId || !h.date) {
+        return res.status(400).json({ error: 'Missing required fields' });
+      }
+      // Store in settings table as JSON array keyed by tenantId+employeeId
+      const key = 'shift_history_' + h.employeeId;
+      const existing = await pool.query(
+        "SELECT value FROM settings WHERE key = $1 AND tenant_id = $2",
+        [key, tenantId]
+      );
+      let history = [];
+      if (existing.rows[0]) {
+        try { history = JSON.parse(existing.rows[0].value); } catch {}
+      }
+      // FA-05 FIX: idempotency — upsert same date entry rather than always prepend.
+      // If a record for the same date (and same shift if provided) already exists, update it.
+      const newEntry = {
+        date: h.date,
+        user: h.user || '',
+        shift: h.shift || '',
+        liters: h.liters || 0,
+        revenue: h.revenue || 0,
+        salesCount: h.salesCount || 0,
+        sales: h.sales || [],
+        openReadings: h.openReadings || {},
+        closeReadings: h.closeReadings || {},
+        timestamp: h.timestamp || Date.now(),
+      };
+      const dupeIdx = history.findIndex(e => e.date === h.date && (e.user === h.user || !e.shift));
+      if (dupeIdx >= 0) {
+        // Update existing record — same date+employee resubmission (network retry or double-tap)
+        history[dupeIdx] = newEntry;
+      } else {
+        history.unshift(newEntry);
+      }
+      history = history.slice(0, 180); // M-04 FIX: 180 entries ~= 6 months of daily shifts
+      if (existing.rows[0]) {
+        await pool.query(
+          "UPDATE settings SET value=$1 WHERE key=$2 AND tenant_id=$3",
+          [JSON.stringify(history), key, tenantId]
+        );
+      } else {
+        await pool.query(
+          "INSERT INTO settings (tenant_id, key, value) VALUES ($1,$2,$3)",
+          [tenantId, key, JSON.stringify(history)]
+        );
+      }
+      res.json({ success: true });
+    } catch (e) {
+      console.error('[public/shift-history]', e.message);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ── PUBLIC: Get employee shift history ───────────────────────────────────────
+  app.get('/api/public/shift-history/:tenantId/:employeeId', async (req, res) => {
+    try {
+      const key = 'shift_history_' + req.params.employeeId;
+      const r = await pool.query(
+        "SELECT value FROM settings WHERE key=$1 AND tenant_id=$2",
+        [key, req.params.tenantId]
+      );
+      if (!r.rows[0]) return res.json([]);
+      let history = [];
+      try { history = JSON.parse(r.rows[0].value); } catch {}
+      res.json(history);
+    } catch (e) {
+      res.json([]);
+    }
+  });
+
+
+  // ── PUBLIC: Save employee expense ────────────────────────────────────────────
+  app.post('/api/public/expense/:tenantId', async (req, res) => {
+    try {
+      const tenantId = req.params.tenantId;
+      const e = req.body;
+      
+      // FIX: Validate required fields and amounts
+      if (!e || !e.amount || !e.category) {
+        return res.status(400).json({ error: 'Missing required fields' });
+      }
+
+      // FIX: Reject empty description — description is required for audit trail
+      const desc = e.desc || e.description || '';
+      if (!desc || desc.trim() === '') {
+        return res.status(400).json({ error: 'Description is required for expenses' });
+      }
+      
+      // FIX: Validate amount is positive and reasonable
+      const amount = parseFloat(e.amount);
+      if (isNaN(amount) || amount <= 0 || amount > 10000000) {
+        return res.status(400).json({ error: 'Invalid amount' });
+      }
+      
+      // FIX: Idempotency protection - prevent duplicate expense submissions on network retry
+      if (e.idempotencyKey) {
+        const existing = await pool.query(
+          'SELECT id FROM expenses WHERE tenant_id = $1 AND idempotency_key = $2',
+          [tenantId, e.idempotencyKey]
+        );
+        if (existing.rows.length > 0) {
+          return res.json({ success: true, duplicate: true, id: existing.rows[0].id });
+        }
+      }
+      
+      await pool.query(
+        `INSERT INTO expenses
+          (tenant_id, date, category, description, amount, mode, paid_to, approved_by, idempotency_key)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+        [
+          tenantId,
+          e.date || istDate(),
+          e.category || 'General',
+          e.desc || e.description || '',
+          amount,
+          e.mode || 'cash',
+          e.employee || '',
+          e.employee || '',
+          e.idempotencyKey || ''
+        ]
+      );
+      res.json({ success: true });
+    } catch (err) {
+      console.error('[public/expense]', err.message);
+      // FIX: Check for unique constraint violation (duplicate idempotency key)
+      if (err.message && err.message.includes('idx_expenses_idem')) {
+        return res.json({ success: true, duplicate: true });
+      }
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // ENHANCED FEATURES API ENDPOINTS
+  // ══════════════════════════════════════════════════════════════════════════
+
+  // ── SMART ALERTS ────────────────────────────────────────────────────────
+  
+  // Get active alerts for tenant
+  app.get('/api/alerts/:tenantId', authMiddleware(db), async (req, res) => {
+    try {
+      const alerts = await getActiveAlerts(req.params.tenantId);
+      res.json(alerts);
+    } catch (error) {
+      console.error('[API] Get alerts error:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Acknowledge an alert
+  app.post('/api/alerts/:tenantId/acknowledge', authMiddleware(db), async (req, res) => {
+    try {
+      const { alert_id } = req.body;
+      const userId = req.session?.user_id || 0;
+      const success = await acknowledgeAlert(alert_id, userId);
+      res.json({ success });
+    } catch (error) {
+      console.error('[API] Acknowledge alert error:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Get alert statistics
+  app.get('/api/alerts/:tenantId/stats', authMiddleware(db), async (req, res) => {
+    try {
+      const days = parseInt(req.query.days) || 7;
+      const stats = await getAlertStats(req.params.tenantId, days);
+      res.json(stats);
+    } catch (error) {
+      console.error('[API] Get alert stats error:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // ── ONE-TAP SHIFT CLOSE ─────────────────────────────────────────────────
+  
+  // Auto-close shift with complete summary
+  app.post('/api/auto-close-shift/:tenantId', authMiddleware(db), async (req, res) => {
+    try {
+      const { employee_id } = req.body;
+      const result = await autoCloseShift(req.params.tenantId, employee_id);
+      res.json(result);
+    } catch (error) {
+      console.error('[API] Auto-close shift error:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Get shift summary without closing (preview)
+  app.get('/api/shift-summary/:tenantId/:employeeId', authMiddleware(db), async (req, res) => {
+    try {
+      const result = await getShiftSummary(req.params.tenantId, parseInt(req.params.employeeId));
+      res.json(result);
+    } catch (error) {
+      console.error('[API] Get shift summary error:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // ── WHATSAPP INTEGRATION ────────────────────────────────────────────────
+  
+  // Send daily report via WhatsApp
+  app.post('/api/whatsapp/send-daily-report/:tenantId', authMiddleware(db), async (req, res) => {
+    try {
+      if (!whatsapp.enabled) {
+        return res.status(400).json({ error: 'WhatsApp not configured. Set WHATSAPP_API_KEY environment variable.' });
+      }
+
+      const { phone } = req.body;
+      const { pool } = require('./schema');
+
+      // BUG-03 FIX: Use correct column names: liters (not quantity), mode (not payment_method),
+      // date (not timestamp). Also use IST date string for filtering.
+      const istToday = new Date().toLocaleString('en-CA', { timeZone: 'Asia/Kolkata' }).slice(0, 10);
+      const reportResult = await pool.query(`
+        SELECT 
+          COUNT(*) as transactions,
+          SUM(amount) as total_amount,
+          SUM(liters) as total_liters,
+          SUM(CASE WHEN mode = 'cash' THEN amount ELSE 0 END) as cash,
+          SUM(CASE WHEN mode = 'card' THEN amount ELSE 0 END) as card,
+          SUM(CASE WHEN mode = 'upi' THEN amount ELSE 0 END) as upi
+        FROM sales
+        WHERE tenant_id = $1
+          AND date = $2
+      `, [req.params.tenantId, istToday]);
+
+      const totals = reportResult.rows[0];
+      const reportData = {
+        date: new Date().toLocaleDateString('en-IN'),
+        totals: {
+          transactions: parseInt(totals.transactions) || 0,
+          amount: parseFloat(totals.total_amount) || 0,
+          liters: parseFloat(totals.total_liters) || 0,
+          cash: parseFloat(totals.cash) || 0,
+          card: parseFloat(totals.card) || 0,
+          upi: parseFloat(totals.upi) || 0
+        }
+      };
+
+      const result = await whatsapp.sendDailyReport(phone, reportData);
+      res.json(result);
+    } catch (error) {
+      console.error('[API] Send WhatsApp daily report error:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Send shift summary via WhatsApp
+  app.post('/api/whatsapp/send-shift-summary/:tenantId', authMiddleware(db), async (req, res) => {
+    try {
+      if (!whatsapp.enabled) {
+        return res.status(400).json({ error: 'WhatsApp not configured' });
+      }
+
+      const { phone, shift_data } = req.body;
+      const result = await whatsapp.sendShiftSummary(phone, shift_data);
+      res.json(result);
+    } catch (error) {
+      console.error('[API] Send WhatsApp shift summary error:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Send alert via WhatsApp
+  app.post('/api/whatsapp/send-alert/:tenantId', authMiddleware(db), async (req, res) => {
+    try {
+      if (!whatsapp.enabled) {
+        return res.status(400).json({ error: 'WhatsApp not configured' });
+      }
+
+      const { phone, alert_data } = req.body;
+      const result = await whatsapp.sendAlert(phone, alert_data);
+      res.json(result);
+    } catch (error) {
+      console.error('[API] Send WhatsApp alert error:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // END ENHANCED FEATURES
+  // ══════════════════════════════════════════════════════════════════════════
+
+  // ── COMPARE: multi-station summary (super = all tenants; admin = own + benchmark) ──
+  // ── Super Admin Secret Entry Route ──────────────────────────────────────
+  // Set SUPER_ENTRY_PATH in Railway env vars (e.g. /super or /manage or /fs-admin-2026)
+  // - Not set → route doesn't exist, returns 404 like any unknown page
+  // - Set → visiting that URL sets a single-use cookie 'sa_entry=1' and redirects
+  //   to '/' — bridge.js reads the cookie, clears it, and opens the station selector
+  // - The secret path never appears in any JS file served to the browser
+  // - Change the path in Railway any time without redeploying code
+  const SUPER_ENTRY_PATH = (process.env.SUPER_ENTRY_PATH || '').trim();
+  if (SUPER_ENTRY_PATH && SUPER_ENTRY_PATH.startsWith('/')) {
+    app.get(SUPER_ENTRY_PATH, (req, res) => {
+      // Set a single-use, short-lived JS-readable cookie
+      // maxAge: 30 seconds — enough for the redirect + page load, expires quickly if unused
+      res.cookie('sa_entry', '1', {
+        maxAge: 30000,
+        httpOnly: false,   // JS must read it in bridge.js
+        sameSite: 'Strict',
+        secure: req.secure || req.headers['x-forwarded-proto'] === 'https',
+        path: '/'
+      });
+      // Redirect to root — clean URL, no trace of the secret path in the browser
+      res.redirect(302, '/');
+    });
+    console.log(`[Server] Super admin entry route active at: ${SUPER_ENTRY_PATH}`);
+  }
+
+  // H-02 FIX: Rewritten from N+1 (5 queries × N tenants) to 5 aggregated queries total.
+  // At 200 bunks: was 1,000 DB hits → now 5 DB hits regardless of bunk count.
+  // Inject company name from env var into every page — reads COMPANY_NAME from Railway
+  const COMPANY_NAME_JS = JSON.stringify(process.env.COMPANY_NAME || 'Your Company Name');
+  app.get('*', (req, res) => {
+    if (req.path.startsWith('/api/')) return res.status(404).json({ error: 'Not found' });
+    // Serve index.html with company name injected as a global JS variable
+    const fs = require('fs');
+    const indexPath = path.join(publicDir, 'index.html');
+    let html = fs.readFileSync(indexPath, 'utf8');
+    html = html.replace(
+      '<script src="/api-client.js?v=24">',
+      `<script>window.FUELBUNK_COMPANY_NAME = ${COMPANY_NAME_JS};</script>\n<script src="/api-client.js?v=24">`
+    );
+    res.setHeader('Content-Type', 'text/html');
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.send(html);
+  });
+
+  app.use((err, req, res, next) => {
+    // FIX: PayloadTooLargeError thrown by express.json() when body exceeds limit.
+    // Without this check Express returns 500 — correct status is 413.
+    if (err.type === 'entity.too.large' || err.status === 413 || err.statusCode === 413) {
+      return res.status(413).json({ error: 'Request payload too large. Maximum size is 2MB.' });
+    }
+    // FIX: SyntaxError from malformed JSON body — return 400 not 500
+    if (err instanceof SyntaxError && err.status === 400 && 'body' in err) {
+      return res.status(400).json({ error: 'Invalid JSON in request body.' });
+    }
+    // SECURITY FIX FIND-MT3: Never expose raw error messages in production.
+    // e.message can contain DB table names, query fragments, or internal paths.
+    console.error('[Error]', err.message);
+    const isProd = process.env.NODE_ENV === 'production';
+    res.status(500).json({ error: isProd ? 'Internal server error' : err.message });
+  });
+
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`[FuelBunk Pro] Running on port ${PORT} with PostgreSQL`);
+  });
+
+  // PERF FIX: Keep-alive self-ping — prevents Railway free-tier cold starts.
+  // Pings /api/health every 10 minutes so the instance never goes to sleep.
+  // Only runs in production; skipped in test/dev to avoid noise.
+  if (process.env.NODE_ENV === 'production' || process.env.KEEP_ALIVE === 'true') {
+    const keepAliveUrl = `http://localhost:${PORT}/api/health`;
+    setInterval(async () => {
+      try {
+        const http = require('http');
+        http.get(keepAliveUrl, (res) => {
+          res.resume(); // drain response
+        }).on('error', () => {}); // silent fail — server may be restarting
+      } catch {}
+    }, 10 * 60 * 1000); // every 10 minutes
+    console.log('[KeepAlive] Self-ping enabled — pinging every 10 minutes');
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PRODUCTION MAINTENANCE JOBS - Optimized for 1000 concurrent users
+  // ═══════════════════════════════════════════════════════════════════════════
+  
+  // Session Cleanup - Every 15 minutes (prevents authentication slowdown)
+  // With 1000 users, expect ~10,000 session records/day. Clean aggressively.
+  const sessionCleanupInterval = setInterval(async () => {
+    try {
+      const result = await pool.query('DELETE FROM sessions WHERE expires_at < NOW()');
+      if (result.rowCount > 0) {
+        console.log(`[Cleanup] Removed ${result.rowCount} expired sessions`);
+      }
+    } catch (e) {
+      console.error('[Cleanup Error] Sessions:', e.message);
+    }
+  }, 15 * 60 * 1000); // Every 15 minutes
+
+  // Login Attempts Cleanup - Every 1 hour (security log maintenance)
+  // Keeps only last 24 hours for brute force detection
+  const loginCleanupInterval = setInterval(async () => {
+    try {
+      const result = await pool.query(
+        "DELETE FROM login_attempts WHERE attempted_at < NOW() - INTERVAL '24 hours'"
+      );
+      if (result.rowCount > 0) {
+        console.log(`[Cleanup] Removed ${result.rowCount} old login attempts`);
+      }
+    } catch (e) {
+      console.error('[Cleanup Error] Login attempts:', e.message);
+    }
+  }, 60 * 60 * 1000); // Every 1 hour
+
+  // Audit Log Retention - Daily (prevents unbounded growth)
+  // Keeps 90 days of audit history. With 100 stations: ~80,000 rows/day
+  const auditCleanupInterval = setInterval(async () => {
+    try {
+      const result = await pool.query(
+        "DELETE FROM audit_log WHERE created_at < NOW() - INTERVAL '90 days'"
+      );
+      if (result.rowCount > 0) {
+        console.log(`[Cleanup] Removed ${result.rowCount} old audit log entries (90-day retention)`);
+      }
+    } catch (e) {
+      console.error('[Cleanup Error] Audit log:', e.message);
+    }
+  }, 24 * 60 * 60 * 1000); // Every 24 hours
+
+  console.log('[Server] Periodic cleanup jobs initialized (sessions: 15min, logins: 1hr, audit: 24hr)');
+
+  // ── SUBSCRIPTION EXPIRY REMINDERS — runs every 24h at startup + daily ────────
+  // Sends WhatsApp to station owner at 7, 3, 1 days before expiry
+  // Also notifies super admin when any station expires
+  const SUPER_ADMIN_PHONE = process.env.SUPER_ADMIN_PHONE || '';
+
+  async function runSubscriptionReminders() {
+    console.log('[SubReminder] Running daily subscription check...');
+    try {
+      const now = new Date();
+      const subs = await pool.query(`
+        SELECT s.*, t.name AS station_name, t.phone AS station_phone
+        FROM subscriptions s JOIN tenants t ON t.id = s.tenant_id
+        WHERE s.status IN ('trial','active')
+      `);
+
+      let remindersCount = 0;
+      for (const row of subs.rows) {
+        let expiryDate = null;
+        let isExpired = false;
+
+        if (row.status === 'trial') {
+          expiryDate = new Date(row.trial_start);
+          expiryDate.setDate(expiryDate.getDate() + (row.trial_days || 30));
+        } else if (row.status === 'active' && row.sub_end) {
+          expiryDate = new Date(row.sub_end);
+        }
+        if (!expiryDate) continue;
+
+        const daysLeft = Math.ceil((expiryDate - now) / 86400000);
+        const graceEnd = new Date(expiryDate);
+        graceEnd.setDate(graceEnd.getDate() + (row.grace_days || 3));
+        const isGraceExpired = now > graceEnd;
+
+        // Mark as expired in DB if past grace period
+        if (isGraceExpired && row.status !== 'expired') {
+          await pool.query("UPDATE subscriptions SET status='expired', updated_at=NOW() WHERE tenant_id=$1", [row.tenant_id]);
+          isExpired = true;
+          console.log('[SubReminder] Marked expired:', row.station_name);
+        }
+
+        const ownerPhone = row.owner_phone || row.station_phone || '';
+        const stationName = row.station_name || row.tenant_id;
+        const planLabel = row.status === 'trial' ? 'Trial' : (row.plan || 'Subscription');
+
+        // Send reminder to station owner
+        if (ownerPhone && [7, 3, 1].includes(daysLeft)) {
+          const msg = daysLeft === 1
+            ? `⚠️ *FuelBunk Pro — URGENT*
+
+🏪 ${stationName}
+
+Your ${planLabel} expires *TOMORROW*!
+
+After expiry you will be in read-only mode — no new sales can be recorded.
+
+Please renew immediately.
+
+_— FuelBunk Pro_`
+            : `📅 *FuelBunk Pro Reminder*
+
+🏪 ${stationName}
+
+Your ${planLabel} expires in *${daysLeft} days*.
+
+Contact your FuelBunk Pro admin to renew and avoid disruption.
+
+_— FuelBunk Pro_`;
+          await whatsapp.sendMessage(ownerPhone, msg);
+          remindersCount++;
+        }
+
+        // Notify super admin on expiry
+        if (isExpired && SUPER_ADMIN_PHONE) {
+          const msg = `🔴 *Station Subscription Expired*
+
+🏪 ${stationName}
+📅 Expired: ${expiryDate.toLocaleDateString('en-IN')}
+💰 Plan: ${planLabel}
+
+Station is now in read-only mode.
+
+_— FuelBunk Pro Auto-Alert_`;
+          await whatsapp.sendMessage(SUPER_ADMIN_PHONE, msg);
+        }
+
+        // Notify super admin 7 days before ANY station expires
+        if (daysLeft === 7 && SUPER_ADMIN_PHONE) {
+          const msg = `⚠️ *Subscription Expiring Soon*
+
+🏪 ${stationName}
+📅 Expires in 7 days: ${expiryDate.toLocaleDateString('en-IN')}
+💰 Plan: ${planLabel}
+
+Follow up with station owner for renewal.
+
+_— FuelBunk Pro_`;
+          await whatsapp.sendMessage(SUPER_ADMIN_PHONE, msg);
+        }
+      }
+      console.log('[SubReminder] Done. Reminders sent:', remindersCount);
+    } catch(e) {
+      console.error('[SubReminder] Error:', e.message);
+    }
+  }
+
+  // Run once at startup (after 5 min delay to let server settle), then every 24h
+  const subReminderTimeout = setTimeout(runSubscriptionReminders, 5 * 60 * 1000);
+  const subReminderInterval = setInterval(runSubscriptionReminders, 24 * 60 * 60 * 1000);
+  console.log('[Server] Subscription reminder job initialized (daily)');
+
+  // FIX #38: Close DB pool on shutdown so in-flight queries finish cleanly
+  const gracefulShutdown = async (signal) => {
+    console.log(`[Server] ${signal} received — shutting down gracefully...`);
+    
+    // Clear all periodic cleanup intervals
+    clearInterval(sessionCleanupInterval);
+    clearInterval(loginCleanupInterval);
+    clearInterval(auditCleanupInterval);
+    clearInterval(subReminderInterval);
+    clearTimeout(subReminderTimeout);
+    console.log('[Server] Cleanup jobs stopped');
+    
+    // Close database pool
+    try { 
+      await pool.end(); 
+      console.log('[Server] Database pool closed');
+    } catch (e) { 
+      console.warn('[Server] Pool close error:', e.message); 
+    }
+    
+    process.exit(0);
+  };
+  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+  process.on('SIGINT',  () => gracefulShutdown('SIGINT'));
+}
+
+startServer().catch(e => {
+  console.error('[FATAL]', e);
+  process.exit(1);
+});

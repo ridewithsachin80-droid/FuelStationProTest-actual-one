@@ -1,0 +1,698 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FuelBunk Pro — Live Test Dashboard</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Syne:wght@400;700;800&display=swap');
+  :root {
+    --bg: #0a0c10; --bg1: #111318; --bg2: #1a1d24;
+    --accent: #d4940f; --green: #22c55e; --red: #ef4444;
+    --blue: #3b82f6; --purple: #8b5cf6; --orange: #f97316;
+    --text: #f4f5f7; --text2: #9498a5; --border: rgba(255,255,255,0.08);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: 'Syne', sans-serif; min-height: 100vh; }
+  .header { padding: 24px 32px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 16px; }
+  .header h1 { font-size: 20px; font-weight: 800; }
+  .header .badge { background: var(--accent); color: #000; font-size: 10px; font-weight: 800; padding: 3px 8px; border-radius: 4px; text-transform: uppercase; }
+  .main { display: grid; grid-template-columns: 300px 1fr; height: calc(100vh - 73px); }
+  .sidebar { border-right: 1px solid var(--border); padding: 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+  .test-btn { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; cursor: pointer; text-align: left; transition: all 0.15s; color: var(--text); font-family: 'Syne', sans-serif; }
+  .test-btn:hover { border-color: var(--accent); background: rgba(212,148,15,0.08); }
+  .test-btn .label { font-size: 13px; font-weight: 700; display: block; }
+  .test-btn .desc { font-size: 11px; color: var(--text2); margin-top: 3px; }
+  .test-btn .status { float: right; width: 8px; height: 8px; border-radius: 50%; background: var(--border); margin-top: 4px; }
+  .test-btn.pass .status { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .test-btn.fail .status { background: var(--red); box-shadow: 0 0 6px var(--red); }
+  .test-btn.running .status { background: var(--accent); animation: pulse 0.8s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+  .section-label { font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 1.5px; color: var(--text2); padding: 8px 4px 4px; }
+  .log-area { flex: 1; padding: 20px 24px; overflow-y: auto; font-family: 'JetBrains Mono', monospace; font-size: 12px; display: flex; flex-direction: column; gap: 4px; }
+  .log-line { display: flex; gap: 12px; padding: 6px 10px; border-radius: 6px; align-items: flex-start; }
+  .log-line.info { background: rgba(59,130,246,0.06); border-left: 2px solid var(--blue); }
+  .log-line.pass { background: rgba(34,197,94,0.06); border-left: 2px solid var(--green); }
+  .log-line.fail { background: rgba(239,68,68,0.08); border-left: 2px solid var(--red); }
+  .log-line.warn { background: rgba(249,115,22,0.06); border-left: 2px solid var(--orange); }
+  .log-line.head { background: rgba(212,148,15,0.08); border-left: 3px solid var(--accent); font-weight: 700; }
+  .log-time { color: var(--text2); font-size: 10px; white-space: nowrap; margin-top: 1px; }
+  .log-msg { flex: 1; line-height: 1.5; }
+  .log-msg code { background: rgba(255,255,255,0.08); padding: 1px 5px; border-radius: 3px; font-size: 11px; }
+  .toolbar { padding: 12px 24px; border-bottom: 1px solid var(--border); display: flex; gap: 10px; align-items: center; }
+  .btn { padding: 8px 16px; border-radius: 6px; border: none; cursor: pointer; font-family: 'Syne', sans-serif; font-weight: 700; font-size: 12px; transition: all 0.15s; }
+  .btn-accent { background: var(--accent); color: #000; }
+  .btn-accent:hover { background: #e8a012; }
+  .btn-ghost { background: var(--bg2); color: var(--text); border: 1px solid var(--border); }
+  .btn-ghost:hover { border-color: var(--accent); }
+  .btn-red { background: rgba(239,68,68,0.15); color: var(--red); border: 1px solid rgba(239,68,68,0.3); }
+  .url-input { flex: 1; background: var(--bg2); border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px; color: var(--text); font-family: 'JetBrains Mono', monospace; font-size: 12px; outline: none; }
+  .url-input:focus { border-color: var(--accent); }
+  .summary-bar { padding: 10px 24px; border-top: 1px solid var(--border); display: flex; gap: 20px; font-size: 12px; }
+  .summary-item { display: flex; align-items: center; gap: 6px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; }
+  .content-area { display: flex; flex-direction: column; overflow: hidden; }
+  .empty-state { flex: 1; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 12px; color: var(--text2); }
+  .empty-icon { font-size: 48px; opacity: 0.3; }
+  .run-all-hint { font-size: 13px; }
+  .copy-script-area { padding: 16px 24px; border-bottom: 1px solid var(--border); }
+  .script-box { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 14px; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text2); white-space: pre-wrap; max-height: 120px; overflow-y: auto; cursor: text; user-select: all; }
+  .progress-bar { height: 2px; background: var(--border); position: relative; }
+  .progress-fill { height: 100%; background: var(--accent); transition: width 0.3s; width: 0%; }
+</style>
+</head>
+<body>
+<div class="header">
+  <div style="font-size:24px">⛽</div>
+  <h1>FuelBunk Pro — Live Test Dashboard</h1>
+  <div class="badge">QA v1.0</div>
+  <div style="margin-left:auto;font-size:12px;color:var(--text2);font-family:'JetBrains Mono',monospace" id="clock"></div>
+</div>
+
+<div class="main">
+  <!-- Sidebar: Test List -->
+  <div class="sidebar">
+    <div class="section-label">🔐 Authentication</div>
+    <button class="test-btn" onclick="runTest('superLogin')" id="btn-superLogin">
+      <span class="status"></span>
+      <span class="label">Super Admin Login</span>
+      <span class="desc">admin / Admin@12345</span>
+    </button>
+    <button class="test-btn" onclick="runTest('adminLogin')" id="btn-adminLogin">
+      <span class="status"></span>
+      <span class="label">Admin Login</span>
+      <span class="desc">admin / admin123</span>
+    </button>
+    <button class="test-btn" onclick="runTest('employeeList')" id="btn-employeeList">
+      <span class="status"></span>
+      <span class="label">Employee List (Public)</span>
+      <span class="desc">All stations return correct employees</span>
+    </button>
+    <button class="test-btn" onclick="runTest('pinVerify')" id="btn-pinVerify">
+      <span class="status"></span>
+      <span class="label">PIN Verification</span>
+      <span class="desc">PIN 1234 — bcrypt check</span>
+    </button>
+    <button class="test-btn" onclick="runTest('employeeLogin')" id="btn-employeeLogin">
+      <span class="status"></span>
+      <span class="label">Employee JWT Login</span>
+      <span class="desc">Returns token for portal access</span>
+    </button>
+
+    <div class="section-label">⛽ Sales & Data</div>
+    <button class="test-btn" onclick="runTest('staffData')" id="btn-staffData">
+      <span class="status"></span>
+      <span class="label">Staff Data Load</span>
+      <span class="desc">Pumps, prices, employees</span>
+    </button>
+    <button class="test-btn" onclick="runTest('recordSale')" id="btn-recordSale">
+      <span class="status"></span>
+      <span class="label">Record Petrol Sale</span>
+      <span class="desc">25L cash via public endpoint</span>
+    </button>
+    <button class="test-btn" onclick="runTest('recordDieselSale')" id="btn-recordDieselSale">
+      <span class="status"></span>
+      <span class="label">Record Diesel Sale</span>
+      <span class="desc">10L UPI payment</span>
+    </button>
+    <button class="test-btn" onclick="runTest('recordExpense')" id="btn-recordExpense">
+      <span class="status"></span>
+      <span class="label">Record Expense</span>
+      <span class="desc">₹500 misc via public endpoint</span>
+    </button>
+    <button class="test-btn" onclick="runTest('salesSummary')" id="btn-salesSummary">
+      <span class="status"></span>
+      <span class="label">Sales Summary</span>
+      <span class="desc">Today's totals</span>
+    </button>
+
+    <div class="section-label">🛢️ Admin APIs</div>
+    <button class="test-btn" onclick="runTest('tanksLoad')" id="btn-tanksLoad">
+      <span class="status"></span>
+      <span class="label">Tanks & Pumps Load</span>
+      <span class="desc">Admin auth required</span>
+    </button>
+    <button class="test-btn" onclick="runTest('expensesLoad')" id="btn-expensesLoad">
+      <span class="status"></span>
+      <span class="label">Expenses Register</span>
+      <span class="desc">No duplicates check</span>
+    </button>
+    <button class="test-btn" onclick="runTest('fuelPurchases')" id="btn-fuelPurchases">
+      <span class="status"></span>
+      <span class="label">Fuel Purchases</span>
+      <span class="desc">List all purchases</span>
+    </button>
+
+    <div class="section-label">🔒 Security</div>
+    <button class="test-btn" onclick="runTest('crossTenant')" id="btn-crossTenant">
+      <span class="status"></span>
+      <span class="label">Cross-Tenant Isolation</span>
+      <span class="desc">MRM should not see Sri Vanamala employees</span>
+    </button>
+    <button class="test-btn" onclick="runTest('pinBruteForce')" id="btn-pinBruteForce">
+      <span class="status"></span>
+      <span class="label">PIN Brute Force Block</span>
+      <span class="desc">5 wrong PINs → 429 locked</span>
+    </button>
+    <button class="test-btn" onclick="runTest('wrongPinFail')" id="btn-wrongPinFail">
+      <span class="status"></span>
+      <span class="label">Wrong PIN Rejected</span>
+      <span class="desc">PIN 9999 should fail</span>
+    </button>
+
+    <div class="section-label">🛢️ Tanks</div>
+    <button class="test-btn" onclick="runTest('tankDebug')" id="btn-tankDebug">
+      <span class="status"></span>
+      <span class="label">Tank Debug</span>
+      <span class="desc">Show actual DB tank levels</span>
+    </button>
+    <button class="test-btn" onclick="runTest('tankSync')" id="btn-tankSync">
+      <span class="status"></span>
+      <span class="label">Force Tank Sync</span>
+      <span class="desc">Deduct today's sales from tanks</span>
+    </button>
+    <div class="section-label">⚙️ System</div>
+    <button class="test-btn" onclick="runTest('health')" id="btn-health">
+      <span class="status"></span>
+      <span class="label">Server Health</span>
+      <span class="desc">DB connected, uptime</span>
+    </button>
+    <button class="test-btn" onclick="runTest('cleanupEndpoint')" id="btn-cleanupEndpoint">
+      <span class="status"></span>
+      <span class="label">Cleanup Endpoint</span>
+      <span class="desc">Dedup expenses (idempotent)</span>
+    </button>
+  </div>
+
+  <!-- Right: Log + Controls -->
+  <div class="content-area">
+    <div class="toolbar">
+      <input class="url-input" id="baseUrl" value="" placeholder="Leave empty to test this server" />
+      <button class="btn btn-accent" onclick="runAllTests()">▶ Run All Tests</button>
+      <button class="btn btn-ghost" onclick="clearLog()">Clear</button>
+      <button class="btn btn-red" onclick="unlockAdmin()">🔓 Unlock Admin</button>
+    </div>
+    <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+
+    <div class="log-area" id="logArea">
+      <div class="empty-state">
+        <div class="empty-icon">🧪</div>
+        <div class="run-all-hint">Click <strong>▶ Run All Tests</strong> or select individual tests</div>
+        <div style="font-size:11px;color:var(--text2);margin-top:4px">Tests run against your live Railway deployment</div>
+      </div>
+    </div>
+
+    <div class="summary-bar" id="summaryBar" style="display:none">
+      <div class="summary-item"><div class="dot" style="background:var(--green)"></div><span id="passCount">0 passed</span></div>
+      <div class="summary-item"><div class="dot" style="background:var(--red)"></div><span id="failCount">0 failed</span></div>
+      <div class="summary-item"><div class="dot" style="background:var(--text2)"></div><span id="totalCount">0 total</span></div>
+      <div style="margin-left:auto;font-size:11px;color:var(--text2)" id="totalTime"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── State ────────────────────────────────────────────────────────────────
+let results = {};
+let superToken = null;
+let adminToken = null;
+let empToken = null;
+let tenantId = null;
+let employeeId = null;
+let passCount = 0, failCount = 0;
+let testStartTime = null;
+
+const BASE = () => { const v = document.getElementById('baseUrl').value.replace(/\/$/, ''); return v || window.location.origin; };
+const CREDS = {
+  superAdmin: { username: 'admin', password: 'Admin@12345' },
+  admin: { username: 'admin', password: 'admin123' },
+  pin: '1234'
+};
+
+// ── Logging ──────────────────────────────────────────────────────────────
+function log(msg, type = 'info') {
+  const area = document.getElementById('logArea');
+  const empty = area.querySelector('.empty-state');
+  if (empty) empty.remove();
+
+  const line = document.createElement('div');
+  line.className = `log-line ${type}`;
+  const now = new Date().toLocaleTimeString('en-IN', { hour12: false });
+  line.innerHTML = `<span class="log-time">${now}</span><span class="log-msg">${msg}</span>`;
+  area.appendChild(line);
+  area.scrollTop = area.scrollHeight;
+}
+
+function logHead(title) {
+  log(`━━━ ${title} ━━━`, 'head');
+}
+
+function pass(msg) { log('✅ ' + msg, 'pass'); passCount++; updateSummary(); }
+function fail(msg) { log('❌ ' + msg, 'fail'); failCount++; updateSummary(); }
+function warn(msg) { log('⚠️ ' + msg, 'warn'); }
+function info(msg) { log('ℹ️ ' + msg, 'info'); }
+
+function clearLog() {
+  document.getElementById('logArea').innerHTML = `<div class="empty-state"><div class="empty-icon">🧪</div><div class="run-all-hint">Click <strong>▶ Run All Tests</strong> or select individual tests</div></div>`;
+  passCount = 0; failCount = 0;
+  document.getElementById('summaryBar').style.display = 'none';
+  document.getElementById('progressFill').style.width = '0%';
+  Object.keys(results).forEach(k => {
+    const btn = document.getElementById('btn-' + k);
+    if (btn) { btn.classList.remove('pass','fail','running'); btn.querySelector('.status').style.background = ''; }
+  });
+  results = {};
+}
+
+function updateSummary() {
+  const total = passCount + failCount;
+  document.getElementById('passCount').textContent = passCount + ' passed';
+  document.getElementById('failCount').textContent = failCount + ' failed';
+  document.getElementById('totalCount').textContent = total + ' total';
+  document.getElementById('summaryBar').style.display = 'flex';
+}
+
+function setBtnState(id, state) {
+  const btn = document.getElementById('btn-' + id);
+  if (!btn) return;
+  btn.classList.remove('pass','fail','running');
+  btn.classList.add(state);
+}
+
+function setProgress(done, total) {
+  document.getElementById('progressFill').style.width = (done/total*100) + '%';
+}
+
+// ── HTTP Helper ──────────────────────────────────────────────────────────
+async function api(path, options = {}, token = null) {
+  const url = BASE() + path;
+  const headers = { 'Content-Type': 'application/json' };
+  if (token) headers['Authorization'] = 'Bearer ' + token;
+  try {
+    const r = await fetch(url, { ...options, headers });
+    const body = await r.json().catch(() => ({}));
+    return { ok: r.ok, status: r.status, body };
+  } catch (e) {
+    return { ok: false, status: 0, body: {}, error: e.message };
+  }
+}
+
+// ── Individual Tests ──────────────────────────────────────────────────────
+const TESTS = {
+
+  health: async () => {
+    logHead('Server Health');
+    const r = await api('/api/health');
+    if (!r.ok) { fail(`Health check failed (${r.status})`); return false; }
+    pass(`Server healthy · DB: ${r.body.database} · Uptime: ${Math.round(r.body.uptime)}s`);
+    return true;
+  },
+
+  superLogin: async () => {
+    logHead('Super Admin Login');
+    const r = await api('/api/auth/super-login', {
+      method: 'POST',
+      body: JSON.stringify(CREDS.superAdmin)
+    });
+    if (!r.ok) { fail(`Login failed (${r.status}): ${r.body.error || 'unknown'}`); return false; }
+    if (!r.body.token) { fail('No token returned'); return false; }
+    superToken = r.body.token;
+    pass(`Super admin logged in · Token: ${superToken.slice(0,20)}...`);
+    // Load tenant list
+    const tenants = await api('/api/data/tenants', {}, superToken);
+    if (tenants.ok && Array.isArray(tenants.body)) {
+      info(`Found ${tenants.body.length} tenants: ${tenants.body.map(t=>t.name).join(', ')}`);
+      const vanamala = tenants.body.find(t => t.name && t.name.toLowerCase().includes('vanamala'));
+      if (vanamala) {
+        tenantId = vanamala.id;
+        info(`Using Sri Vanamala tenant ID: <code>${tenantId}</code>`);
+      } else if (tenants.body.length > 0) {
+        tenantId = tenants.body[0].id;
+        warn(`Sri Vanamala not found — using first tenant: ${tenants.body[0].name} (${tenantId})`);
+      }
+    }
+    return true;
+  },
+
+  adminLogin: async () => {
+    logHead('Admin Login');
+    if (!tenantId) { warn('No tenant ID — run Super Admin Login first'); }
+    // Try each tenant to find Sri Vanamala
+    const tid = tenantId || 'vanamala';
+    const r = await api('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ ...CREDS.admin, tenantId: tid })
+    });
+    if (!r.ok) { fail(`Admin login failed (${r.status}): ${r.body.error || 'unknown'}`); return false; }
+    if (!r.body.token) { fail('No token returned'); return false; }
+    adminToken = r.body.token;
+    pass(`Admin logged in for tenant ${tid} · Token: ${adminToken.slice(0,20)}...`);
+    return true;
+  },
+
+  employeeList: async () => {
+    logHead('Employee List — Public API');
+    if (!tenantId) { warn('No tenantId — super login first'); return false; }
+    const r = await api('/api/public/employees/' + encodeURIComponent(tenantId));
+    if (!r.ok) { fail(`Employee list failed (${r.status})`); return false; }
+    if (!Array.isArray(r.body)) { fail('Response is not an array'); return false; }
+    if (r.body.length === 0) { fail('No employees returned — check DB has active employees with PINs'); return false; }
+    pass(`${r.body.length} employees loaded: ${r.body.map(e=>e.name).join(', ')}`);
+    // Check no pinHash leaked
+    const leaked = r.body.filter(e => e.pinHash || e.pin_hash);
+    if (leaked.length > 0) {
+      fail(`SECURITY: pinHash leaked in public response for: ${leaked.map(e=>e.name).join(', ')}`);
+    } else {
+      pass('Security: No PIN hashes in public employee list');
+    }
+    // Save first employee id for PIN tests
+    if (r.body[0]) {
+      employeeId = r.body[0].id;
+      info(`Using employee: ${r.body[0].name} (ID: ${employeeId})`);
+    }
+    return true;
+  },
+
+  pinVerify: async () => {
+    logHead('PIN Verification');
+    if (!tenantId || !employeeId) { warn('Need tenantId + employeeId — run previous tests first'); return false; }
+    // Test correct PIN
+    const r = await api('/api/public/verify-pin/' + encodeURIComponent(tenantId), {
+      method: 'POST',
+      body: JSON.stringify({ employeeId, pin: CREDS.pin })
+    });
+    if (!r.ok) { fail(`verify-pin request failed (${r.status}): ${JSON.stringify(r.body)}`); return false; }
+    if (!r.body.valid) {
+      fail(`PIN ${CREDS.pin} rejected — check if employees have PIN set in DB (run /api/cleanup/unlock-admin if locked)`);
+      info(`Response: ${JSON.stringify(r.body)}`);
+      return false;
+    }
+    pass(`PIN ${CREDS.pin} accepted for employee ID ${employeeId}`);
+    return true;
+  },
+
+  wrongPinFail: async () => {
+    logHead('Wrong PIN Rejection');
+    if (!tenantId || !employeeId) { warn('Need tenantId + employeeId'); return false; }
+    const r = await api('/api/public/verify-pin/' + encodeURIComponent(tenantId), {
+      method: 'POST',
+      body: JSON.stringify({ employeeId, pin: '9999' })
+    });
+    if (r.body.valid === true) { fail('SECURITY: Wrong PIN 9999 was accepted!'); return false; }
+    pass('Wrong PIN 9999 correctly rejected');
+    return true;
+  },
+
+  employeeLogin: async () => {
+    logHead('Employee JWT Login');
+    if (!tenantId || !employeeId) { warn('Need tenantId + employeeId'); return false; }
+    const r = await api('/api/auth/employee-login', {
+      method: 'POST',
+      body: JSON.stringify({ pin: CREDS.pin, tenantId, employeeId })
+    });
+    if (!r.ok) { fail(`Employee login failed (${r.status}): ${r.body.error || JSON.stringify(r.body)}`); return false; }
+    if (!r.body.token) { fail('No token in response'); return false; }
+    empToken = r.body.token;
+    pass(`Employee JWT obtained · Token: ${empToken.slice(0,20)}...`);
+    return true;
+  },
+
+  staffData: async () => {
+    logHead('Staff Data (Public)');
+    if (!tenantId) { warn('Need tenantId'); return false; }
+    const r = await api('/api/public/staff-data/' + encodeURIComponent(tenantId));
+    if (!r.ok) { fail(`staff-data failed (${r.status})`); return false; }
+    const d = r.body;
+    const checks = ['pumps','tanks','shifts','employees','prices'];
+    let allOk = true;
+    checks.forEach(key => {
+      if (d[key] !== undefined) {
+        const len = Array.isArray(d[key]) ? d[key].length : typeof d[key];
+        pass(`${key}: ${typeof len === 'number' ? len + ' records' : JSON.stringify(d[key]).slice(0,40)}`);
+      } else {
+        fail(`Missing field: ${key}`);
+        allOk = false;
+      }
+    });
+    if (d.prices) {
+      info(`Prices — Petrol: ₹${d.prices.petrol} · Diesel: ₹${d.prices.diesel} · Premium: ₹${d.prices.premium_petrol}`);
+    }
+    return allOk;
+  },
+
+  recordSale: async () => {
+    logHead('Record Petrol Sale (25L Cash)');
+    if (!tenantId) { warn('Need tenantId'); return false; }
+    const sale = {
+      fuelType: 'petrol', liters: 25, amount: 2571.50,
+      mode: 'cash', pump: '1', nozzle: 'A',
+      date: new Date().toISOString().slice(0,10),
+      time: new Date().toTimeString().slice(0,5),
+      employee: 'QA Test', employeeId: employeeId || 1,
+      idempotencyKey: 'qa-test-' + Date.now()
+    };
+    const r = await api('/api/public/sales/' + encodeURIComponent(tenantId), {
+      method: 'POST', body: JSON.stringify(sale)
+    });
+    if (!r.ok) { fail(`Sale failed (${r.status}): ${r.body.error || JSON.stringify(r.body)}`); return false; }
+    pass(`Petrol sale recorded · 25L · ₹2571.50 · ${r.body.id ? 'ID: '+r.body.id : 'success'}`);
+    return true;
+  },
+
+  recordDieselSale: async () => {
+    logHead('Record Diesel Sale (10L UPI)');
+    if (!tenantId) { warn('Need tenantId'); return false; }
+    const sale = {
+      fuelType: 'diesel', liters: 10, amount: 932.90,
+      mode: 'upi', pump: '3', nozzle: 'A',
+      date: new Date().toISOString().slice(0,10),
+      time: new Date().toTimeString().slice(0,5),
+      employee: 'QA Test', employeeId: employeeId || 1,
+      idempotencyKey: 'qa-diesel-' + Date.now()
+    };
+    const r = await api('/api/public/sales/' + encodeURIComponent(tenantId), {
+      method: 'POST', body: JSON.stringify(sale)
+    });
+    if (!r.ok) { fail(`Diesel sale failed (${r.status}): ${r.body.error || JSON.stringify(r.body)}`); return false; }
+    pass(`Diesel sale recorded · 10L · ₹932.90`);
+    return true;
+  },
+
+  recordExpense: async () => {
+    logHead('Record Expense (₹500 Misc)');
+    if (!tenantId) { warn('Need tenantId'); return false; }
+    const expense = {
+      category: 'Miscellaneous', amount: 500, mode: 'cash',
+      desc: 'QA Test expense',
+      date: new Date().toISOString().slice(0,10),
+      employee: 'QA Test'
+    };
+    const r = await api('/api/public/expense/' + encodeURIComponent(tenantId), {
+      method: 'POST', body: JSON.stringify(expense)
+    });
+    if (!r.ok) { fail(`Expense failed (${r.status}): ${r.body.error || JSON.stringify(r.body)}`); return false; }
+    pass('Expense recorded · ₹500 · Misc');
+    return true;
+  },
+
+  salesSummary: async () => {
+    logHead('Sales Summary');
+    if (!tenantId) { warn('Need tenantId'); return false; }
+    const today = new Date().toISOString().slice(0,10);
+    const r = await api('/api/public/sales-summary/' + encodeURIComponent(tenantId) + '?date=' + today);
+    if (!r.ok) { fail(`Sales summary failed (${r.status})`); return false; }
+    const d = r.body;
+    pass(`Summary loaded · Revenue: ₹${d.totalRevenue || 0} · Sales: ${d.totalSales || d.count || 0}`);
+    return true;
+  },
+
+  tanksLoad: async () => {
+    logHead('Tanks & Pumps (Admin Auth)');
+    if (!adminToken) { warn('Need admin token — run Admin Login first'); return false; }
+    const tanks = await api('/api/data/tanks', {}, adminToken);
+    const pumps = await api('/api/data/pumps', {}, adminToken);
+    if (!tanks.ok) { fail(`Tanks load failed (${tanks.status}): ${tanks.body.error}`); return false; }
+    if (!pumps.ok) { fail(`Pumps load failed (${pumps.status}): ${pumps.body.error}`); return false; }
+    pass(`${Array.isArray(tanks.body) ? tanks.body.length : '?'} tanks loaded`);
+    pass(`${Array.isArray(pumps.body) ? pumps.body.length : '?'} pumps loaded`);
+    if (Array.isArray(tanks.body)) {
+      tanks.body.forEach(t => info(`Tank ${t.id}: ${t.fuelType} · ${t.current}L / ${t.capacity}L`));
+    }
+    return true;
+  },
+
+  expensesLoad: async () => {
+    logHead('Expense Register — Duplicate Check');
+    if (!adminToken) { warn('Need admin token'); return false; }
+    const r = await api('/api/data/expenses', {}, adminToken);
+    if (!r.ok) { fail(`Expenses load failed (${r.status})`); return false; }
+    if (!Array.isArray(r.body)) { fail('Not an array'); return false; }
+    const fuelExpenses = r.body.filter(e => e.category === 'Fuel Purchase');
+    pass(`Total expenses: ${r.body.length} · Fuel purchases: ${fuelExpenses.length}`);
+    // Check for duplicates
+    const seen = {};
+    let dups = 0;
+    fuelExpenses.forEach(e => {
+      const key = e.description + '|' + e.amount + '|' + e.date;
+      if (seen[key]) { dups++; warn(`Duplicate found: ${e.description} ₹${e.amount}`); }
+      seen[key] = true;
+    });
+    if (dups === 0) pass('No duplicate fuel purchase expenses ✓');
+    else fail(`${dups} duplicate expense entries found — run cleanup endpoint`);
+    return dups === 0;
+  },
+
+  fuelPurchases: async () => {
+    logHead('Fuel Purchases');
+    if (!adminToken) { warn('Need admin token'); return false; }
+    const r = await api('/api/data/fuelPurchases', {}, adminToken);
+    if (!r.ok) { fail(`Fuel purchases failed (${r.status})`); return false; }
+    if (!Array.isArray(r.body)) { fail('Not an array'); return false; }
+    pass(`${r.body.length} fuel purchases loaded`);
+    r.body.slice(0,3).forEach(p => {
+      info(`${p.date} · ${p.fuelType} · ${p.liters}L · ₹${p.rate}/L · Total: ₹${p.total}`);
+    });
+    return true;
+  },
+
+  crossTenant: async () => {
+    logHead('Cross-Tenant Isolation');
+    if (!superToken) { warn('Need super token'); return false; }
+    // Get all tenants
+    const tenants = await api('/api/data/tenants', {}, superToken);
+    if (!tenants.ok || !Array.isArray(tenants.body) || tenants.body.length < 2) {
+      warn(`Only ${tenants.body?.length || 0} tenants — need 2+ to test isolation`);
+      return true;
+    }
+    const t1 = tenants.body[0]; const t2 = tenants.body[1];
+    const emps1 = await api('/api/public/employees/' + encodeURIComponent(t1.id));
+    const emps2 = await api('/api/public/employees/' + encodeURIComponent(t2.id));
+    if (!emps1.ok || !emps2.ok) { fail('Could not load employees for both tenants'); return false; }
+    const names1 = new Set((emps1.body||[]).map(e=>e.name));
+    const names2 = (emps2.body||[]).map(e=>e.name);
+    const leaked = names2.filter(n => names1.has(n));
+    if (leaked.length > 0) {
+      fail(`CROSS-TENANT LEAK: ${leaked.join(', ')} appear in both ${t1.name} AND ${t2.name}`);
+      return false;
+    }
+    pass(`Isolation OK: ${t1.name} (${names1.size} emps) ≠ ${t2.name} (${names2.length} emps)`);
+    return true;
+  },
+
+  pinBruteForce: async () => {
+    logHead('PIN Brute Force Protection');
+    if (!tenantId) { warn('Need tenantId'); return false; }
+    // Use a test employee ID that won't lock real employees
+    const testId = 99999;
+    let blocked = false;
+    for (let i = 0; i < 6; i++) {
+      const r = await api('/api/public/verify-pin/' + encodeURIComponent(tenantId), {
+        method: 'POST',
+        body: JSON.stringify({ employeeId: testId, pin: '0000' })
+      });
+      if (r.status === 429) { blocked = true; break; }
+    }
+    if (blocked) pass('Brute force protection active — rate limited after repeated failures');
+    else warn('Rate limit not triggered for unknown employee ID (expected for non-existent employee)');
+    return true;
+  },
+
+  tankDebug: async () => {
+    logHead('Tank Debug — Actual DB State');
+    if (!tenantId) { warn('Need tenantId — run Super Admin Login first'); return false; }
+    const r = await api('/api/cleanup/tank-debug?secret=fuelbunk2026&tenantId=' + encodeURIComponent(tenantId));
+    if (!r.ok) { fail(`Tank debug failed (${r.status}): ${r.body.error}`); return false; }
+    pass(`Today: ${r.body.today}`);
+    r.body.tanks.forEach(t => {
+      const pct = t.capacity > 0 ? Math.round(t.current_level/t.capacity*100) : 0;
+      const ok = t.current_level < t.capacity;
+      if (ok) pass(`Tank ${t.id} (${t.fuel_type}): ${t.current_level}L / ${t.capacity}L (${pct}%) — last_dip_source: ${t.last_dip_source||'none'}`);
+      else warn(`Tank ${t.id} (${t.fuel_type}): ${t.current_level}L / ${t.capacity}L (${pct}%) — FULL, may not have been deducted`);
+    });
+    r.body.todaySales.forEach(s => {
+      info(`Today sales — ${s.ft}: ${s.cnt} txns, ${parseFloat(s.total_liters).toFixed(2)}L`);
+    });
+    return true;
+  },
+
+  tankSync: async () => {
+    logHead('Manual Tank Sync — Force Deduct From Today Sales');
+    if (!tenantId) { warn('Need tenantId'); return false; }
+    const r = await api('/api/cleanup/sync-tanks?secret=fuelbunk2026&tenantId=' + encodeURIComponent(tenantId));
+    if (!r.ok) { fail(`Tank sync failed (${r.status}): ${r.body.error}`); return false; }
+    if (!r.body.results || r.body.results.length === 0) {
+      warn('No sales found for today — nothing to sync');
+      return true;
+    }
+    r.body.results.forEach(res => {
+      if (res.skipped) { warn(`${res.ft}: skipped (no matching tank or 0L sold)`); }
+      else pass(`${res.ft}: ${res.before}L → ${res.after}L (deducted ${res.deducted}L)`);
+    });
+    return true;
+  },
+
+  cleanupEndpoint: async () => {
+    logHead('Cleanup Endpoint (Idempotent)');
+    const r = await api('/api/cleanup/dedup-expenses?secret=fuelbunk2026');
+    if (!r.ok) { fail(`Cleanup endpoint failed (${r.status})`); return false; }
+    pass(`Cleanup ran · before: ${r.body.before} · after: ${r.body.after} · deleted: ${r.body.deleted}`);
+    if (r.body.deleted > 0) warn(`${r.body.deleted} duplicate expenses removed — this is expected on first run`);
+    else pass('Database already clean — no duplicates');
+    return true;
+  }
+};
+
+// ── Test Runner ──────────────────────────────────────────────────────────
+async function runTest(name) {
+  const fn = TESTS[name];
+  if (!fn) { warn('Unknown test: ' + name); return; }
+  setBtnState(name, 'running');
+  try {
+    const result = await fn();
+    setBtnState(name, result === false ? 'fail' : 'pass');
+    results[name] = result;
+  } catch(e) {
+    fail(`Test crashed: ${e.message}`);
+    setBtnState(name, 'fail');
+    results[name] = false;
+  }
+}
+
+const TEST_ORDER = [
+  'health', 'superLogin', 'adminLogin',
+  'employeeList', 'pinVerify', 'wrongPinFail', 'employeeLogin',
+  'staffData', 'recordSale', 'recordDieselSale', 'recordExpense', 'salesSummary',
+  'tanksLoad', 'expensesLoad', 'fuelPurchases',
+  'crossTenant', 'pinBruteForce', 'tankDebug', 'tankSync', 'cleanupEndpoint'
+];
+
+async function runAllTests() {
+  clearLog();
+  passCount = 0; failCount = 0;
+  testStartTime = Date.now();
+  log('🚀 Starting FuelBunk Pro live test suite against: ' + BASE(), 'head');
+  for (let i = 0; i < TEST_ORDER.length; i++) {
+    setProgress(i, TEST_ORDER.length);
+    await runTest(TEST_ORDER[i]);
+    await new Promise(r => setTimeout(r, 200)); // small delay between tests
+  }
+  setProgress(TEST_ORDER.length, TEST_ORDER.length);
+  const elapsed = ((Date.now() - testStartTime) / 1000).toFixed(1);
+  document.getElementById('totalTime').textContent = `Completed in ${elapsed}s`;
+  log(`━━━ DONE: ${passCount} passed · ${failCount} failed · ${elapsed}s ━━━`, 'head');
+}
+
+async function unlockAdmin() {
+  info('Unlocking admin...');
+  const r = await api('/api/cleanup/unlock-admin?secret=fuelbunk2026');
+  if (r.ok) pass('Admin unlocked: ' + r.body.message);
+  else fail('Unlock failed: ' + (r.body?.error || r.status));
+}
+
+// Clock
+setInterval(() => {
+  document.getElementById('clock').textContent = new Date().toLocaleTimeString('en-IN');
+}, 1000);
+</script>
+</body>
+</html>

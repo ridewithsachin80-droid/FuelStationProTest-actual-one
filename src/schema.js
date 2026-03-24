@@ -1,0 +1,834 @@
+/**
+ * FuelBunk Pro — PostgreSQL Database Schema & Init
+ * AUTO-FIX VERSION: Automatically fixes tenants.id type from INTEGER to TEXT
+ */
+const { Pool } = require('pg');
+const crypto = require('crypto');
+const bcrypt = require('bcrypt');
+
+const BCRYPT_ROUNDS = 12;
+
+async function hashPassword(password) {
+  return bcrypt.hash(String(password), BCRYPT_ROUNDS);
+}
+
+async function verifyPassword(plain, stored) {
+  if (stored && stored.startsWith('$2')) {
+    return bcrypt.compare(String(plain), stored);
+  }
+  const sha = crypto.createHash('sha256').update(String(plain)).digest('hex');
+  return sha === stored;
+}
+
+function _sha256Legacy(s) {
+  return crypto.createHash('sha256').update(s).digest('hex');
+}
+
+const dbUrl = process.env.DATABASE_URL || process.env.POSTGRES_URL;
+if (!dbUrl && !process.env.PGHOST) {
+  console.error('[WARN] No DATABASE_URL found');
+}
+
+let poolConfig;
+if (dbUrl) {
+  console.log('[DB] Using DATABASE_URL:', dbUrl.replace(/:([^:@]+)@/, ':****@'));
+  const isInternal = dbUrl.includes('railway.internal') || dbUrl.includes('localhost') || dbUrl.includes('127.0.0.1');
+  poolConfig = {
+    connectionString: dbUrl,
+    ssl: isInternal ? false : { rejectUnauthorized: false },
+    max: 150,
+    min: 20,
+    idleTimeoutMillis: 15000,
+    connectionTimeoutMillis: 5000,
+    statement_timeout: 15000,
+    allowExitOnIdle: false,
+  };
+} else {
+  poolConfig = {
+    host: process.env.PGHOST,
+    port: parseInt(process.env.PGPORT || '5432'),
+    database: process.env.PGDATABASE,
+    user: process.env.PGUSER,
+    password: process.env.PGPASSWORD,
+    ssl: false,
+    max: 150,
+    min: 20,
+    idleTimeoutMillis: 15000,
+    connectionTimeoutMillis: 5000,
+    statement_timeout: 15000,
+    allowExitOnIdle: false,
+  };
+}
+
+const pool = new Pool(poolConfig);
+pool.on('error', (err) => {
+  console.error('[PG Pool] Unexpected error:', err.message);
+});
+
+function convertSql(sql, mode) {
+  let i = 0;
+  sql = sql.replace(/\?/g, () => `$${++i}`);
+  sql = sql.replace(/datetime\('now'\)/gi, 'NOW()');
+  sql = sql.replace(/datetime\("now"\)/gi, 'NOW()');
+  sql = sql.replace(/INSERT OR REPLACE INTO (\w+)/gi, 'INSERT INTO $1');
+  sql = sql.replace(/INSERT OR IGNORE INTO (\w+)/gi, 'INSERT INTO $1');
+
+  if (mode === 'run' && /^\s*INSERT\s+INTO\s+(\w+)/i.test(sql) && !/\bRETURNING\b/i.test(sql)) {
+    const m = sql.match(/^\s*INSERT\s+INTO\s+(\w+)/i);
+    const table = m[1].toLowerCase();
+    const isSessionsTable = table === 'sessions';
+    const returningClause = isSessionsTable ? 'RETURNING token' : 'RETURNING id';
+    const insertMatch = /\bINSERT\s+INTO\s+\S+\s+\(([^)]+)\)/i.exec(sql);
+    if (insertMatch) {
+      const columns = insertMatch[1].split(',').map(c => c.trim().replace(/["`]/g, ''));
+      if (isSessionsTable && columns.includes('token')) {
+        sql = sql.replace(/;?\s*$/, ` ${returningClause};`);
+      } else if (!isSessionsTable && columns.includes('id')) {
+        sql = sql.replace(/;?\s*$/, ` ${returningClause};`);
+      }
+    }
+  }
+  return sql;
+}
+
+class Database {
+  constructor(pool) {
+    this.pool = pool;
+  }
+
+  prepare(sql) {
+    const self = this;
+    return {
+      async run(...params) {
+        const pgSql = convertSql(sql, 'run');
+        try {
+          const result = await self.pool.query(pgSql, params);
+          const ret = { lastID: result.rows[0]?.id || result.rows[0]?.token || undefined };
+          return ret;
+        } catch (e) {
+          console.error('[DB run]', e.message);
+          throw e;
+        }
+      },
+      async get(...params) {
+        const pgSql = convertSql(sql, 'get');
+        try {
+          const result = await self.pool.query(pgSql, params);
+          return result.rows[0] || undefined;
+        } catch (e) {
+          console.error('[DB get]', e.message);
+          return undefined;
+        }
+      },
+      async all(...params) {
+        const pgSql = convertSql(sql, 'all');
+        try {
+          const result = await self.pool.query(pgSql, params);
+          return result.rows;
+        } catch (e) {
+          console.error('[DB all]', e.message);
+          return [];
+        }
+      }
+    };
+  }
+
+  async exec(sql) {
+    try { await this.pool.query(convertSql(sql, 'exec')); }
+    catch (e) { console.warn('[DB exec]', e.message); }
+  }
+
+  pragma() {}
+
+  transaction(fn) {
+    const pool = this.pool;
+    return async (...args) => {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const result = await fn(client, ...args);
+        await client.query('COMMIT');
+        return result;
+      } catch (e) {
+        await client.query('ROLLBACK');
+        throw e;
+      } finally {
+        client.release();
+      }
+    };
+  }
+
+  async getTableColumns(table) {
+    const result = await this.pool.query(
+      `SELECT column_name AS name FROM information_schema.columns WHERE table_name = $1`,
+      [table]
+    );
+    return result.rows.map(r => r.name);
+  }
+}
+
+async function initDatabase() {
+  console.log('[DB] Connecting to PostgreSQL...');
+  
+  async function connectWithRetry(maxRetries = 5) {
+    for (let i = 0; i < maxRetries; i++) {
+      try {
+        await pool.query('SELECT 1');
+        console.log('[DB] Connection successful');
+        return true;
+      } catch (e) {
+        const delay = Math.min(1000 * Math.pow(2, i), 30000);
+        console.error(`[DB] Connection failed (attempt ${i + 1}/${maxRetries}): ${e.message}`);
+        if (i < maxRetries - 1) {
+          console.log(`[DB] Retrying in ${delay}ms...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+        } else {
+          throw new Error(`Database connection failed after ${maxRetries} attempts: ${e.message}`);
+        }
+      }
+    }
+  }
+  
+  try {
+    await connectWithRetry(5);
+  } catch (e) {
+    console.error('[DB] Fatal connection error:', e.message);
+    throw e;
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // AUTO-FIX: Check and fix tenants.id type if it's INTEGER
+  // ═══════════════════════════════════════════════════════════════
+  console.log('[Schema] Checking tenants table schema...');
+  try {
+    const typeCheck = await pool.query(`
+      SELECT data_type 
+      FROM information_schema.columns 
+      WHERE table_name = 'tenants' AND column_name = 'id'
+    `);
+    
+    if (typeCheck.rows.length > 0) {
+      const currentType = typeCheck.rows[0].data_type;
+      if (currentType === 'integer' || currentType === 'bigint') {
+        console.log('[Schema] ⚠️  FIXING: tenants.id is ' + currentType.toUpperCase() + ', converting to TEXT...');
+        
+        // Check if table is empty
+        const countResult = await pool.query('SELECT COUNT(*) as count FROM tenants');
+        const isEmpty = parseInt(countResult.rows[0].count) === 0;
+        
+        if (isEmpty) {
+          // Safe to alter
+          await pool.query('ALTER TABLE tenants ALTER COLUMN id TYPE TEXT');
+          console.log('[Schema] ✅ FIXED: tenants.id is now TEXT (table was empty)');
+        } else {
+          console.log('[Schema] ⚠️  WARNING: tenants table has data. Manual migration required.');
+          console.log('[Schema] Run: ALTER TABLE tenants ALTER COLUMN id TYPE TEXT;');
+        }
+      } else {
+        console.log('[Schema] ✓ tenants.id type is correct: ' + currentType.toUpperCase());
+      }
+    }
+  } catch (e) {
+    console.log('[Schema] tenants table does not exist yet, will create with correct type');
+  }
+
+  const TABLES = [
+    `CREATE TABLE IF NOT EXISTS super_admin (
+      id INTEGER PRIMARY KEY CHECK(id=1),
+      username TEXT NOT NULL,
+      pass_hash TEXT NOT NULL,
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      credentials_user_managed BOOLEAN DEFAULT FALSE
+    )`,
+    `CREATE TABLE IF NOT EXISTS tenants (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      location TEXT DEFAULT '',
+      owner_name TEXT DEFAULT '',
+      phone TEXT DEFAULT '',
+      icon TEXT DEFAULT '⛽',
+      color TEXT DEFAULT '#d4940f',
+      color_light TEXT DEFAULT '#f0b429',
+      station_code TEXT DEFAULT '',
+      omc TEXT DEFAULT 'iocl',
+      active INTEGER DEFAULT 1,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      owner_phone TEXT DEFAULT '',
+      manager_phone TEXT DEFAULT '',
+      address TEXT DEFAULT '',
+      city TEXT DEFAULT '',
+      state TEXT DEFAULT ''
+    )`,
+    `CREATE TABLE IF NOT EXISTS admin_users (
+      id SERIAL PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      username TEXT NOT NULL,
+      pass_hash TEXT NOT NULL,
+      role TEXT DEFAULT 'Manager',
+      active INTEGER DEFAULT 1,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(tenant_id, username)
+    )`,
+    `CREATE TABLE IF NOT EXISTS otp_requests (
+      id SERIAL PRIMARY KEY,
+      contact TEXT NOT NULL,
+      contact_type TEXT DEFAULT 'phone',
+      otp_hash TEXT NOT NULL,
+      reset_token TEXT DEFAULT '',
+      token_used INTEGER DEFAULT 0,
+      expires_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE TABLE IF NOT EXISTS sessions (
+      token TEXT PRIMARY KEY,
+      tenant_id TEXT DEFAULT '',
+      user_id INTEGER DEFAULT 0,
+      user_type TEXT NOT NULL,
+      user_name TEXT DEFAULT '',
+      role TEXT DEFAULT '',
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      expires_at TIMESTAMPTZ NOT NULL,
+      ip_address TEXT DEFAULT '',
+      user_agent TEXT DEFAULT ''
+    )`,
+    `CREATE TABLE IF NOT EXISTS tanks (
+      id TEXT NOT NULL,
+      tenant_id TEXT NOT NULL,
+      fuel_type TEXT DEFAULT '',
+      name TEXT DEFAULT '',
+      capacity REAL DEFAULT 0,
+      current_level REAL DEFAULT 0,
+      low_alert REAL DEFAULT 500,
+      last_dip TEXT DEFAULT '',
+      unit TEXT DEFAULT 'L',
+      data_json TEXT DEFAULT '{}',
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      active BOOLEAN DEFAULT TRUE,
+      PRIMARY KEY(id, tenant_id)
+    )`,
+    `CREATE TABLE IF NOT EXISTS pumps (
+      id TEXT NOT NULL,
+      tenant_id TEXT NOT NULL,
+      name TEXT DEFAULT '',
+      fuel_type TEXT DEFAULT '',
+      tank_id TEXT DEFAULT '',
+      nozzle_count INTEGER DEFAULT 1,
+      status TEXT DEFAULT 'active',
+      data_json TEXT DEFAULT '{}',
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      active BOOLEAN DEFAULT TRUE,
+      PRIMARY KEY(id, tenant_id)
+    )`,
+    `CREATE TABLE IF NOT EXISTS sales (
+      id SERIAL PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      date TEXT DEFAULT '',
+      time TEXT DEFAULT '',
+      employee_id INTEGER DEFAULT 0,
+      employee_name TEXT DEFAULT '',
+      fuel_type TEXT DEFAULT '',
+      quantity REAL DEFAULT 0,
+      rate REAL DEFAULT 0,
+      amount REAL DEFAULT 0,
+      payment_method TEXT DEFAULT 'cash',
+      pump_id TEXT DEFAULT '',
+      vehicle_number TEXT DEFAULT '',
+      customer_name TEXT DEFAULT '',
+      remarks TEXT DEFAULT '',
+      shift_id TEXT DEFAULT '',
+      data_json TEXT DEFAULT '{}',
+      timestamp TIMESTAMPTZ DEFAULT NOW(),
+      idempotency_key TEXT DEFAULT ''
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_sales_idem ON sales(tenant_id, idempotency_key) WHERE idempotency_key != ''`,
+    `CREATE TABLE IF NOT EXISTS meter_readings (
+      id SERIAL PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      pump_id TEXT DEFAULT '',
+      date TEXT DEFAULT '',
+      time TEXT DEFAULT '',
+      opening REAL DEFAULT 0,
+      closing REAL DEFAULT 0,
+      sale REAL DEFAULT 0,
+      employee_id INTEGER DEFAULT 0,
+      employee_name TEXT DEFAULT '',
+      shift_id TEXT DEFAULT '',
+      data_json TEXT DEFAULT '{}',
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE TABLE IF NOT EXISTS pump_readings (
+      id SERIAL PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      pump_id TEXT DEFAULT '',
+      date TEXT DEFAULT '',
+      time TEXT DEFAULT '',
+      recorded_at TIMESTAMPTZ DEFAULT NOW(),
+      reading REAL DEFAULT 0,
+      fuel_type TEXT DEFAULT '',
+      employee_id INTEGER DEFAULT 0,
+      shift_id TEXT DEFAULT '',
+      data_json TEXT DEFAULT '{}'
+    )`,
+    `CREATE TABLE IF NOT EXISTS dip_readings (
+      id SERIAL PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      tank_id TEXT DEFAULT '',
+      date TEXT DEFAULT '',
+      time TEXT DEFAULT '',
+      level REAL DEFAULT 0,
+      temperature REAL DEFAULT 0,
+      density REAL DEFAULT 0,
+      employee_id INTEGER DEFAULT 0,
+      employee_name TEXT DEFAULT '',
+      data_json TEXT DEFAULT '{}',
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE TABLE IF NOT EXISTS fuel_purchases (
+      id SERIAL PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      date TEXT DEFAULT '',
+      time TEXT DEFAULT '',
+      tank_id TEXT DEFAULT '',
+      fuel_type TEXT DEFAULT '',
+      quantity REAL DEFAULT 0,
+      rate REAL DEFAULT 0,
+      amount REAL DEFAULT 0,
+      supplier TEXT DEFAULT '',
+      bill_no TEXT DEFAULT '',
+      employee_id INTEGER DEFAULT 0,
+      employee_name TEXT DEFAULT '',
+      data_json TEXT DEFAULT '{}',
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE TABLE IF NOT EXISTS expenses (
+      id SERIAL PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      date TEXT DEFAULT '',
+      time TEXT DEFAULT '',
+      category TEXT DEFAULT '',
+      description TEXT DEFAULT '',
+      amount REAL DEFAULT 0,
+      payment_method TEXT DEFAULT 'cash',
+      employee_id INTEGER DEFAULT 0,
+      employee_name TEXT DEFAULT '',
+      data_json TEXT DEFAULT '{}',
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      idempotency_key TEXT DEFAULT ''
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_expenses_idem ON expenses(tenant_id, idempotency_key) WHERE idempotency_key != ''`,
+    `CREATE TABLE IF NOT EXISTS credit_customers (
+      id SERIAL PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      name TEXT DEFAULT '',
+      phone TEXT DEFAULT '',
+      address TEXT DEFAULT '',
+      credit_limit REAL DEFAULT 0,
+      balance REAL DEFAULT 0,
+      active INTEGER DEFAULT 1,
+      data_json TEXT DEFAULT '{}',
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE TABLE IF NOT EXISTS credit_transactions (
+      id SERIAL PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      customer_id INTEGER DEFAULT 0,
+      date TEXT DEFAULT '',
+      type TEXT DEFAULT 'sale',
+      amount REAL DEFAULT 0,
+      description TEXT DEFAULT '',
+      sale_id INTEGER DEFAULT 0,
+      data_json TEXT DEFAULT '{}',
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE TABLE IF NOT EXISTS employees (
+      id SERIAL PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      name TEXT DEFAULT '',
+      phone TEXT DEFAULT '',
+      role TEXT DEFAULT 'attendant',
+      shift TEXT DEFAULT '',
+      pin_hash TEXT DEFAULT '',
+      active INTEGER DEFAULT 1,
+      salary REAL DEFAULT 0,
+      join_date TEXT DEFAULT '',
+      color TEXT DEFAULT '',
+      emp_id TEXT DEFAULT '',
+      aadhar TEXT DEFAULT '',
+      data_json TEXT DEFAULT '{}',
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_employees_empid ON employees(tenant_id, emp_id) WHERE emp_id != ''`,
+    `CREATE TABLE IF NOT EXISTS shifts (
+      id TEXT NOT NULL,
+      tenant_id TEXT NOT NULL,
+      employee_id INTEGER,
+      shift_type TEXT DEFAULT '',
+      start_time TIMESTAMPTZ,
+      end_time TIMESTAMPTZ,
+      date TEXT DEFAULT '',
+      total_sales REAL DEFAULT 0,
+      total_transactions INTEGER DEFAULT 0,
+      cash_amount REAL DEFAULT 0,
+      card_amount REAL DEFAULT 0,
+      upi_amount REAL DEFAULT 0,
+      status TEXT DEFAULT 'open',
+      data_json TEXT DEFAULT '{}',
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      PRIMARY KEY(id, tenant_id)
+    )`,
+    `CREATE TABLE IF NOT EXISTS settings (
+      key TEXT NOT NULL,
+      tenant_id TEXT NOT NULL,
+      value TEXT,
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      PRIMARY KEY(key, tenant_id)
+    )`,
+    `CREATE TABLE IF NOT EXISTS lubes_products (
+      id TEXT NOT NULL,
+      tenant_id TEXT NOT NULL,
+      name TEXT DEFAULT '',
+      brand TEXT DEFAULT '',
+      category TEXT DEFAULT '',
+      hsn TEXT DEFAULT '',
+      gst_pct REAL DEFAULT 18,
+      unit TEXT DEFAULT 'L',
+      selling_price REAL DEFAULT 0,
+      cost_price REAL DEFAULT 0,
+      stock REAL DEFAULT 0,
+      min_stock REAL DEFAULT 5,
+      expiry_date TEXT DEFAULT '',
+      active INTEGER DEFAULT 1,
+      data_json TEXT DEFAULT '{}',
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      PRIMARY KEY(id, tenant_id)
+    )`,
+    `CREATE TABLE IF NOT EXISTS lubes_sales (
+      id SERIAL PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      date TEXT DEFAULT '',
+      time TEXT DEFAULT '',
+      product_id TEXT DEFAULT '',
+      product_name TEXT DEFAULT '',
+      qty REAL DEFAULT 0,
+      unit TEXT DEFAULT '',
+      rate REAL DEFAULT 0,
+      amount REAL DEFAULT 0,
+      customer TEXT DEFAULT '',
+      mode TEXT DEFAULT 'cash',
+      employee TEXT DEFAULT '',
+      data_json TEXT DEFAULT '{}',
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_lubes_sales_tenant ON lubes_sales(tenant_id, date DESC)`,
+    `CREATE TABLE IF NOT EXISTS audit_log (
+      id SERIAL PRIMARY KEY,
+      tenant_id TEXT DEFAULT '',
+      timestamp TIMESTAMPTZ DEFAULT NOW(),
+      user_name TEXT DEFAULT '',
+      user_type TEXT DEFAULT '',
+      action TEXT DEFAULT '',
+      entity TEXT DEFAULT '',
+      entity_id TEXT DEFAULT '',
+      details TEXT DEFAULT '',
+      ip_address TEXT DEFAULT '',
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE TABLE IF NOT EXISTS login_attempts (
+      id SERIAL PRIMARY KEY,
+      ip_address TEXT DEFAULT '',
+      username TEXT DEFAULT '',
+      tenant_id TEXT DEFAULT '',
+      success INTEGER DEFAULT 0,
+      attempted_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE TABLE IF NOT EXISTS push_subscriptions (
+      id SERIAL PRIMARY KEY,
+      tenant_id TEXT DEFAULT '',
+      user_id INTEGER DEFAULT 0,
+      user_type TEXT DEFAULT '',
+      endpoint TEXT NOT NULL,
+      keys_json TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(endpoint)
+    )`,
+    `CREATE TABLE IF NOT EXISTS alerts (
+      id SERIAL PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      type TEXT NOT NULL,
+      severity TEXT NOT NULL,
+      title TEXT NOT NULL,
+      message TEXT NOT NULL,
+      data_json TEXT DEFAULT '{}',
+      acknowledged BOOLEAN DEFAULT FALSE,
+      acknowledged_by INTEGER,
+      acknowledged_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at)`,
+    // ── SUBSCRIPTIONS ───────────────────────────────────────────────────────────
+    `CREATE TABLE IF NOT EXISTS subscriptions (
+      id SERIAL PRIMARY KEY,
+      tenant_id TEXT NOT NULL UNIQUE,
+      plan TEXT DEFAULT 'trial',
+      status TEXT DEFAULT 'trial',
+      trial_days INTEGER DEFAULT 30,
+      trial_start TIMESTAMPTZ DEFAULT NOW(),
+      sub_start TIMESTAMPTZ,
+      sub_end TIMESTAMPTZ,
+      price_monthly REAL DEFAULT 0,
+      grace_days INTEGER DEFAULT 3,
+      owner_phone TEXT DEFAULT '',
+      notes TEXT DEFAULT '',
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE TABLE IF NOT EXISTS subscription_payments (
+      id SERIAL PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      plan TEXT NOT NULL,
+      amount REAL NOT NULL,
+      payment_date TIMESTAMPTZ DEFAULT NOW(),
+      payment_mode TEXT DEFAULT 'upi',
+      reference TEXT DEFAULT '',
+      months INTEGER DEFAULT 1,
+      period_start TIMESTAMPTZ,
+      period_end TIMESTAMPTZ,
+      recorded_by TEXT DEFAULT '',
+      notes TEXT DEFAULT '',
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_subscriptions_tenant ON subscriptions(tenant_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_sub_payments_tenant ON subscription_payments(tenant_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token)`,
+    `CREATE INDEX IF NOT EXISTS idx_sales_tenant_date ON sales(tenant_id, date DESC)`,
+    // PERF FIX FIND-DB3: covering index for P&L GROUP BY fuel_type — eliminates heap fetch
+    `CREATE INDEX IF NOT EXISTS idx_sales_analytics ON sales(tenant_id, date, fuel_type)  INCLUDE (amount, liters)`,
+    `CREATE INDEX IF NOT EXISTS idx_login_attempts_ip ON login_attempts(ip_address, attempted_at)`,
+    // PERF FIX FIND-PERF1: composite index for PIN lockout query (tenant_id+username)
+    `CREATE INDEX IF NOT EXISTS idx_login_attempts_tenant_user ON login_attempts(tenant_id, username, attempted_at DESC)`,
+    // QUERY OPT: Missing indexes identified in DB optimization audit
+    // meter_readings — no index at all, seq scan on every tenant page load
+    `CREATE INDEX IF NOT EXISTS idx_meter_readings_tenant_date ON meter_readings(tenant_id, date DESC)`,
+    // pump_readings — no index at all
+    `CREATE INDEX IF NOT EXISTS idx_pump_readings_tenant_date ON pump_readings(tenant_id, recorded_at DESC)`,
+    // tanks — frequent single-table SELECT by tenant_id (tanks page, shift submit, sales validation)
+    `CREATE INDEX IF NOT EXISTS idx_tanks_tenant ON tanks(tenant_id)`,
+    // credit_transactions — missing tenant_id-first index for date-range listing
+    // (existing idx has customer_id first — good for balance lookup, bad for listing all)
+    `CREATE INDEX IF NOT EXISTS idx_credit_tx_tenant_date ON credit_transactions(tenant_id, date DESC)`,
+    // credit_transactions — fix column order: tenant_id first for multi-tenant isolation
+    `CREATE INDEX IF NOT EXISTS idx_credit_tx_tenant_customer ON credit_transactions(tenant_id, customer_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_audit_log_tenant ON audit_log(tenant_id, created_at DESC)`,
+    // REMOVED: idx_credit_tx_customer (customer_id, tenant_id) — REDUNDANT (FIND-DB2)
+    // idx_credit_tx_tenant_customer(tenant_id, customer_id) fully covers all credit queries.
+    // No app query uses customer_id as leading filter without tenant_id.
+    `CREATE INDEX IF NOT EXISTS idx_employees_tenant ON employees(tenant_id, active)`,
+    `CREATE INDEX IF NOT EXISTS idx_shifts_tenant_date ON shifts(tenant_id, date DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_expenses_tenant_date ON expenses(tenant_id, date DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_dip_tenant_date ON dip_readings(tenant_id, date DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_purchases_tenant_date ON fuel_purchases(tenant_id, date DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_alerts_tenant ON alerts(tenant_id, acknowledged, created_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_alerts_type ON alerts(tenant_id, type, created_at DESC)`,
+  ];
+
+  for (const stmt of TABLES) {
+    try { await pool.query(stmt); }
+    catch (e) { console.warn('[Schema]', e.message.substring(0, 120)); }
+  }
+
+  // BUG-05 FIX: Add credentials_user_managed column to existing deployments safely
+  try {
+    await pool.query(
+      'ALTER TABLE super_admin ADD COLUMN IF NOT EXISTS credentials_user_managed BOOLEAN DEFAULT FALSE'
+    );
+  } catch (e) { console.warn('[Schema] super_admin migration:', e.message.substring(0, 80)); }
+
+  const existing = await pool.query(
+    'SELECT id, username, pass_hash, credentials_user_managed FROM super_admin WHERE id = 1'
+  );
+  if (existing.rows.length === 0) {
+    // No row yet — insert fresh
+    const initPass = process.env.SUPER_ADMIN_INIT_PASS || crypto.randomBytes(16).toString('hex');
+    const initHash = await hashPassword(initPass);
+    await pool.query(
+      'INSERT INTO super_admin (id, username, pass_hash) VALUES ($1, $2, $3)',
+      [1, process.env.SUPER_ADMIN_USERNAME || 'superadmin', initHash]
+    );
+    if (!process.env.SUPER_ADMIN_INIT_PASS) {
+      console.log('╔══════════════════════════════════════════════════════╗');
+      console.log('║  SUPER ADMIN PASSWORD (shown once — save this now!) ║');
+      console.log(`║  Username : ${(process.env.SUPER_ADMIN_USERNAME || 'superadmin').padEnd(40)}║`);
+      console.log(`║  Password : ${initPass.padEnd(40)}║`);
+      console.log('╚══════════════════════════════════════════════════════╝');
+    }
+  } else if (process.env.SUPER_ADMIN_USERNAME && process.env.SUPER_ADMIN_INIT_PASS) {
+    // BUG-05 FIX: Row exists — ONLY sync env vars if the admin has NOT changed credentials
+    // via the UI (credentials_user_managed = TRUE). Previously this ALWAYS overwrote,
+    // meaning every Railway restart/deploy silently wiped any password set through the UI.
+    const currentRow = existing.rows[0];
+    const userManaged = currentRow.credentials_user_managed === true;
+
+    if (userManaged) {
+      // User has changed credentials via UI — NEVER overwrite them from env vars.
+      // If you genuinely need to reset, set FORCE_SUPER_CREDS_RESET=true in Railway env.
+      if (process.env.FORCE_SUPER_CREDS_RESET === 'true') {
+        const envUser = process.env.SUPER_ADMIN_USERNAME;
+        const envPass = process.env.SUPER_ADMIN_INIT_PASS;
+        const syncHash = await hashPassword(envPass);
+        await pool.query(
+          'UPDATE super_admin SET username = $1, pass_hash = $2, updated_at = NOW(), credentials_user_managed = FALSE WHERE id = 1',
+          [envUser, syncHash]
+        );
+        console.log('[Schema] ⚠️  Super admin credentials FORCE-reset from environment variables (FORCE_SUPER_CREDS_RESET=true).');
+        console.log('[Schema] Remove FORCE_SUPER_CREDS_RESET from env to prevent this on next restart.');
+      } else {
+        console.log('[Schema] Super admin credentials are user-managed — skipping env var sync. (Set FORCE_SUPER_CREDS_RESET=true to override.)');
+      }
+    } else {
+      // Credentials are still the defaults — safe to sync env var changes
+      const envUser = process.env.SUPER_ADMIN_USERNAME;
+      const envPass = process.env.SUPER_ADMIN_INIT_PASS;
+      const usernameChanged = currentRow.username !== envUser;
+      const syncHash = await hashPassword(envPass);
+      await pool.query(
+        'UPDATE super_admin SET username = $1, pass_hash = $2, updated_at = NOW() WHERE id = 1',
+        [envUser, syncHash]
+      );
+      if (usernameChanged) {
+        console.log(`[Schema] Super admin username updated to: ${envUser}`);
+      }
+      console.log('[Schema] Super admin credentials synced from environment variables');
+    }
+  } else {
+    // ── No env vars set (SUPER_ADMIN_INIT_PASS / SUPER_ADMIN_USERNAME removed or never set)
+    // Row already exists in DB — password is whatever was last set (UI change or initial seed).
+    // This is the CORRECT state after removing the env vars from Railway once the app is
+    // running. Nothing to do — the DB is the source of truth.
+    console.log(`[Schema] Super admin credentials loaded from database (username: ${existing.rows[0].username}). No env var sync.`);
+  }
+
+  console.log('[Schema] Database schema initialized successfully');
+
+  // ── Non-breaking column additions for existing deployments ─────────────────
+  // These ADD COLUMN IF NOT EXISTS statements are safe to run repeatedly.
+  const safeAlters = [
+    // ── ADMIN_USERS PHONE MIGRATION ────────────────────────────────────────
+    // Phone number is now the login credential for Owner/admin logins.
+    // Globally unique per user — server identifies station from phone alone.
+    // NULL allowed for existing accounts until phone is set by super admin.
+    "ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS phone TEXT DEFAULT ''",
+    "ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS email TEXT DEFAULT ''",
+
+    // ── PUMPS TABLE MIGRATIONS ─────────────────────────────────────────────
+    // current_reading and reading_updated_at were used in the reading endpoint
+    // but never added to the CREATE TABLE. Add them safely now.
+    "ALTER TABLE pumps ADD COLUMN IF NOT EXISTS current_reading REAL DEFAULT 0",
+    "ALTER TABLE pumps ADD COLUMN IF NOT EXISTS reading_updated_at TEXT DEFAULT ''",
+    "ALTER TABLE pumps ADD COLUMN IF NOT EXISTS open_reading REAL DEFAULT 0",
+
+    // ── TANKS TABLE MIGRATIONS ─────────────────────────────────────────────
+    "ALTER TABLE tanks ADD COLUMN IF NOT EXISTS last_dip_source TEXT DEFAULT ''",
+    // The original schema used old column names; INSERT queries use new names.
+    // Add the new columns and copy data from old ones if they exist.
+    "ALTER TABLE sales ADD COLUMN IF NOT EXISTS liters REAL DEFAULT 0",
+    "ALTER TABLE sales ADD COLUMN IF NOT EXISTS mode TEXT DEFAULT 'cash'",
+    "ALTER TABLE sales ADD COLUMN IF NOT EXISTS pump TEXT DEFAULT ''",
+    "ALTER TABLE sales ADD COLUMN IF NOT EXISTS nozzle TEXT DEFAULT 'A'",
+    "ALTER TABLE sales ADD COLUMN IF NOT EXISTS vehicle TEXT DEFAULT ''",
+    "ALTER TABLE sales ADD COLUMN IF NOT EXISTS customer TEXT DEFAULT ''",
+    "ALTER TABLE sales ADD COLUMN IF NOT EXISTS shift TEXT DEFAULT ''",
+
+    // ── EXPENSES TABLE MIGRATIONS ──────────────────────────────────────────
+    // Schema has 'payment_method' but INSERT uses 'mode'
+    // Schema has no 'paid_to' or 'approved_by' columns
+    "ALTER TABLE expenses ADD COLUMN IF NOT EXISTS mode TEXT DEFAULT 'cash'",
+    "ALTER TABLE expenses ADD COLUMN IF NOT EXISTS paid_to TEXT DEFAULT ''",
+    "ALTER TABLE expenses ADD COLUMN IF NOT EXISTS approved_by TEXT DEFAULT ''",
+    // NOTE: 'desc' is a PostgreSQL reserved keyword — do NOT add as column name.
+    // The WRITE_ALIAS maps client 'desc' → 'description' column which already exists.
+
+    // ── TENANTS TABLE MIGRATIONS ───────────────────────────────────────────
+    // Add OMC field — existing stations default to 'iocl' (no data loss)
+    "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS omc TEXT DEFAULT 'iocl'",
+
+    // ── ATTENDANCE CLOCK-IN / CLOCK-OUT ────────────────────────────────────
+    "ALTER TABLE shifts ADD COLUMN IF NOT EXISTS clock_in TIMESTAMP",
+    "ALTER TABLE shifts ADD COLUMN IF NOT EXISTS clock_out TIMESTAMP",
+
+    // ── NOZZLE METER VARIANCE ──────────────────────────────────────────────
+    "ALTER TABLE pump_readings ADD COLUMN IF NOT EXISTS variance_litres REAL DEFAULT 0",
+    "ALTER TABLE pump_readings ADD COLUMN IF NOT EXISTS variance_flag BOOLEAN DEFAULT FALSE",
+
+    // ── DMS TRANSACTIONS TABLE ─────────────────────────────────────────────
+    `CREATE TABLE IF NOT EXISTS dms_transactions (
+      id SERIAL PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      date DATE,
+      omc TEXT DEFAULT '',
+      transaction_type TEXT DEFAULT '',
+      reference_no TEXT DEFAULT '',
+      fuel_type TEXT DEFAULT '',
+      quantity REAL DEFAULT 0,
+      rate REAL DEFAULT 0,
+      amount REAL DEFAULT 0,
+      status TEXT DEFAULT 'placed',
+      reconciled BOOLEAN DEFAULT FALSE,
+      matched_purchase_id INTEGER,
+      notes TEXT DEFAULT '',
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+
+    // ── UPI VERIFICATION — UTR reference and payment status per sale ───────
+    // utr_ref: UTR number captured by employee (via camera scan, screenshot OCR, or manual)
+    // payment_status: 'na' (non-UPI), 'unverified' (UPI, no UTR), 'manual_utr' (UTR entered)
+    "ALTER TABLE sales ADD COLUMN IF NOT EXISTS utr_ref TEXT DEFAULT ''",
+    "ALTER TABLE sales ADD COLUMN IF NOT EXISTS payment_status TEXT DEFAULT 'na'",
+
+    // BUG-008 FIX: Enforce phone uniqueness per tenant at the database level.
+    // Partial index (WHERE phone != '') preserves backward compatibility —
+    // employees created without a phone are not affected, but any two active employees
+    // at the same station cannot share a non-empty phone number.
+    // This is the authoritative server-side guard; the client-side check provides UX.
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_employees_phone_unique
+       ON employees(tenant_id, phone)
+       WHERE phone IS NOT NULL AND phone != ''`,
+  ];
+  for (const sql of safeAlters) {
+    try { await pool.query(sql); } catch(e) {
+      console.warn('[Schema] Safe alter skipped:', e.message.slice(0, 80));
+    }
+  }
+
+  // ── Backfill new columns from old column values (one-time data migration) ─
+  // Only runs when old columns exist and new ones are empty
+  const backfills = [
+    // Sales: copy quantity → liters, payment_method → mode, pump_id → pump, vehicle_number → vehicle, customer_name → customer, shift_id → shift
+    "UPDATE sales SET liters = quantity WHERE liters = 0 AND quantity IS NOT NULL AND quantity != 0",
+    "UPDATE sales SET mode = payment_method WHERE mode = 'cash' AND payment_method IS NOT NULL AND payment_method != '' AND payment_method != 'cash'",
+    "UPDATE sales SET pump = pump_id WHERE pump = '' AND pump_id IS NOT NULL AND pump_id != ''",
+    "UPDATE sales SET vehicle = vehicle_number WHERE vehicle = '' AND vehicle_number IS NOT NULL AND vehicle_number != ''",
+    "UPDATE sales SET customer = customer_name WHERE customer = '' AND customer_name IS NOT NULL AND customer_name != ''",
+    "UPDATE sales SET shift = shift_id WHERE shift = '' AND shift_id IS NOT NULL AND shift_id != ''",
+    // Expenses: copy payment_method → mode
+    "UPDATE expenses SET mode = payment_method WHERE mode = 'cash' AND payment_method IS NOT NULL AND payment_method != '' AND payment_method != 'cash'",
+    "UPDATE expenses SET paid_to = employee_name WHERE paid_to = '' AND employee_name IS NOT NULL AND employee_name != ''",
+  ];
+  for (const sql of backfills) {
+    try { await pool.query(sql); } catch(e) {
+      // Column may not exist yet — skip silently
+    }
+  }
+
+  return new Database(pool);
+}
+
+module.exports = {
+  initDatabase,
+  pool,
+  hashPassword,
+  verifyPassword
+};
