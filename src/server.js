@@ -2032,7 +2032,7 @@ Pack decoding: "300x40ML-POU"=packQty:300,packSize:"40ml",packType:"Pouch",isCar
       } else if (row.status === 'active' && row.sub_end) {
         const subEnd = new Date(row.sub_end);
         const graceEnd = new Date(subEnd);
-        graceEnd.setDate(graceEnd.getDate() + (row.grace_days || 3));
+        graceEnd.setDate(graceEnd.getDate() + (row.grace_days ?? 3));
         const daysLeft = Math.ceil((subEnd - now) / 86400000);
         if (now > graceEnd) effectiveStatus = 'expired';
         else if (now > subEnd) effectiveStatus = 'grace';
@@ -2083,7 +2083,7 @@ Pack decoding: "300x40ML-POU"=packQty:300,packSize:"40ml",packType:"Pouch",isCar
         } else if (row.status === 'active' && row.sub_end) {
           const subEnd = new Date(row.sub_end);
           const graceEnd = new Date(subEnd);
-          graceEnd.setDate(graceEnd.getDate() + (row.grace_days || 3));
+          graceEnd.setDate(graceEnd.getDate() + (row.grace_days ?? 3));
           daysLeft = Math.ceil((subEnd - now) / 86400000);
           if (now > graceEnd) effectiveStatus = 'expired';
           else if (now > subEnd) effectiveStatus = 'grace';
@@ -2175,7 +2175,7 @@ Pack decoding: "300x40ML-POU"=packQty:300,packSize:"40ml",packType:"Pouch",isCar
       } else if (row.status === 'active' && row.sub_end) {
         const subEnd = new Date(row.sub_end);
         const graceEnd = new Date(subEnd);
-        graceEnd.setDate(graceEnd.getDate() + (row.grace_days || 3));
+        graceEnd.setDate(graceEnd.getDate() + (row.grace_days ?? 3));
         daysLeft = Math.ceil((subEnd - now) / 86400000);
         if (now > graceEnd) effectiveStatus = 'expired';
         else if (now > subEnd) effectiveStatus = 'grace';
@@ -3023,7 +3023,7 @@ Pack decoding: "300x40ML-POU"=packQty:300,packSize:"40ml",packType:"Pouch",isCar
 
         const daysLeft = Math.ceil((expiryDate - now) / 86400000);
         const graceEnd = new Date(expiryDate);
-        graceEnd.setDate(graceEnd.getDate() + (row.grace_days || 3));
+        graceEnd.setDate(graceEnd.getDate() + (row.grace_days ?? 3));
         const isGraceExpired = now > graceEnd;
 
         // Mark as expired in DB if past grace period
