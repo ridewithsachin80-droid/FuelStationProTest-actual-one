@@ -2112,6 +2112,11 @@ Pack decoding: "300x40ML-POU"=packQty:300,packSize:"40ml",packType:"Pouch",isCar
           notes = COALESCE($8, subscriptions.notes),
           sub_start = COALESCE($9, subscriptions.sub_start),
           sub_end = COALESCE($10, subscriptions.sub_end),
+          trial_start = CASE
+            WHEN $3 = 'trial' AND ($4 IS NOT NULL)
+            THEN NOW()
+            ELSE subscriptions.trial_start
+          END,
           updated_at = NOW()
       `, [tid, plan, status, trial_days, price_monthly, grace_days, owner_phone, notes, sub_start||null, sub_end||null]);
       res.json({ success: true });
