@@ -579,15 +579,10 @@ async function startServer() {
     res.status(statusCode).json(health);
   });
 
-  // FIX #19: Rate limiter for all /api/public/* routes — prevents abuse / DDoS
-  const publicRouteLimiter = rateLimit({
-    windowMs: 60000,
-    max: 100,
-    standardHeaders: true,
-    legacyHeaders: false,
-    message: { error: 'Too many requests, please slow down.' },
-  });
-  app.use('/api/public', publicRouteLimiter);
+  // NOTE S-01 FIX: Duplicate /api/public rate limiter removed here.
+  // publicPathLimiter (120 req/min) is already applied at line ~147 above.
+  // Having two limiters in series was redundant and the lower limit (100) silently
+  // took precedence, breaking legitimate high-frequency polling from field devices.
 
   // FIX #11: Shared tenant existence check — prevents tenant enumeration on public routes
   async function checkTenantExists(tenantId) {
@@ -3309,6 +3304,20 @@ _— FuelBunk Pro_`;
   process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
   process.on('SIGINT',  () => gracefulShutdown('SIGINT'));
 }
+
+// FIX S-02: Global crash handlers — catch unhandled promise rejections and uncaught
+// exceptions so the process logs the error before crashing (or recovers where safe).
+// Without these, Railway silently restarts the process with no error in logs.
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[FATAL] Unhandled Promise Rejection:', reason);
+  // Allow process to continue — Railway will restart on repeated failures
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('[FATAL] Uncaught Exception:', err);
+  // Exit with code 1 — Railway restartPolicy ON_FAILURE will restart the server
+  process.exit(1);
+});
 
 startServer().catch(e => {
   console.error('[FATAL]', e);

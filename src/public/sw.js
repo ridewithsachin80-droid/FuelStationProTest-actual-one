@@ -14,7 +14,7 @@
  */
 
 const CACHE_VERSION = 'v85';
-const CACHE_NAME    = `fuelbunk-${CACHE_VERSION}`;
+// FIX F-07: CACHE_NAME was defined but never used (SHELL_CACHE + API_CACHE are used instead)
 const SHELL_CACHE   = `fuelbunk-shell-${CACHE_VERSION}`;
 const API_CACHE     = `fuelbunk-api-${CACHE_VERSION}`;
 

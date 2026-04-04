@@ -21,8 +21,8 @@ window.addEventListener('appinstalled', () => {
 
 function installPWA() {
   if (typeof APP !== 'undefined' && APP.deferredPrompt) {
-    // Android / Chrome
-    if (typeof APP !== 'undefined' && APP.deferredPrompt) APP.deferredPrompt.prompt();
+    // Android / Chrome — FIX F-04: removed redundant inner null-check
+    APP.deferredPrompt.prompt();
     APP.deferredPrompt.userChoice.then(choice => {
       if (choice.outcome === 'accepted') toast('Installing FuelBunk Pro…', 'success');
       if (typeof APP !== 'undefined') APP.deferredPrompt = null;
@@ -290,9 +290,9 @@ function openChangeMyPasswordModal() {
   const biometricRow = (typeof _webauthnAvailable === 'function' && _webauthnAvailable())
     ? `<div class="form-group" style="border-top:1px solid var(--border);padding-top:14px;margin-top:4px">
          <label class="form-label">🔐 Biometric Login</label>
-         <p style="color:var(--text-muted);font-size:12px;margin-bottom:10px">Use fingerprint, face, or screen PIN instead of password when opening the app.</p>
+         <p style="color:var(--text-2);font-size:12px;margin-bottom:10px">Use fingerprint, face, or screen PIN instead of password when opening the app.</p>
          ${sessionStorage.getItem('fb_wa_cred')
-           ? `<button class="btn btn-ghost" style="width:100%;border-color:var(--danger)" onclick="closeModal();removeBiometricCredential()">Remove Biometric from This Device</button>`
+           ? `<button class="btn btn-ghost" style="width:100%;border-color:var(--red)" onclick="closeModal();removeBiometricCredential()">Remove Biometric from This Device</button>`
            : `<button class="btn btn-ghost" style="width:100%" onclick="closeModal();setupBiometricNow()">Set Up Biometric Login →</button>`
          }
        </div>`
