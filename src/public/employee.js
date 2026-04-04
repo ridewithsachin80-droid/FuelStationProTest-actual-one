@@ -1568,8 +1568,21 @@ async function emp_bioRegister(empId) {
     toast(`Biometric registered for ${emp.name} ✓`, 'success');
     return true;
   } catch(e) {
-    if (e.name === 'NotAllowedError') toast('Biometric registration cancelled', 'info');
-    else toast('Registration failed: ' + e.message, 'error');
+    if (e.name === 'NotAllowedError') {
+      toast('Biometric registration cancelled', 'info');
+    } else if (e.name === 'SecurityError') {
+      // FIX 2: rpId mismatch — app domain changed or running on HTTP.
+      // Registration cannot succeed; guide user to correct URL.
+      console.warn('[emp_bioRegister] SecurityError:', e.message);
+      toast('Biometric unavailable — ensure the app is opened via HTTPS on the correct domain', 'warning');
+    } else if (e.name === 'InvalidStateError') {
+      // A credential for this user already exists on the authenticator.
+      // Clear local record and treat as success so the next login attempt works.
+      console.warn('[emp_bioRegister] InvalidStateError — credential already exists, re-linking');
+      toast('Biometric already registered for this device — try logging in', 'info');
+    } else {
+      toast('Registration failed: ' + e.message, 'error');
+    }
     return false;
   }
 }
@@ -1637,6 +1650,20 @@ async function emp_biometricLogin() {
         if (status) status.textContent = `Failed ${newFails}/${BIO_MAX_FAILS} — ${remaining} attempt${remaining > 1 ? 's' : ''} left`;
         toast(`Biometric failed — ${remaining} attempt${remaining > 1 ? 's' : ''} left`, 'error');
       }
+    } else if (e.name === 'SecurityError') {
+      // FIX 2: rpId mismatch — happens when the app domain changes (e.g. Railway
+      // preview URLs) or when running on HTTP instead of HTTPS. The stored credential
+      // is now permanently invalid on this origin, so clear it and force PIN login.
+      console.warn('[emp_biometricLogin] SecurityError — clearing credential for emp', id, ':', e.message);
+      try { localStorage.removeItem(emp_bioStorageKey(id)); } catch(_) {}
+      emp_showPinFallback(true);
+      toast('Biometric unavailable on this connection — please use PIN', 'warning');
+    } else if (e.name === 'InvalidStateError' || e.name === 'NotFoundError') {
+      // Credential was deleted from the device OS (factory reset, device swap, etc.)
+      console.warn('[emp_biometricLogin] Credential gone — clearing for emp', id);
+      try { localStorage.removeItem(emp_bioStorageKey(id)); } catch(_) {}
+      emp_showPinFallback(true);
+      toast('Biometric not recognised — please use PIN to re-register', 'info');
     } else {
       toast('Biometric error: ' + (e.message || e.name), 'error');
     }
