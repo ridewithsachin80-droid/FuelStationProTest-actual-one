@@ -1237,13 +1237,13 @@
   // on app open when a saved credential exists on the device.
   // ══════════════════════════════════════════════════════════════════
 
-  // BUG-05 FIX: Use sessionStorage for WebAuthn credential IDs.
-  // localStorage persists across browser restarts, making the credential ID
-  // readable by any JS running in the page (XSS) and by anyone with physical
-  // access who opens DevTools after the browser has been closed. sessionStorage
-  // is wiped when the tab closes, limiting the exposure window significantly.
-  const WA_CRED_KEY    = 'fb_wa_cred'; // sessionStorage key for saved credential ID
-  const WA_TENANT_KEY  = 'fb_wa_tid';  // sessionStorage key for tenant ID
+  // WebAuthn credential IDs are stored in localStorage so they survive the PWA
+  // being closed and reopened. Credential IDs are NOT secret — the private key
+  // never leaves the device's secure hardware (TPM/Secure Enclave). Using
+  // sessionStorage here was a bug: it wiped the credential on every app close,
+  // forcing the user to re-enter their password instead of using biometrics.
+  const WA_CRED_KEY    = 'fb_wa_cred'; // localStorage key for saved credential ID
+  const WA_TENANT_KEY  = 'fb_wa_tid';  // localStorage key for tenant ID
 
   // ── Unlock state ─────────────────────────────────────────────────────────
   // BUG-07 FIX: Wrap the unlock flag in a closure object so it cannot be
@@ -1287,7 +1287,7 @@
     if (!token) return;
 
     // Don't ask again if already registered on this device
-    const existingCred = sessionStorage.getItem(WA_CRED_KEY);
+    const existingCred = localStorage.getItem(WA_CRED_KEY);
     if (existingCred) return;
 
     // Small delay so the welcome toast shows first
@@ -1373,14 +1373,18 @@
 
       if (result.success) {
         // Save credential ID locally for next app open
-        sessionStorage.setItem(WA_CRED_KEY, credential.id);
-        sessionStorage.setItem(WA_TENANT_KEY, tenantId);
+        localStorage.setItem(WA_CRED_KEY, credential.id);
+        localStorage.setItem(WA_TENANT_KEY, tenantId);
         if (typeof toast === 'function') toast('✅ Biometric login enabled! Use it next time.', 'success');
       }
     } catch (e) {
-      // User cancelled or device doesn't support it — silently ignore
-      if (e.name !== 'NotAllowedError') {
+      if (e.name === 'NotAllowedError') {
+        // User cancelled the OS biometric/PIN prompt — silently ignore
+      } else {
         console.warn('[WebAuthn] Registration failed:', e.message);
+        if (typeof toast === 'function') {
+          toast('Biometric setup failed — ' + (e.message || 'please try again'), 'error');
+        }
       }
     }
   }
@@ -1390,8 +1394,8 @@
   async function _attemptBiometricLogin() {
     if (!_webauthnAvailable()) return false;
 
-    const credentialId = sessionStorage.getItem(WA_CRED_KEY);
-    const tenantId = sessionStorage.getItem(WA_TENANT_KEY);
+    const credentialId = localStorage.getItem(WA_CRED_KEY);
+    const tenantId = localStorage.getItem(WA_TENANT_KEY);
     if (!credentialId || !tenantId) return false;
 
     try {
@@ -1471,14 +1475,14 @@
       } else if (e.name === 'SecurityError') {
         // rpId mismatch or insecure context — clear stored credential and inform user
         console.warn('[WebAuthn] SecurityError (rpId mismatch or HTTP?) — clearing credential:', e.message);
-        sessionStorage.removeItem(WA_CRED_KEY);
-        sessionStorage.removeItem(WA_TENANT_KEY);
+        localStorage.removeItem(WA_CRED_KEY);
+        localStorage.removeItem(WA_TENANT_KEY);
         if (typeof toast === 'function') toast('Biometric login unavailable on this connection — please log in with your password', 'warning');
       } else if (e.name === 'InvalidStateError' || e.name === 'NotFoundError') {
         // Credential no longer valid on this device — clear it and show password login
         console.warn('[WebAuthn] Credential invalid — clearing:', e.message);
-        sessionStorage.removeItem(WA_CRED_KEY);
-        sessionStorage.removeItem(WA_TENANT_KEY);
+        localStorage.removeItem(WA_CRED_KEY);
+        localStorage.removeItem(WA_TENANT_KEY);
         if (typeof toast === 'function') toast('Biometric session expired — please log in with your password to re-enable it', 'info');
       } else {
         console.warn('[WebAuthn] Auth failed:', e.name, e.message);
@@ -1611,7 +1615,7 @@
     // _bioLock is still false, show the lock screen before entering.
     if (typeof _origEnterApp === 'function') {
       window.enterApp = function() {
-        var credentialId = sessionStorage.getItem(WA_CRED_KEY);
+        var credentialId = localStorage.getItem(WA_CRED_KEY);
         if (credentialId && _webauthnAvailable() && !_bioLock.get()) {
           // Show lock screen — it will call _attemptBiometricLogin(), which on
           // success sets _bioLock to true then calls enterApp() again.
@@ -1663,7 +1667,7 @@
         if (typeof APP !== 'undefined' && APP.loggedIn) {
           return _origShowLoginScreen.apply(this, arguments);
         }
-        var credentialId = sessionStorage.getItem(WA_CRED_KEY);
+        var credentialId = localStorage.getItem(WA_CRED_KEY);
         if (credentialId && _webauthnAvailable()) {
           var tried = await _attemptBiometricLogin();
           if (tried) return;
@@ -1710,7 +1714,7 @@
 
       if (elapsed < _relockThreshold) return;
 
-      var credentialId = sessionStorage.getItem(WA_CRED_KEY);
+      var credentialId = localStorage.getItem(WA_CRED_KEY);
       var isLoggedIn   = typeof APP !== 'undefined' && APP.loggedIn;
       if (!isLoggedIn || !credentialId || !_webauthnAvailable()) return;
 
@@ -1737,18 +1741,18 @@
 
   // ── Manage biometric credentials (exposed for Settings page) ─────────────
   window.removeBiometricCredential = async function() {
-    const credentialId = sessionStorage.getItem(WA_CRED_KEY);
+    const credentialId = localStorage.getItem(WA_CRED_KEY);
     if (!credentialId) { if(typeof toast==='function') toast('No biometric set up on this device', 'info'); return; }
     try {
       const list = await AuthAPI.webauthnCredentials();
       const match = (list.credentials || []).find(c => c.credential_id === credentialId);
       if (match) await AuthAPI.webauthnRemoveCredential(match.id);
-      sessionStorage.removeItem(WA_CRED_KEY);
-      sessionStorage.removeItem(WA_TENANT_KEY);
+      localStorage.removeItem(WA_CRED_KEY);
+      localStorage.removeItem(WA_TENANT_KEY);
       if(typeof toast==='function') toast('Biometric login removed from this device', 'success');
     } catch(e) {
-      sessionStorage.removeItem(WA_CRED_KEY);
-      sessionStorage.removeItem(WA_TENANT_KEY);
+      localStorage.removeItem(WA_CRED_KEY);
+      localStorage.removeItem(WA_TENANT_KEY);
       if(typeof toast==='function') toast('Biometric login removed', 'success');
     }
   };
