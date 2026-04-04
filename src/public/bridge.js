@@ -407,10 +407,16 @@
             active:      true,
           };
           if (typeof mt_setActiveTenant === 'function') mt_setActiveTenant(tenantObj);
-          localStorage.setItem('fb_session', JSON.stringify({
+          localStorage.setItem('fb_session', typeof signData === 'function' ? signData({
             loggedIn: true, role: 'admin',
             adminUser: { name: result.userName, username: phone, role: result.userRole },
-            tenant: tenantObj, token: result.token
+            tenant: tenantObj, token: result.token,
+            timestamp: Date.now(), lastActive: Date.now()
+          }) : JSON.stringify({
+            loggedIn: true, role: 'admin',
+            adminUser: { name: result.userName, username: phone, role: result.userRole },
+            tenant: tenantObj, token: result.token,
+            timestamp: Date.now(), lastActive: Date.now()
           }));
           if (typeof APP !== 'undefined') {
             APP.loggedIn = true;
@@ -451,10 +457,16 @@
       const result = await AuthAPI.adminLogin(user, pass, tenant.id);
       if (result.success) {
         setAuthToken(result.token);
-        localStorage.setItem('fb_session', JSON.stringify({
+        localStorage.setItem('fb_session', typeof signData === 'function' ? signData({
           loggedIn: true, role: 'admin',
           adminUser: { name: result.userName, username: user, role: result.userRole },
-          tenant: tenant, token: result.token
+          tenant: tenant, token: result.token,
+          timestamp: Date.now(), lastActive: Date.now()
+        }) : JSON.stringify({
+          loggedIn: true, role: 'admin',
+          adminUser: { name: result.userName, username: user, role: result.userRole },
+          tenant: tenant, token: result.token,
+          timestamp: Date.now(), lastActive: Date.now()
         }));
         if (typeof APP !== 'undefined') {
           APP.loggedIn  = true;
@@ -494,9 +506,14 @@
         APP.tenant = tenant;
 
         // Save to sessionStorage for page refresh
-        localStorage.setItem('fb_session', JSON.stringify({
+        localStorage.setItem('fb_session', typeof signData === 'function' ? signData({
           loggedIn: true, role: 'admin', adminUser: APP.adminUser,
-          tenant: tenant, token: result.token
+          tenant: tenant, token: result.token,
+          timestamp: Date.now(), lastActive: Date.now()
+        }) : JSON.stringify({
+          loggedIn: true, role: 'admin', adminUser: APP.adminUser,
+          tenant: tenant, token: result.token,
+          timestamp: Date.now(), lastActive: Date.now()
         }));
 
         // Re-init DB with correct tenant
@@ -998,7 +1015,7 @@
             setTenantId(result.tenantId);
             const tenantObj = { id: result.tenantId, name: result.tenantName, location: result.tenantLocation||'', icon: result.tenantIcon||'⛽', color:'#d4940f', colorLight:'#f0b429', active:true };
             if (typeof mt_setActiveTenant === 'function') mt_setActiveTenant(tenantObj);
-            localStorage.setItem('fb_session', JSON.stringify({ loggedIn:true, role:'admin', adminUser:{name:result.userName, username:phone, role:result.userRole}, tenant:tenantObj, token:result.token }));
+            localStorage.setItem('fb_session', typeof signData === 'function' ? signData({ loggedIn:true, role:'admin', adminUser:{name:result.userName, username:phone, role:result.userRole}, tenant:tenantObj, token:result.token, timestamp:Date.now(), lastActive:Date.now() }) : JSON.stringify({ loggedIn:true, role:'admin', adminUser:{name:result.userName, username:phone, role:result.userRole}, tenant:tenantObj, token:result.token, timestamp:Date.now(), lastActive:Date.now() }));
             if (typeof APP !== 'undefined') { APP.loggedIn=true; APP.role='admin'; APP.adminUser={name:result.userName, username:phone, role:result.userRole}; APP.tenant=tenantObj; }
             window.db = new FuelDB('FuelBunkPro_' + result.tenantId);
             try {
@@ -1024,7 +1041,7 @@
         if (result.success) {
           setAuthToken(result.token);
           setTenantId(tenant.id);
-          localStorage.setItem('fb_session', JSON.stringify({ loggedIn:true, role:'admin', adminUser:{name:result.userName, username:user, role:result.userRole}, tenant, token:result.token }));
+          localStorage.setItem('fb_session', typeof signData === 'function' ? signData({ loggedIn:true, role:'admin', adminUser:{name:result.userName, username:user, role:result.userRole}, tenant, token:result.token, timestamp:Date.now(), lastActive:Date.now() }) : JSON.stringify({ loggedIn:true, role:'admin', adminUser:{name:result.userName, username:user, role:result.userRole}, tenant, token:result.token, timestamp:Date.now(), lastActive:Date.now() }));
           if (typeof APP !== 'undefined') { APP.loggedIn=true; APP.role='admin'; APP.adminUser={name:result.userName, username:user, role:result.userRole}; APP.tenant=tenant; }
           window.db = new FuelDB('FuelBunkPro_' + tenant.id);
           if (typeof loadData === 'function') {
@@ -1068,6 +1085,7 @@
 
     // ── App logout ────────────────────────────────────────────────────────
     window.appLogout = async function() {
+      _biometricUnlocked = false; // FIX 4: always reset on logout
       try { await AuthAPI.logout(); } catch {}
       if (typeof APP !== 'undefined') {
         APP.loggedIn = false; APP.role = null; APP.adminUser = null; APP.data = null;
@@ -1262,12 +1280,52 @@
     // Small delay so the welcome toast shows first
     await new Promise(r => setTimeout(r, 1500));
 
-    // Show native confirm — simple, no modal library needed
-    const wantsSetup = confirm(
-      '🔐 Set up biometric login?\n\n' +
-      'Next time you open the app, just use your fingerprint, face, or screen PIN — no password needed.\n\n' +
-      'Tap OK to set it up now.'
-    );
+    // FIX 5: Use an in-app modal instead of confirm().
+    // confirm() is BLOCKED by Chrome on Android when the app is installed as a
+    // standalone PWA — it silently returns false, so biometric setup was never
+    // offered to home-screen users. This bottom-sheet works in all modes.
+    const wantsSetup = await new Promise(function(resolve) {
+      var sheet = document.createElement('div');
+      sheet.id = 'fb-bio-offer-sheet';
+      sheet.style.cssText = [
+        'position:fixed;inset:0;z-index:999998',
+        'background:rgba(0,0,0,0.65)',
+        'display:flex;align-items:flex-end;justify-content:center',
+        'animation:fb-fade-in 0.2s ease'
+      ].join(';');
+      // Inject keyframe once
+      if (!document.getElementById('fb-bio-anim')) {
+        var style = document.createElement('style');
+        style.id = 'fb-bio-anim';
+        style.textContent = '@keyframes fb-fade-in{from{opacity:0}to{opacity:1}}' +
+          '@keyframes fb-slide-up{from{transform:translateY(100%)}to{transform:translateY(0)}}';
+        document.head.appendChild(style);
+      }
+      sheet.innerHTML =
+        '<div style="' +
+          'background:#161b27;border-radius:20px 20px 0 0;' +
+          'padding:28px 24px 36px;width:100%;max-width:440px;box-sizing:border-box;' +
+          'animation:fb-slide-up 0.25s ease' +
+        '">' +
+          '<div style="font-size:32px;margin-bottom:12px">🔐</div>' +
+          '<div style="font-size:17px;font-weight:700;color:#f4f5f7;margin-bottom:8px">Enable biometric login?</div>' +
+          '<div style="font-size:13px;color:#9498a5;line-height:1.6;margin-bottom:22px">' +
+            'Next time you open the app, use your fingerprint, face, or screen PIN — no password needed.' +
+          '</div>' +
+          '<button id="fb-bio-offer-yes" style="' +
+            'width:100%;background:#d4940f;color:#000;border:none;' +
+            'padding:14px;border-radius:10px;font-size:15px;font-weight:700;' +
+            'margin-bottom:10px;cursor:pointer' +
+          '">Set Up Now</button>' +
+          '<button id="fb-bio-offer-no" style="' +
+            'width:100%;background:transparent;color:#9498a5;border:none;' +
+            'padding:10px;font-size:13px;cursor:pointer' +
+          '">Not Now</button>' +
+        '</div>';
+      document.body.appendChild(sheet);
+      document.getElementById('fb-bio-offer-yes').onclick = function() { sheet.remove(); resolve(true); };
+      document.getElementById('fb-bio-offer-no').onclick  = function() { sheet.remove(); resolve(false); };
+    });
     if (!wantsSetup) return;
 
     try {
@@ -1366,10 +1424,16 @@
           color: '#d4940f', colorLight: '#f0b429', active: true
         };
         if (typeof mt_setActiveTenant === 'function') mt_setActiveTenant(tenantObj);
-        localStorage.setItem('fb_session', JSON.stringify({
+        localStorage.setItem('fb_session', typeof signData === 'function' ? signData({
           loggedIn: true, role: 'admin',
           adminUser: { name: result.userName, role: result.userRole },
-          tenant: tenantObj, token: result.token
+          tenant: tenantObj, token: result.token,
+          timestamp: Date.now(), lastActive: Date.now()
+        }) : JSON.stringify({
+          loggedIn: true, role: 'admin',
+          adminUser: { name: result.userName, role: result.userRole },
+          tenant: tenantObj, token: result.token,
+          timestamp: Date.now(), lastActive: Date.now()
         }));
         if (typeof APP !== 'undefined') {
           APP.loggedIn = true; APP.role = 'admin';
@@ -1517,10 +1581,9 @@
   // ══════════════════════════════════════════════════════════════════════════
   function _applyBiometricPatches() {
 
-    // Capture all originals before patching
+    // Capture originals before patching
     var _origEnterApp        = window.enterApp;
     var _origShowLoginScreen = window.showLoginScreen;
-    var _origAppLogin        = window.appLogin;
     var _origAppLogout       = window.appLogout;
 
     // ── PATCH 1 (THE CORE FIX): wrap enterApp ──────────────────────────────
@@ -1552,20 +1615,28 @@
       };
     }
 
-    // ── PATCH 2: wrap appLogin — unlock + offer biometric after password login ──
-    if (typeof _origAppLogin === 'function') {
-      window.appLogin = async function() {
+    // ── PATCH 2: wrap ALL password login entry points ──────────────────────
+    // BUG-1 FIX: The HTML form calls doAdminLogin() (not appLogin). Both must
+    // be wrapped so that any successful password login sets _biometricUnlocked = true
+    // BEFORE enterApp() is called, preventing the lock screen from firing immediately
+    // after a deliberate password login.
+    function _wrapLoginFn(fnName) {
+      var orig = window[fnName];
+      if (typeof orig !== 'function') return;
+      window[fnName] = async function() {
         var tokenBefore = localStorage.getItem('_fb_auth_token');
-        await _origAppLogin.apply(this, arguments);
+        await orig.apply(this, arguments);
         var tokenAfter = localStorage.getItem('_fb_auth_token');
         if (tokenAfter && tokenAfter !== tokenBefore) {
-          // Password login succeeded → mark unlocked so enterApp passes through
+          // A new token was issued → login succeeded → mark device as unlocked
           _biometricUnlocked = true;
           var sess = JSON.parse(localStorage.getItem('fb_session') || '{}');
           _offerBiometricSetup(tokenAfter, sess.tenant && sess.tenant.id, sess.adminUser && sess.adminUser.name);
         }
       };
     }
+    _wrapLoginFn('doAdminLogin'); // called by HTML button onclick="doAdminLogin()"
+    _wrapLoginFn('appLogin');     // called programmatically in some paths
 
     // ── PATCH 3: wrap showLoginScreen — biometric-first for expired-session path ──
     // Covers the case where session has fully expired (8-hour idle or 30-day max).
@@ -1598,11 +1669,22 @@
     // On mobile, opening a PWA from the home screen or app switcher does NOT fire
     // DOMContentLoaded — the page is already loaded. Instead, the browser fires
     // visibilitychange (hidden → visible). We track how long the app was hidden:
-    // if it exceeds RELOCK_AFTER (60 s) and the user is logged in with biometric
-    // set up, we set _biometricUnlocked = false and show the lock screen again.
+    // if it exceeds the threshold and the user is logged in with biometric set up,
+    // we show the lock screen again.
+    //
+    // FIX 6: Use a shorter threshold (60 s) only in standalone PWA mode.
+    // In regular browser tabs use 5 minutes to avoid locking desktop users who
+    // briefly switch tabs.
+    var _isStandalonePWA = window.matchMedia('(display-mode: standalone)').matches
+      || window.navigator.standalone === true;
+    var _relockThreshold = _isStandalonePWA ? RELOCK_AFTER : 5 * 60 * 1000;
+
     document.addEventListener('visibilitychange', function() {
       if (document.visibilityState === 'hidden') {
-        _hiddenAt = Date.now();
+        // FIX 7: Don't record hide time if lock screen already showing
+        if (!document.getElementById('fb-bio-lock')) {
+          _hiddenAt = Date.now();
+        }
         return;
       }
       // App became visible
@@ -1610,7 +1692,7 @@
       var elapsed = Date.now() - _hiddenAt;
       _hiddenAt = null;
 
-      if (elapsed < RELOCK_AFTER) return; // brief switch — don't re-lock
+      if (elapsed < _relockThreshold) return;
 
       var credentialId = localStorage.getItem(WA_CRED_KEY);
       var isLoggedIn   = typeof APP !== 'undefined' && APP.loggedIn;
