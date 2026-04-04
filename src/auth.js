@@ -651,6 +651,17 @@ function authRoutes(db) {
   const RP_ID     = process.env.RP_ID     || 'fuelbunk.app';
   const RP_ORIGIN = process.env.RP_ORIGIN || 'https://fuelbunk.app';
 
+  // FIX-5: Warn loudly at startup when env vars are not configured so that
+  // biometric failures on non-production domains are caught immediately,
+  // not silently swallowed as a vague "Invalid credential" error.
+  if (!process.env.RP_ID || !process.env.RP_ORIGIN) {
+    console.error(
+      '[WebAuthn] WARNING: RP_ID and/or RP_ORIGIN env vars are not set!\n' +
+      '  Defaulting to fuelbunk.app — biometric registration/auth will FAIL on any other origin.\n' +
+      '  Set RP_ID=yourdomain.com and RP_ORIGIN=https://yourdomain.com in your environment.'
+    );
+  }
+
   // ── FIX 5: DB-backed challenge store (replaces in-memory Map) ────────────
   // The in-memory Map was wiped on every server restart (Railway restarts on
   // every deploy and can sleep/wake). Challenges are now stored in the DB with
@@ -778,7 +789,7 @@ function authRoutes(db) {
       }
       // FIX 3: Verify origin matches the app's expected origin
       if (clientData.origin !== RP_ORIGIN) {
-        console.warn('[webauthn/register] Origin mismatch — expected:', RP_ORIGIN, 'got:', clientData.origin);
+        console.error('[webauthn/register] Origin mismatch — expected:', RP_ORIGIN, 'got:', clientData.origin, '— set RP_ORIGIN env var');
         return res.status(403).json({ error: 'Origin mismatch — ensure you are accessing the app from the correct URL' });
       }
       const challengeData = await _getChallenge(clientData.challenge);
@@ -902,7 +913,7 @@ function authRoutes(db) {
       }
       // FIX 3: Verify origin matches the app's expected origin
       if (clientData.origin !== RP_ORIGIN) {
-        console.warn('[webauthn/authenticate] Origin mismatch — expected:', RP_ORIGIN, 'got:', clientData.origin);
+        console.error('[webauthn/authenticate] Origin mismatch — expected:', RP_ORIGIN, 'got:', clientData.origin, '— set RP_ORIGIN env var');
         return res.status(403).json({ error: 'Origin mismatch — ensure you are accessing the app from the correct URL' });
       }
       const challengeData = await _getChallenge(clientData.challenge);

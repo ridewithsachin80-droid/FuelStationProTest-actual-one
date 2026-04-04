@@ -158,7 +158,7 @@
       window.location.reload();
     });
 
-    navigator.serviceWorker.register('/sw.js?v=87', { scope: '/' })  // version matches CACHE_VERSION 'v87'
+    navigator.serviceWorker.register('/sw.js?v=88', { scope: '/' })  // version matches CACHE_VERSION 'v88'
       .then(function(reg) {
         reg.update(); // check for updates on every load
 
@@ -990,15 +990,15 @@ window.APP = window.APP || {
 </script>
 
 <!-- FuelBunk Pro — Backend Integration (SQLite REST API) -->
-<script src="/api-client.js?v=87"></script>
+<script src="/api-client.js?v=88"></script>
 
-<script src="/multitenant.js?v=87"></script>
-<script src="/utils.js?v=87"></script>
-<script src="/admin.js?v=87"></script>
-<script src="/employee.js?v=87"></script>
-<script src="/app.js?v=87"></script>
-<script src="/bridge.js?v=87"></script>
+<script src="/multitenant.js?v=88"></script>
+<script src="/utils.js?v=88"></script>
+<script src="/admin.js?v=88"></script>
+<script src="/employee.js?v=88"></script>
+<script src="/app.js?v=88"></script>
+<script src="/bridge.js?v=88"></script>
 <!-- FIX BUG-05: autosave.js loaded last — after utils.js so toast() and other helpers exist -->
-<script src="/autosave.js?v=87"></script>
+<script src="/autosave.js?v=88"></script>
 </body>
 </html>

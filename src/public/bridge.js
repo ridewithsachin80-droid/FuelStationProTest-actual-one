@@ -537,10 +537,11 @@
   const _origLoadSession = window.loadSession;
   window.loadSession = function() {
     try {
-      const raw = localStorage.getItem('fb_session');
-      if (!raw) return false;
-      const session = JSON.parse(raw);
-      if (!session.loggedIn) return false;
+      // FIX-2a: Use _readSession() to unwrap signed {payload,sig} sessions.
+      // Plain JSON.parse gives the wrapper object — session.loggedIn is always
+      // undefined, so the old code always returned false on every page refresh.
+      const session = _readSession();
+      if (!session || !session.loggedIn) return false;
 
       // Restore auth token
       if (session.token) {
@@ -1061,9 +1062,9 @@
     // ── Session restore (uses sessionStorage + API token) ─────────────────
     window.loadSession = function() {
       try {
-        const raw = localStorage.getItem('fb_session');
-        if (!raw) return false;
-        const session = JSON.parse(raw);
+        // FIX-2b: Use _readSession() to handle signed {payload,sig} sessions.
+        // Identical root-cause to the plain-bridge loadSession above.
+        const session = _readSession();
         if (!session || !session.loggedIn || !session.token) return false;
         setAuthToken(session.token);
         setTenantId(session.tenant?.id);
@@ -1245,6 +1246,29 @@
   const WA_CRED_KEY    = 'fb_wa_cred'; // localStorage key for saved credential ID
   const WA_TENANT_KEY  = 'fb_wa_tid';  // localStorage key for tenant ID
 
+  // ── Safe session reader ────────────────────────────────────────────────────
+  // fb_session is stored by signData() as { payload: "<JSON>", sig: "<hash>" }.
+  // A plain JSON.parse() returns the wrapper object, NOT the session data, so
+  // session.loggedIn / session.tenant are always undefined.
+  // This helper calls verifyData() (defined in utils.js) to unwrap correctly,
+  // with a fallback for legacy unsigned sessions written before signing was added.
+  function _readSession() {
+    try {
+      var raw = localStorage.getItem('fb_session');
+      if (!raw) return null;
+      // Preferred path — verifyData handles the {payload,sig} envelope
+      if (typeof verifyData === 'function') {
+        var verified = verifyData(raw);
+        if (verified) return verified;
+      }
+      // Fallback: plain JSON (unsigned session from an older build)
+      var plain = JSON.parse(raw);
+      // Reject if it still looks like a signed wrapper that verifyData rejected
+      if (plain && typeof plain.payload === 'string' && typeof plain.sig === 'string') return null;
+      return plain;
+    } catch (e) { return null; }
+  }
+
   // ── Unlock state ─────────────────────────────────────────────────────────
   // BUG-07 FIX: Wrap the unlock flag in a closure object so it cannot be
   // trivially set to `true` from DevTools / a bookmarklet by name.
@@ -1280,15 +1304,44 @@
     return !!(window.PublicKeyCredential && navigator.credentials && navigator.credentials.create);
   }
 
+  // ── Check if a valid (non-stale) biometric credential is stored ───────────
+  function _hasValidBiometricCred() {
+    var cred   = localStorage.getItem(WA_CRED_KEY);
+    var tenant = localStorage.getItem(WA_TENANT_KEY);
+    if (!cred || !tenant) return false;
+    if (cred === 'undefined' || cred === 'null') { localStorage.removeItem(WA_CRED_KEY); localStorage.removeItem(WA_TENANT_KEY); return false; }
+    if (tenant === 'undefined' || tenant === 'null') { localStorage.removeItem(WA_CRED_KEY); localStorage.removeItem(WA_TENANT_KEY); return false; }
+    return true;
+  }
+
   // ── After successful password login: offer biometric registration ─────────
   // Called from within bridge.js login success paths
   async function _offerBiometricSetup(token, tenantId, userName) {
     if (!_webauthnAvailable()) return;
     if (!token) return;
 
-    // Don't offer again if there's already a valid credential on this device
+    // Don't offer again if there's already a valid credential on this device.
+    // FIX-4: But first verify the stored credential ID still exists on the server.
+    // If the server DB was reset, or the user's credentials were revoked, the
+    // locally stored ID is stale — silently returning here would lock the user
+    // out of biometric re-registration forever.
     const existingCred = localStorage.getItem(WA_CRED_KEY);
-    if (existingCred) return;
+    if (existingCred) {
+      try {
+        const serverList = await AuthAPI.webauthnCredentials();
+        const stillValid = (serverList.credentials || [])
+          .some(c => c.credential_id === existingCred);
+        if (stillValid) return; // credential confirmed on server — don't re-offer
+        // Server no longer knows this credential — clear it and fall through to re-register
+        localStorage.removeItem(WA_CRED_KEY);
+        localStorage.removeItem(WA_TENANT_KEY);
+        console.warn('[WebAuthn] Stored credential not found on server — cleared for re-registration');
+      } catch (e) {
+        // Cannot reach server (offline / cold-start) — skip offer to avoid confusing the user
+        console.warn('[WebAuthn] Could not validate existing credential against server:', e.message);
+        return;
+      }
+    }
 
     // Small delay so the welcome toast shows first
     await new Promise(r => setTimeout(r, 1500));
@@ -1373,8 +1426,17 @@
 
       if (result.success) {
         // Save credential ID locally for next app open
+        // Guard: only store if tenantId is a real value — storing "undefined" breaks auth
+        if (!tenantId) {
+          tenantId = (typeof APP !== 'undefined' && APP.tenant && APP.tenant.id) || null;
+        }
+        if (!tenantId) {
+          console.warn('[WebAuthn] Cannot save credential — tenantId is missing');
+          if (typeof toast === 'function') toast('Biometric setup failed — no station ID. Try again.', 'error');
+          return;
+        }
         localStorage.setItem(WA_CRED_KEY, credential.id);
-        localStorage.setItem(WA_TENANT_KEY, tenantId);
+        localStorage.setItem(WA_TENANT_KEY, String(tenantId));
         if (typeof toast === 'function') toast('✅ Biometric login enabled! Use it next time.', 'success');
       }
     } catch (e) {
@@ -1396,7 +1458,16 @@
 
     const credentialId = localStorage.getItem(WA_CRED_KEY);
     const tenantId = localStorage.getItem(WA_TENANT_KEY);
-    if (!credentialId || !tenantId) return false;
+    // Guard: if tenantId was stored as the literal string "undefined" (a previous bug),
+    // clear both keys and force the user to re-register biometrics cleanly.
+    if (!credentialId || !tenantId || tenantId === 'undefined' || tenantId === 'null') {
+      if (credentialId || tenantId) {
+        localStorage.removeItem(WA_CRED_KEY);
+        localStorage.removeItem(WA_TENANT_KEY);
+        console.warn('[WebAuthn] Cleared stale/invalid credential keys — please re-register biometrics after login');
+      }
+      return false;
+    }
 
     try {
       // Get auth challenge from server
@@ -1468,18 +1539,33 @@
         return true;
       }
     } catch (e) {
-      if (e.name === 'NotAllowedError') {
+      // BUG-8 FIX: Store a human-readable error reason so doUnlock() can show a
+      // specific status message. Previously every failure showed the same generic
+      // "Could not verify" text regardless of cause (cancelled vs network vs invalid).
+      if (e.name === 'NotAllowedError' || e.name === 'AbortError') {
+        // User tapped Cancel on the OS biometric prompt — silent, no toast
+        _lastBioErrorMsg = 'Cancelled — tap to try again';
         console.log('[WebAuthn] Biometric cancelled by user');
       } else if (e.name === 'SecurityError') {
-        console.warn('[WebAuthn] SecurityError:', e.message);
+        _lastBioErrorMsg = 'Security error — credential cleared, please log in';
+        console.error('[WebAuthn] SecurityError:', e.message);
         localStorage.removeItem(WA_CRED_KEY);
         localStorage.removeItem(WA_TENANT_KEY);
+        if (typeof toast === 'function') toast('Biometric security error — please log in again', 'error');
       } else if (e.name === 'InvalidStateError' || e.name === 'NotFoundError') {
+        _lastBioErrorMsg = 'Credential not recognised — please log in';
         console.warn('[WebAuthn] Credential invalid — clearing:', e.message);
         localStorage.removeItem(WA_CRED_KEY);
         localStorage.removeItem(WA_TENANT_KEY);
+        if (typeof toast === 'function') toast('Biometric not recognised — please log in with password', 'warning');
+      } else if (e.name === 'TypeError' || (e.message && e.message.toLowerCase().includes('fetch'))) {
+        _lastBioErrorMsg = 'Network error — check connection and retry';
+        console.warn('[WebAuthn] Network error during auth:', e.message);
+        if (typeof toast === 'function') toast('⚠️ Server unreachable — check your connection', 'warning');
       } else {
+        _lastBioErrorMsg = 'Verification failed — tap to retry';
         console.warn('[WebAuthn] Auth failed:', e.name, e.message);
+        if (typeof toast === 'function') toast('Biometric failed — ' + (e.message || 'please try again'), 'error');
       }
     }
     return false;
@@ -1489,6 +1575,19 @@
   window._attemptBiometricLogin = _attemptBiometricLogin;
   window._offerBiometricSetup   = _offerBiometricSetup;
   window._webauthnAvailable     = _webauthnAvailable;
+
+  // ── Module-level refs used by _showBiometricLockScreen ───────────────────
+  // BUG-6 FIX: _rawShowLoginScreen is captured BEFORE any patch is applied.
+  // _showBiometricLockScreen is defined OUTSIDE _applyBiometricPatches, so it
+  // cannot close over _origShowLoginScreen (which lives inside that function).
+  // Without this, the default "Use Password Instead" fallback calls the PATCHED
+  // showLoginScreen → credential still in localStorage → lock screen shown again
+  // → infinite loop. The raw pre-patch ref always shows the password form.
+  var _rawShowLoginScreen = null; // populated by _applyBiometricPatches before patching
+
+  // BUG-8 FIX: last error description from _attemptBiometricLogin so doUnlock
+  // can show a specific status line rather than a generic "could not verify" text.
+  var _lastBioErrorMsg = '';
 
   // ══════════════════════════════════════════════════════════════════════════
   // ── Biometric Lock Screen UI ───────────────────────────────────────────
@@ -1503,8 +1602,14 @@
     // Never stack two lock screens
     if (document.getElementById('fb-bio-lock')) return;
 
-    const tenantName = (typeof APP !== 'undefined' && APP.tenant && APP.tenant.name)
-      ? APP.tenant.name : 'FuelBunk Pro';
+    // BUG-7 FIX: On cold boot with valid biometric credentials, loadSession may have
+    // failed (expired token) so APP.tenant is null — the station name showed blank.
+    // Fall back to the signed session data (via _readSession) which is always present
+    // if the user has ever logged in, then to a hard-coded default.
+    var _bioTenantName = (typeof APP !== 'undefined' && APP.tenant && APP.tenant.name)
+      || (function() { var s = _readSession(); return s && s.tenant && s.tenant.name; })()
+      || 'FuelBunk Pro';
+    const tenantName = _bioTenantName;
 
     const overlay = document.createElement('div');
     overlay.id = 'fb-bio-lock';
@@ -1547,6 +1652,10 @@
       if (btn)    { btn.disabled = true; btn.textContent = '⏳ Waiting for biometric...'; }
       if (status) { status.textContent = ''; }
 
+      // BUG-8 FIX: reset the shared error message before each attempt so a stale
+      // message from a previous failure is never shown for the new attempt.
+      _lastBioErrorMsg = '';
+
       var ok = await _attemptBiometricLogin();
 
       if (ok) {
@@ -1557,12 +1666,13 @@
         return;
       }
 
-      // Biometric failed or was cancelled — let user retry or fall back
+      // Biometric failed or was cancelled — show specific reason, let user retry
       if (btn) {
         btn.disabled = false;
         btn.innerHTML = '🔐 Try Again';
       }
-      if (status) { status.textContent = 'Could not verify — tap to retry'; }
+      // Use the error reason set by _attemptBiometricLogin, fall back to generic text
+      if (status) { status.textContent = _lastBioErrorMsg || 'Could not verify — tap to retry'; }
     }
 
     document.getElementById('fb-bio-btn').addEventListener('click', doUnlock);
@@ -1573,10 +1683,14 @@
       if (opts.onFallback) {
         opts.onFallback();
       } else {
-        // Default: clear session and show the original password login screen
+        // BUG-6 FIX: Default fallback must call the RAW (pre-patch) showLoginScreen.
+        // Calling the patched version re-checks _hasValidBiometricCred() which is still
+        // true (credential not removed) → shows the lock screen again → infinite loop.
+        // _rawShowLoginScreen was captured before any patching in _applyBiometricPatches.
         if (typeof clearSession === 'function') clearSession();
         if (typeof clearAuth    === 'function') clearAuth();
-        if (typeof showLoginScreen === 'function') showLoginScreen();
+        var _showPwForm = _rawShowLoginScreen || window.showLoginScreen;
+        if (typeof _showPwForm === 'function') _showPwForm();
       }
     });
 
@@ -1600,6 +1714,11 @@
     var _origShowLoginScreen = window.showLoginScreen;
     var _origAppLogout       = window.appLogout;
 
+    // BUG-6 FIX: Write the pre-patch showLoginScreen into the module-level ref so
+    // _showBiometricLockScreen (defined outside this function) can use it in its
+    // default fallback without having to call the patched version.
+    _rawShowLoginScreen = window.showLoginScreen;
+
     // ── PATCH 1 (THE CORE FIX): wrap enterApp ──────────────────────────────
     // THE ROOT CAUSE: initApp() calls loadSession() first. When a valid session
     // exists it goes straight to enterApp() — showLoginScreen() is NEVER called.
@@ -1609,8 +1728,7 @@
     // _bioLock is still false, show the lock screen before entering.
     if (typeof _origEnterApp === 'function') {
       window.enterApp = function() {
-        var credentialId = localStorage.getItem(WA_CRED_KEY);
-        if (credentialId && _webauthnAvailable() && !_bioLock.get()) {
+        if (_hasValidBiometricCred() && _webauthnAvailable() && !_bioLock.get()) {
           // Show lock screen — it will call _attemptBiometricLogin(), which on
           // success sets _bioLock to true then calls enterApp() again.
           // That second call will see _bioLock.get() as true and pass through.
@@ -1642,12 +1760,29 @@
         // Set bioLock BEFORE calling orig — enterApp() is called inside orig,
         // and it must see bioLock=true to pass through without showing the lock screen.
         _bioLock.set(true);
-        await orig.apply(this, arguments);
+        try {
+          await orig.apply(this, arguments);
+        } catch (ex) {
+          // FIX-3: Always reset bioLock if the original login function throws.
+          // Without this, an unhandled exception leaves _bioLock permanently true
+          // so the re-lock screen never fires again — even after a full app restart.
+          _bioLock.reset();
+          throw ex;
+        }
         var tokenAfter = localStorage.getItem('_fb_auth_token');
         if (tokenAfter && tokenAfter !== tokenBefore) {
-          // Login succeeded — offer biometric setup
-          var sess = JSON.parse(localStorage.getItem('fb_session') || '{}');
-          _offerBiometricSetup(tokenAfter, sess.tenant && sess.tenant.id, sess.adminUser && sess.adminUser.name);
+          // Login succeeded — read tenant from APP directly.
+          // fb_session is signed (stored as {payload,sig}) so JSON.parse gives the
+          // wrapper not the data — sess.tenant would always be undefined, causing
+          // _offerBiometricSetup to store tenantId="undefined" and break biometric auth.
+          var tenantId = (typeof APP !== 'undefined' && APP.tenant && APP.tenant.id) || null;
+          var userName  = (typeof APP !== 'undefined' && APP.adminUser && APP.adminUser.name) || null;
+          if (tenantId) {
+            _offerBiometricSetup(tokenAfter, tenantId, userName);
+          } else {
+            // Logged in but no tenant resolved yet — don't offer biometric
+            console.warn('[WebAuthn] Login succeeded but tenantId missing — skipping biometric offer');
+          }
         } else {
           // Login failed or cancelled — reset so lock works correctly next time
           _bioLock.reset();
@@ -1668,8 +1803,7 @@
         if (typeof APP !== 'undefined' && APP.loggedIn) {
           return _origShowLoginScreen.apply(this, arguments);
         }
-        var credentialId = localStorage.getItem(WA_CRED_KEY);
-        if (credentialId && _webauthnAvailable()) {
+        if (_hasValidBiometricCred() && _webauthnAvailable()) {
           _showBiometricLockScreen({
             onFallback: function() {
               return _origShowLoginScreen.apply(window, arguments);
@@ -1719,9 +1853,8 @@
 
       if (elapsed < _relockThreshold) return;
 
-      var credentialId = localStorage.getItem(WA_CRED_KEY);
       var isLoggedIn   = typeof APP !== 'undefined' && APP.loggedIn;
-      if (!isLoggedIn || !credentialId || !_webauthnAvailable()) return;
+      if (!isLoggedIn || !_hasValidBiometricCred() || !_webauthnAvailable()) return;
 
       // Enough time has passed — re-lock
       _bioLock.reset();
@@ -1771,10 +1904,17 @@
   // still initiate credentials.create() — the user sees the OS biometric dialog,
   // the sensor fires, then the server rejects the credential with a confusing error.
   // Now we verify first; if the token is expired we redirect to password login.
+  //
+  // FIX-1: Read tenant from APP (always populated after login), NOT from fb_session.
+  // fb_session is stored in signed {payload,sig} format — JSON.parse() returns the
+  // wrapper object, so sess.tenant?.id is always undefined. That caused this function
+  // to show "Please log in first" even when the user was fully authenticated.
   window.setupBiometricNow = async function() {
-    const token = localStorage.getItem('_fb_auth_token');
-    const sess  = JSON.parse(localStorage.getItem('fb_session') || '{}');
-    if (!token || !sess.tenant?.id) {
+    const token    = localStorage.getItem('_fb_auth_token');
+    const tenantId = (typeof APP !== 'undefined' && APP.tenant && APP.tenant.id) || null;
+    const userName = (typeof APP !== 'undefined' && APP.adminUser && APP.adminUser.name) || null;
+
+    if (!token || !tenantId) {
       if (typeof toast === 'function') toast('Please log in first', 'error');
       return;
     }
@@ -1785,14 +1925,19 @@
       });
       if (!check.ok) {
         if (typeof toast === 'function') toast('Session expired — please log in again to set up biometrics', 'warning');
-        if (typeof showLoginScreen === 'function') showLoginScreen();
+        // Use _rawShowLoginScreen so the biometric patch doesn't intercept and loop.
+        // clearSession() first so APP.loggedIn is false and auth state is clean.
+        if (typeof clearSession === 'function') clearSession();
+        if (typeof clearAuth    === 'function') clearAuth();
+        var _ls = _rawShowLoginScreen || (typeof _origShowLoginScreen !== 'undefined' ? _origShowLoginScreen : window.showLoginScreen);
+        if (typeof _ls === 'function') _ls();
         return;
       }
     } catch(e) {
       // Network error — proceed optimistically; the register call will fail if token is bad
       console.warn('[setupBiometricNow] Session check failed (offline?):', e.message);
     }
-    _offerBiometricSetup(token, sess.tenant.id, sess.adminUser?.name);
+    _offerBiometricSetup(token, tenantId, userName);
   };
 
   console.log('[Bridge] Backend integration bridge loaded');

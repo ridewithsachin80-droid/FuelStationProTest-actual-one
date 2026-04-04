@@ -1,6 +1,6 @@
 /**
  * FuelBunk Pro — Service Worker v12
- * Cache v87 — biometric localStorage fix, WebAuthn await fixes, sync patching
+ * Cache v88 — biometric localStorage fix, WebAuthn await fixes, sync patching
  *   GSTIN validation on export, Tally URL config, in-flight sale backup,
  *   SHA-256 hash removed from super admin, dead logout override removed
  * Strategy:
@@ -13,7 +13,7 @@
  *   - Push notifications: Fully wired — requires VAPID subscription from server
  */
 
-const CACHE_VERSION = 'v87';
+const CACHE_VERSION = 'v88';
 // FIX F-07: CACHE_NAME was defined but never used (SHELL_CACHE + API_CACHE are used instead)
 const SHELL_CACHE   = `fuelbunk-shell-${CACHE_VERSION}`;
 const API_CACHE     = `fuelbunk-api-${CACHE_VERSION}`;
