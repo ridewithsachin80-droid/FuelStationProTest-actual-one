@@ -1286,7 +1286,7 @@
     if (!_webauthnAvailable()) return;
     if (!token) return;
 
-    // Don't ask again if already registered on this device
+    // Don't offer again if there's already a valid credential on this device
     const existingCred = localStorage.getItem(WA_CRED_KEY);
     if (existingCred) return;
 
@@ -1639,13 +1639,18 @@
       if (typeof orig !== 'function') return;
       window[fnName] = async function() {
         var tokenBefore = localStorage.getItem('_fb_auth_token');
+        // Set bioLock BEFORE calling orig — enterApp() is called inside orig,
+        // and it must see bioLock=true to pass through without showing the lock screen.
+        _bioLock.set(true);
         await orig.apply(this, arguments);
         var tokenAfter = localStorage.getItem('_fb_auth_token');
         if (tokenAfter && tokenAfter !== tokenBefore) {
-          // A new token was issued → login succeeded → mark device as unlocked
-          _bioLock.set(true);
+          // Login succeeded — offer biometric setup
           var sess = JSON.parse(localStorage.getItem('fb_session') || '{}');
           _offerBiometricSetup(tokenAfter, sess.tenant && sess.tenant.id, sess.adminUser && sess.adminUser.name);
+        } else {
+          // Login failed or cancelled — reset so lock works correctly next time
+          _bioLock.reset();
         }
       };
     }
