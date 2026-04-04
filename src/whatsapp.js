@@ -144,13 +144,31 @@ async function sendAlert(phoneNumber, alertData) {
   return sendMessage(phoneNumber, message);
 }
 
+/**
+ * Format missed dip reading alert for WhatsApp
+ */
+function formatMissedDipAlert(data) {
+  const { stationName, tankList, date, time } = data;
+  return `🚨 *DIP READING OVERDUE*\n\n🏪 *${stationName}*\n📅 Date: ${date}\n⏰ Time: ${time}\n\n📏 *Tanks not measured today:*\n${tankList}\n\n⚠️ *MDG Compliance Alert*\nOMC Marketing Discipline Guidelines require daily dip readings before 10:00 AM. Non-maintenance of records is a penalizable irregularity.\n\n👉 Open FuelBunk Pro → Tanks → Record Dip\n\n_— FuelBunk Pro Compliance System_`;
+}
+
+/**
+ * Send missed dip alert via WhatsApp
+ */
+async function sendMissedDipAlert(phoneNumber, data) {
+  const message = formatMissedDipAlert(data);
+  return sendMessage(phoneNumber, message);
+}
+
 module.exports = {
   enabled: WHATSAPP_ENABLED,
   sendMessage,
   sendDailyReport,
   sendShiftSummary,
   sendAlert,
+  sendMissedDipAlert,
   formatDailyReport,
   formatShiftSummary,
-  formatAlert
+  formatAlert,
+  formatMissedDipAlert
 };

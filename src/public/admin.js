@@ -317,8 +317,42 @@ function renderDashboard(D) {
       <div style="font-size:12px;color:var(--text-3)">You can view all your data but cannot add new sales, purchases or records. Please renew your subscription to continue.</div>
     </div>` : '';
 
+  // ── Missing Dip Reading Banner (MDG Rule — mandatory before 10 AM) ────────
+  // Check which tanks have NO dip reading for today. Show banner on dashboard.
+  // After 10 AM it becomes a red critical alert; before 10 AM it's a soft warning.
+  const dipToday = new Set((D.dipReadings || []).filter(d => d.date === todayIso).map(d => String(d.tankId)));
+  const tanksMissingDip = (D.tanks || []).filter(t => !dipToday.has(String(t.id)));
+  const istHour = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour: 'numeric', hour12: false });
+  const currentHour = parseInt(istHour) || 0;
+  const dipOverdue = currentHour >= 10; // after 10 AM IST it is officially overdue per MDG
+  const dipBanner = tanksMissingDip.length > 0 ? (() => {
+    const tankList = tanksMissingDip.map(t => `${getFuel(t.fuelType).short} (Tank ${t.id})`).join(', ');
+    const bg    = dipOverdue ? 'rgba(239,68,68,0.08)' : 'rgba(212,148,15,0.06)';
+    const bdr   = dipOverdue ? 'rgba(239,68,68,0.3)'  : 'rgba(212,148,15,0.25)';
+    const col   = dipOverdue ? 'var(--red)'            : 'var(--accent-light)';
+    const icon  = dipOverdue ? '🚨' : '📏';
+    const title = dipOverdue
+      ? `Dip reading OVERDUE — ${tanksMissingDip.length} tank${tanksMissingDip.length>1?'s':''} not measured today`
+      : `Morning dip reading pending — required before 10 AM (MDG)`;
+    const sub2  = dipOverdue
+      ? `${tankList} · Required by 10:00 AM per OMC Marketing Discipline Guidelines. Record now to stay compliant.`
+      : `${tankList} · Take physical dip measurement and record in app before 10 AM.`;
+    return `<div style="padding:12px 16px;background:${bg};border:1px solid ${bdr};border-radius:10px;margin-bottom:12px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="font-size:20px">${icon}</span>
+        <div>
+          <div class="fw-700" style="color:${col};font-size:13px">${title}</div>
+          <div style="font-size:11px;color:var(--text-3);margin-top:2px">${sub2}</div>
+        </div>
+      </div>
+      <button class="btn btn-sm" style="background:${col};color:#fff;white-space:nowrap;flex-shrink:0"
+        onclick="APP.page='tanks';renderPage()">📏 Record Dip Now</button>
+    </div>`;
+  })() : '';
+
   return `
     ${readOnlyBanner}
+    ${dipBanner}
     ${nmlAlert}
     ${subBadge}
     <div class="g g-auto-sm mb-24 gap-16">
@@ -4255,6 +4289,9 @@ const wa_templates = {
   },
   test(stationName) {
     return `✅ *WhatsApp Test — FuelBunk Pro*\n\n🏪 Station: ${stationName}\n⏰ ${new Date().toLocaleString('en-IN',{dateStyle:'medium',timeStyle:'short'})}\n\nYour WhatsApp notifications are working! 🎉\n\n_— FuelBunk Pro_`;
+  },
+  missedDip(stationName, tankList, date, time) {
+    return `🚨 *DIP READING OVERDUE*\n\n🏪 *${stationName}*\n📅 Date: ${date}\n⏰ Time: ${time}\n\n📏 *Tanks not measured today:*\n${tankList}\n\n⚠️ *MDG Compliance Alert*\nOMC Marketing Discipline Guidelines require daily dip readings before 10:00 AM. Non-maintenance of records is a penalizable irregularity.\n\n👉 Open FuelBunk Pro → Tanks → Record Dip\n\n_— FuelBunk Pro Compliance System_`;
   },
   creditBill(stationName, customerName, fuelType, qty, rate, amount, outstanding, stationPhone) {
     const fi = getFuel(fuelType);
@@ -12498,7 +12535,7 @@ function renderInsights(D) {
     }
   });
 
-  // ── Rule 10: Lubes & Products low stock ───────────────────────────────────
+  // R10: Lubes & Products low stock
   const lowStockProds = (window._lubesProducts||[]).filter(p => p.active !== false && (p.minStock||0) > 0 && (p.stock||0) <= (p.minStock||5));
   const outOfStockProds = (window._lubesProducts||[]).filter(p => p.active !== false && (p.stock||0) <= 0);
   if (outOfStockProds.length > 0) {
@@ -12510,6 +12547,29 @@ function renderInsights(D) {
     alerts.push({ sev:'warning', icon:'🛢️', title:`${lowStockProds.length} lube product${lowStockProds.length>1?'s':''} below minimum stock`,
       msg: lowStockProds.map(p => `${sanitize(p.name)}: ${p.stock} ${p.unit||''} (min ${p.minStock})`).join(' · ') + '.',
       action: 'Review Lubes & Products → Low Stock tab and reorder.' });
+  }
+
+  // R11: Missing daily dip reading (MDG mandatory — before 10 AM every day)
+  // Cross-checks each tank against today's dipReadings. Flags tanks with no dip today.
+  // After 10 AM it is officially overdue per OMC Marketing Discipline Guidelines.
+  const dipTodaySet = new Set((D.dipReadings||[]).filter(d => d.date === today).map(d => String(d.tankId)));
+  const tanksMissingDip = (D.tanks||[]).filter(t => !dipTodaySet.has(String(t.id)));
+  if (tanksMissingDip.length > 0) {
+    const istHourNow = parseInt(new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour: 'numeric', hour12: false })) || 0;
+    const overdue = istHourNow >= 10;
+    const tankNames = tanksMissingDip.map(t => `${getFuel(t.fuelType||t.fuel_type).short} Tank ${t.id}`).join(', ');
+    alerts.push({
+      sev: overdue ? 'critical' : 'warning',
+      icon: '📏',
+      title: overdue
+        ? `Dip reading OVERDUE — ${tanksMissingDip.length} tank${tanksMissingDip.length>1?'s':''} not measured today`
+        : `Morning dip reading pending (due before 10 AM — MDG)`,
+      msg: `${tankNames} — No physical dip recorded for ${today}.` +
+           (overdue ? ' This is a compliance violation under OMC Marketing Discipline Guidelines.' : ''),
+      action: overdue
+        ? 'Record dip immediately. Go to Tanks → Record Dip. OMC inspectors check the stock register daily.'
+        : 'Take physical dip measurement before 10:00 AM and record in the app.'
+    });
   }
 
   // Render
@@ -12531,7 +12591,7 @@ function renderInsights(D) {
       <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
         <div>
           <h2 style="font-size:18px;font-weight:800;margin-bottom:2px">\ud83e\udd16 AI Insights</h2>
-          <div style="font-size:12px;color:var(--text-3)">Rules-based anomaly detection \u00b7 ${today} \u00b7 9 rules active</div>
+          <div style="font-size:12px;color:var(--text-3)">Rules-based anomaly detection \u00b7 ${today} \u00b7 11 rules active</div>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
           ${badge(critC,'var(--red)','critical')}
@@ -12546,7 +12606,7 @@ function renderInsights(D) {
     ${!sorted.length ? `<div class="card card-pad mt-16" style="text-align:center;padding:60px 20px">
       <div style="font-size:48px;margin-bottom:16px">\u2705</div>
       <div class="fw-700" style="font-size:18px;color:var(--green);margin-bottom:8px">All clear \u2014 no issues detected</div>
-      <div style="font-size:13px;color:var(--text-3)">9 rules checked \u00b7 tanks, revenue, expenses, credit, density &amp; more</div>
+      <div style="font-size:13px;color:var(--text-3)">11 rules checked \u00b7 tanks, revenue, expenses, credit, density, dip &amp; more</div>
     </div>` : `<div style="display:flex;flex-direction:column;gap:10px;margin-top:16px">
       ${sorted.map(a=>`<div class="card card-pad" style="background:${sevBg[a.sev]};border:1px solid ${sevBdr[a.sev]}">
         <div style="display:flex;align-items:flex-start;gap:14px">
@@ -12563,9 +12623,9 @@ function renderInsights(D) {
     </div>`}
 
     <div class="card card-pad mt-16" style="background:var(--bg-0)">
-      <div class="fw-700" style="font-size:12px;color:var(--text-3);margin-bottom:10px;text-transform:uppercase;letter-spacing:0.5px">9 Active Rules</div>
+      <div class="fw-700" style="font-size:12px;color:var(--text-3);margin-bottom:10px;text-transform:uppercase;letter-spacing:0.5px">11 Active Rules</div>
       <div style="display:flex;flex-wrap:wrap;gap:6px">
-        ${['\ud83d\udcc9 Revenue drop >20%','\u26fd Litre throughput drop >25%','\ud83d\udee2\ufe0f Tank below alert threshold','\ud83d\udcb3 Credit >80% limit','\ud83d\udcb8 Expense spike >50%','\u2697\ufe0f IS-1460 density range','\u23f0 No sales for 3h (business hours)','\ud83d\udcbc Salary advance pending >30d','\ud83d\udcc6 Stock runout forecast <4 days']
+        ${['\ud83d\udcc9 Revenue drop >20%','\u26fd Litre throughput drop >25%','\ud83d\udee2\ufe0f Tank below alert threshold','\ud83d\udcb3 Credit >80% limit','\ud83d\udcb8 Expense spike >50%','\u2697\ufe0f IS-1460 density range','\u23f0 No sales for 3h (business hours)','\ud83d\udcbc Salary advance pending >30d','\ud83d\udcc6 Stock runout forecast <4 days','\ud83d\udee2\ufe0f Lubes out of stock','\ud83d\udccd Daily dip reading (MDG)']
           .map(r=>`<span style="padding:4px 10px;border-radius:16px;background:var(--bg-1);border:1px solid var(--border);color:var(--text-2);font-size:11px">${r}</span>`).join('')}
       </div>
     </div>`;

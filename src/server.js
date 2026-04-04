@@ -3103,6 +3103,156 @@ _— FuelBunk Pro_`;
   const subReminderInterval = setInterval(runSubscriptionReminders, 24 * 60 * 60 * 1000);
   console.log('[Server] Subscription reminder job initialized (daily)');
 
+  // ══════════════════════════════════════════════════════════════════════════
+  // DAILY DIP READING COMPLIANCE CHECK — Runs every day at 10:05 AM IST
+  // ──────────────────────────────────────────────────────────────────────────
+  // MDG Rule: Every tank must have a dip reading recorded before 10 AM daily.
+  // This job checks all active tenants, finds tanks with no dip today, and
+  // sends a WhatsApp message to the owner via CallMeBot if configured.
+  // ══════════════════════════════════════════════════════════════════════════
+
+  async function runDipComplianceCheck() {
+    const today = istDate();
+    const istNow = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', timeStyle: 'short' });
+    console.log(`[DipCheck] Running compliance check for ${today} at ${istNow}`);
+
+    try {
+      // Get all active tenants
+      const tenants = await pool.query(
+        `SELECT id, name, phone FROM tenants WHERE active = 1 OR active = TRUE`
+      );
+
+      let alertsSent = 0;
+
+      for (const tenant of tenants.rows) {
+        try {
+          // Get all tanks for this tenant
+          const tanksRes = await pool.query(
+            `SELECT id, fuel_type FROM tanks WHERE tenant_id = $1`,
+            [tenant.id]
+          );
+          if (!tanksRes.rows.length) continue;
+
+          // Check which tanks have a dip reading today
+          const dipsRes = await pool.query(
+            `SELECT DISTINCT tank_id FROM dip_readings
+             WHERE tenant_id = $1 AND date = $2`,
+            [tenant.id, today]
+          );
+          const dippedTankIds = new Set(dipsRes.rows.map(r => String(r.tank_id)));
+
+          // Find tanks missing a dip today
+          const missing = tanksRes.rows.filter(t => !dippedTankIds.has(String(t.id)));
+          if (!missing.length) {
+            console.log(`[DipCheck] ✅ ${tenant.name} — all tanks dipped`);
+            continue;
+          }
+
+          const fuelLabels = { petrol: 'Petrol (MS)', diesel: 'Diesel (HSD)', premium_petrol: 'XP95 Premium' };
+          const tankList = missing.map(t =>
+            `• ${fuelLabels[t.fuel_type] || t.fuel_type} (Tank ${t.id})`
+          ).join('\n');
+
+          console.log(`[DipCheck] ⚠️ ${tenant.name} — ${missing.length} tank(s) missing dip: ${missing.map(t=>t.id).join(',')}`);
+
+          // Get owner phone — check admin_users for role=owner/manager, fall back to tenant.phone
+          const ownerRes = await pool.query(
+            `SELECT phone FROM admin_users
+             WHERE tenant_id = $1 AND active = 1 AND phone IS NOT NULL AND phone != ''
+             AND (role = 'owner' OR role = 'admin' OR role = 'manager')
+             ORDER BY CASE role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END
+             LIMIT 1`,
+            [tenant.id]
+          );
+          const ownerPhone = ownerRes.rows[0]?.phone || tenant.phone;
+
+          // Get the station's waPhone and waApiKey from settings
+          const settingsRes = await pool.query(
+            `SELECT key, value FROM settings WHERE tenant_id = $1 AND key IN ('waPhone','waApiKey')`,
+            [tenant.id]
+          );
+          const settingsMap = {};
+          settingsRes.rows.forEach(r => { settingsMap[r.key] = r.value; });
+          const waPhone  = settingsMap['waPhone']  || (ownerPhone ? String(ownerPhone).replace(/\D/g,'').replace(/^(91|0)/, '') : '');
+          const waApiKey = settingsMap['waApiKey'] || process.env.WHATSAPP_API_KEY || '';
+
+          if (!waPhone || waPhone.length < 10) {
+            console.log(`[DipCheck] ${tenant.name} — no WhatsApp phone configured, skipping WA alert`);
+            // Still log to audit even without WA
+            continue;
+          }
+
+          // Format phone to international
+          const intlPhone = waPhone.length === 10 ? '91' + waPhone : waPhone;
+
+          // Build message
+          const msg = `🚨 *DIP READING OVERDUE*\n\n🏪 *${tenant.name}*\n📅 Date: ${today}\n⏰ Time: ${istNow}\n\n📏 *Tanks not measured today:*\n${tankList}\n\n⚠️ *MDG Compliance Alert*\nOMC Marketing Discipline Guidelines require daily dip readings before 10:00 AM. Non-maintenance of records is a penalizable irregularity.\n\n👉 Open FuelBunk Pro → Tanks → Record Dip\n\n_— FuelBunk Pro Compliance System_`;
+
+          // Send via CallMeBot
+          const encoded = encodeURIComponent(msg);
+          const waUrl   = `https://api.callmebot.com/whatsapp.php?phone=${intlPhone}&text=${encoded}&apikey=${waApiKey}`;
+
+          try {
+            const { default: fetch } = await import('node-fetch').catch(() => ({ default: global.fetch }));
+            const fetchFn = fetch || global.fetch;
+            if (fetchFn) {
+              const resp = await fetchFn(waUrl, { signal: AbortSignal.timeout(10000) });
+              const body = await resp.text();
+              if (resp.ok || body.includes('Message queued')) {
+                console.log(`[DipCheck] ✅ WA sent to ${tenant.name} (${intlPhone})`);
+                alertsSent++;
+              } else {
+                console.warn(`[DipCheck] WA response for ${tenant.name}:`, body.slice(0, 120));
+                // Fallback: use built-in https
+                await whatsapp.sendMessage(intlPhone, msg);
+                alertsSent++;
+              }
+            } else {
+              // Fallback to built-in https module
+              await whatsapp.sendMessage(intlPhone, msg);
+              alertsSent++;
+            }
+          } catch (waErr) {
+            console.warn(`[DipCheck] WA send failed for ${tenant.name}:`, waErr.message);
+            // Attempt fallback via whatsapp.js
+            try { await whatsapp.sendMessage(intlPhone, msg); alertsSent++; } catch {}
+          }
+        } catch (tenantErr) {
+          console.error(`[DipCheck] Error processing tenant ${tenant.id}:`, tenantErr.message);
+        }
+      }
+
+      console.log(`[DipCheck] Done — ${alertsSent} WA alerts sent for ${today}`);
+    } catch (e) {
+      console.error('[DipCheck] Fatal error:', e.message);
+    }
+  }
+
+  // ── Schedule dip check to run at 10:05 AM IST every day ──────────────────
+  // Calculate ms until next 10:05 AM IST from now
+  function msUntilNextIst1005() {
+    const now = new Date();
+    // Get current IST time
+    const istStr = now.toLocaleString('en-CA', { timeZone: 'Asia/Kolkata', hour12: false });
+    const istNow = new Date(istStr.replace(',', ''));
+    const target = new Date(istNow);
+    target.setHours(10, 5, 0, 0);
+    // If 10:05 AM has already passed today, schedule for tomorrow
+    if (istNow >= target) target.setDate(target.getDate() + 1);
+    return target - istNow;
+  }
+
+  (function scheduleDipCheck() {
+    const delay = msUntilNextIst1005();
+    const hrsUntil = (delay / 3600000).toFixed(1);
+    console.log(`[DipCheck] Scheduled for 10:05 AM IST — runs in ${hrsUntil}h`);
+    setTimeout(function runAndReschedule() {
+      runDipComplianceCheck();
+      // Reschedule for same time next day (24h)
+      setTimeout(runAndReschedule, 24 * 60 * 60 * 1000);
+    }, delay);
+  })();
+
   // FIX #38: Close DB pool on shutdown so in-flight queries finish cleanly
   const gracefulShutdown = async (signal) => {
     console.log(`[Server] ${signal} received — shutting down gracefully...`);
