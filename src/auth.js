@@ -637,22 +637,70 @@ function authRoutes(db) {
 
   const crypto = require('crypto');
 
-  // In-memory challenge store (keyed by challenge string, TTL 5 min)
-  // In production with multiple servers, use Redis or DB — but for single-server
-  // Railway deployments this is sufficient and avoids DB round-trips.
-  const _challenges = new Map();
-  function _storeChallenge(challenge, data) {
-    _challenges.set(challenge, { ...data, expiresAt: Date.now() + 5 * 60 * 1000 });
-    // Cleanup old challenges
-    for (const [k, v] of _challenges) {
-      if (v.expiresAt < Date.now()) _challenges.delete(k);
+  // ── FIX 2: Stable rpId & origin from environment variables ───────────────
+  // CRITICAL: rpId MUST be identical between registration and authentication.
+  // Using req.hostname was broken on mobile because Railway's proxy can return
+  // a different hostname depending on the request path/headers. Set these env
+  // vars in your Railway dashboard to match the domain users access the app on.
+  //
+  //   RP_ID     = yourdomain.com          (no https://, no port, no path)
+  //   RP_ORIGIN = https://yourdomain.com  (full origin, no trailing slash)
+  //
+  // Defaults fall back to fuelbunk.app for backward compatibility.
+  const RP_ID     = process.env.RP_ID     || 'fuelbunk.app';
+  const RP_ORIGIN = process.env.RP_ORIGIN || 'https://fuelbunk.app';
+
+  // ── FIX 5: DB-backed challenge store (replaces in-memory Map) ────────────
+  // The in-memory Map was wiped on every server restart (Railway restarts on
+  // every deploy and can sleep/wake). Challenges are now stored in the DB with
+  // a 5-minute TTL so they survive restarts and work across multiple instances.
+  //
+  // Schema (auto-created on first use):
+  //   webauthn_challenges(challenge TEXT PK, data JSONB, expires_at TIMESTAMPTZ)
+  //
+  async function _ensureChallengeTable() {
+    try {
+      await db.prepare(
+        `CREATE TABLE IF NOT EXISTS webauthn_challenges (
+           challenge  TEXT PRIMARY KEY,
+           data       TEXT NOT NULL,
+           expires_at BIGINT NOT NULL
+         )`
+      ).run();
+    } catch (e) {
+      console.warn('[webauthn] Could not create challenges table:', e.message);
     }
   }
-  function _getChallenge(challenge) {
-    const entry = _challenges.get(challenge);
-    if (!entry || entry.expiresAt < Date.now()) return null;
-    _challenges.delete(challenge); // one-time use
-    return entry;
+  _ensureChallengeTable();
+
+  async function _storeChallenge(challenge, data) {
+    const expiresAt = Date.now() + 5 * 60 * 1000; // 5 minutes
+    try {
+      await db.prepare(
+        `INSERT INTO webauthn_challenges (challenge, data, expires_at)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (challenge) DO UPDATE SET data = $2, expires_at = $3`
+      ).run(challenge, JSON.stringify(data), expiresAt);
+      // Opportunistic cleanup of stale rows (non-blocking)
+      db.prepare('DELETE FROM webauthn_challenges WHERE expires_at < $1')
+        .run(Date.now()).catch(() => {});
+    } catch (e) {
+      console.error('[webauthn] Failed to store challenge:', e.message);
+    }
+  }
+  async function _getChallenge(challenge) {
+    try {
+      const row = await db.prepare(
+        'SELECT data, expires_at FROM webauthn_challenges WHERE challenge = $1'
+      ).get(challenge);
+      if (!row || row.expires_at < Date.now()) return null;
+      // One-time use — delete immediately
+      await db.prepare('DELETE FROM webauthn_challenges WHERE challenge = $1').run(challenge);
+      return JSON.parse(row.data);
+    } catch (e) {
+      console.error('[webauthn] Failed to get challenge:', e.message);
+      return null;
+    }
   }
 
   function _base64url(buf) {
@@ -678,7 +726,7 @@ function authRoutes(db) {
       action: 'register'
     });
 
-    const appId = req.hostname || 'fuelbunk.app';
+    const appId = RP_ID;
     res.json({
       challenge,
       rp: { name: 'UpScale Fuel', id: appId },
@@ -718,6 +766,11 @@ function authRoutes(db) {
       );
       if (clientData.type !== 'webauthn.create') {
         return res.status(400).json({ error: 'Invalid credential type' });
+      }
+      // FIX 3: Verify origin matches the app's expected origin
+      if (clientData.origin !== RP_ORIGIN) {
+        console.warn('[webauthn/register] Origin mismatch — expected:', RP_ORIGIN, 'got:', clientData.origin);
+        return res.status(403).json({ error: 'Origin mismatch — ensure you are accessing the app from the correct URL' });
       }
       const challengeData = _getChallenge(clientData.challenge);
       if (!challengeData || challengeData.action !== 'register') {
@@ -790,7 +843,7 @@ function authRoutes(db) {
       res.json({
         challenge,
         timeout: 60000,
-        rpId: req.hostname || 'fuelbunk.app',
+        rpId: RP_ID,
         allowCredentials: [{ type: 'public-key', id: credentialId }],
         userVerification: 'required'
       });
@@ -814,6 +867,11 @@ function authRoutes(db) {
       );
       if (clientData.type !== 'webauthn.get') {
         return res.status(400).json({ error: 'Invalid assertion type' });
+      }
+      // FIX 3: Verify origin matches the app's expected origin
+      if (clientData.origin !== RP_ORIGIN) {
+        console.warn('[webauthn/authenticate] Origin mismatch — expected:', RP_ORIGIN, 'got:', clientData.origin);
+        return res.status(403).json({ error: 'Origin mismatch — ensure you are accessing the app from the correct URL' });
       }
       const challengeData = _getChallenge(clientData.challenge);
       if (!challengeData || challengeData.action !== 'authenticate') {
