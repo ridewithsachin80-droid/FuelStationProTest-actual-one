@@ -3717,6 +3717,23 @@ async function fetchPublicEmployees() {
             '<option value="' + e.id + '">' + sanitize(e.name) + ' — ' + sanitize(e.role) + '</option>'
           ).join('');
           if (currentVal) sel.value = currentVal;
+          // FIX Bug 1: Re-enable the select — it may have been rendered disabled
+          // when cache was empty on first load after cache clear
+          sel.disabled = false;
+          // Re-enable the Login button in the employee form
+          var empForm = document.getElementById('empLoginForm');
+          if (empForm) {
+            var loginBtn = empForm.querySelector('button[disabled]');
+            if (loginBtn) {
+              loginBtn.disabled = false;
+              loginBtn.style.opacity = '1';
+              loginBtn.style.cursor = 'pointer';
+            }
+            // Remove the red "No employees with PIN" error div
+            empForm.querySelectorAll('div').forEach(function(d) {
+              if (d.textContent.includes('No employees with PIN')) d.style.display = 'none';
+            });
+          }
         } else {
           sel.innerHTML = '<option value="" disabled selected>No employees with PIN configured</option>';
           sel.disabled = true;
@@ -3731,8 +3748,8 @@ async function fetchPublicEmployees() {
       const noEmpError = loginScreen && loginScreen.querySelector('[style*="color:var(--red)"]');
       if (loginScreen && loginScreen.style.display !== 'none' && !APP.loggedIn) {
         const empTab = document.getElementById('empLoginTab') || loginScreen.querySelector('[onclick*="empLogin"]');
-        // Re-render employee login section to pick up the now-populated cache
-        const empLoginPanel = document.getElementById('empLoginPanel');
+        // FIX Bug 2: Corrected wrong ID — the actual element is 'empLoginForm', not 'empLoginPanel'
+        const empLoginPanel = document.getElementById('empLoginForm');
         if (empLoginPanel && EMP_LIST.length > 0) {
           const opts = EMP_LIST.map(e => '<option value="'+e.id+'">'+sanitize(e.name)+' — '+sanitize(e.role)+'</option>').join('');
           const selEl = empLoginPanel.querySelector('select');
