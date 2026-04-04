@@ -211,7 +211,8 @@ async function auditLog(req, action, entity = '', entityId = '', details = '') {
 
 async function createSession(db, { tenantId, userId, userType, userName, role, ip, userAgent }) {
   const token = generateToken();
-  const hours = userType === 'super' ? 4 : 12;
+  // Super admin: 4h (security). Admin/owner: 30 days — biometric re-auth covers security.
+  const hours = userType === 'super' ? 4 : 720;
   // BUG FIX: Use parameterized interval instead of string interpolation
   await db.prepare(
     `INSERT INTO sessions

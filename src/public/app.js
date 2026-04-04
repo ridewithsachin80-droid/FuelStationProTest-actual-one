@@ -287,6 +287,16 @@ async function initApp() {
 // ── Admin User Management (Tenant level) ──
 // ── ADMIN/EMPLOYEE PASSWORD RESET ────────────────────────
 function openChangeMyPasswordModal() {
+  const biometricRow = (typeof _webauthnAvailable === 'function' && _webauthnAvailable())
+    ? `<div class="form-group" style="border-top:1px solid var(--border);padding-top:14px;margin-top:4px">
+         <label class="form-label">🔐 Biometric Login</label>
+         <p style="color:var(--text-muted);font-size:12px;margin-bottom:10px">Use fingerprint, face, or screen PIN instead of password when opening the app.</p>
+         ${localStorage.getItem('fb_wa_cred')
+           ? `<button class="btn btn-ghost" style="width:100%;border-color:var(--danger)" onclick="closeModal();removeBiometricCredential()">Remove Biometric from This Device</button>`
+           : `<button class="btn btn-ghost" style="width:100%" onclick="closeModal();setupBiometricNow()">Set Up Biometric Login →</button>`
+         }
+       </div>`
+    : '';
   openModal('🔑 Change My Password',
     `<div class="form-group"><label class="form-label">Current Password *</label>
        <input class="form-input" id="curPass" type="password" placeholder="Enter current password" autocomplete="current-password" />
@@ -296,7 +306,8 @@ function openChangeMyPasswordModal() {
      </div>
      <div class="form-group"><label class="form-label">Confirm New Password *</label>
        <input class="form-input" id="confPass" type="password" placeholder="Re-enter new password" />
-     </div>`,
+     </div>
+     ${biometricRow}`,
     `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
      <button class="btn btn-accent" onclick="saveMyPassword()">🔑 Update Password</button>`
   );

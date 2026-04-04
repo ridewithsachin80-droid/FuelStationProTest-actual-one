@@ -10,16 +10,16 @@ const _TOKEN_KEY = '_fb_auth_token';
 
 function setAuthToken(token)  {
   _authToken = token;
-  if (token) sessionStorage.setItem(_TOKEN_KEY, token);
-  else sessionStorage.removeItem(_TOKEN_KEY);
+  if (token) localStorage.setItem(_TOKEN_KEY, token);
+  else localStorage.removeItem(_TOKEN_KEY);
 }
 function getAuthToken() {
-  if (!_authToken) _authToken = sessionStorage.getItem(_TOKEN_KEY) || null;
+  if (!_authToken) _authToken = localStorage.getItem(_TOKEN_KEY) || null;
   return _authToken;
 }
 function setTenantId(id)      { _tenantId = id; }
 function getTenantId()        { return _tenantId; }
-function clearAuth()          { _authToken = null; _tenantId = null; _logoutInProgress = false; sessionStorage.removeItem(_TOKEN_KEY); }
+function clearAuth()          { _authToken = null; _tenantId = null; _logoutInProgress = false; localStorage.removeItem(_TOKEN_KEY); }
 
 async function apiFetch(path, options = {}) {
   const url = API_BASE + path;
@@ -106,6 +106,29 @@ const AuthAPI = {
     return apiFetch('/auth/change-password', {
       method: 'POST', body: JSON.stringify({ currentPassword, newPassword })
     });
+  },
+  // ── WebAuthn Biometric ───────────────────────────────────────────────────
+  async webauthnRegisterOptions() {
+    return apiFetch('/auth/webauthn/register-options', { method: 'POST', body: '{}' });
+  },
+  async webauthnRegister(credentialData, deviceName) {
+    return apiFetch('/auth/webauthn/register', {
+      method: 'POST', body: JSON.stringify({ ...credentialData, deviceName })
+    });
+  },
+  async webauthnAuthOptions(credentialId, tenantId) {
+    return apiFetch('/auth/webauthn/auth-options', {
+      method: 'POST', body: JSON.stringify({ credentialId, tenantId })
+    });
+  },
+  async webauthnAuthenticate(assertionData, tenantId) {
+    return apiFetch('/auth/webauthn/authenticate', {
+      method: 'POST', body: JSON.stringify({ ...assertionData, tenantId })
+    });
+  },
+  async webauthnCredentials() { return apiFetch('/auth/webauthn/credentials'); },
+  async webauthnRemoveCredential(credId) {
+    return apiFetch('/auth/webauthn/credentials/' + credId, { method: 'DELETE' });
   }
 };
 

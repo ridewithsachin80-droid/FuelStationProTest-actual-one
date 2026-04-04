@@ -407,7 +407,7 @@
             active:      true,
           };
           if (typeof mt_setActiveTenant === 'function') mt_setActiveTenant(tenantObj);
-          sessionStorage.setItem('fb_session', JSON.stringify({
+          localStorage.setItem('fb_session', JSON.stringify({
             loggedIn: true, role: 'admin',
             adminUser: { name: result.userName, username: phone, role: result.userRole },
             tenant: tenantObj, token: result.token
@@ -451,7 +451,7 @@
       const result = await AuthAPI.adminLogin(user, pass, tenant.id);
       if (result.success) {
         setAuthToken(result.token);
-        sessionStorage.setItem('fb_session', JSON.stringify({
+        localStorage.setItem('fb_session', JSON.stringify({
           loggedIn: true, role: 'admin',
           adminUser: { name: result.userName, username: user, role: result.userRole },
           tenant: tenant, token: result.token
@@ -494,7 +494,7 @@
         APP.tenant = tenant;
 
         // Save to sessionStorage for page refresh
-        sessionStorage.setItem('fb_session', JSON.stringify({
+        localStorage.setItem('fb_session', JSON.stringify({
           loggedIn: true, role: 'admin', adminUser: APP.adminUser,
           tenant: tenant, token: result.token
         }));
@@ -520,7 +520,7 @@
   const _origLoadSession = window.loadSession;
   window.loadSession = function() {
     try {
-      const raw = sessionStorage.getItem('fb_session');
+      const raw = localStorage.getItem('fb_session');
       if (!raw) return false;
       const session = JSON.parse(raw);
       if (!session.loggedIn) return false;
@@ -559,7 +559,7 @@
     APP.role = null;
     APP.adminUser = null;
     APP.data = null;
-    sessionStorage.removeItem('fb_session');
+    localStorage.removeItem('fb_session');
     clearAuth();
     location.reload();
   };
@@ -770,7 +770,7 @@
       try { await AuthAPI.logout(); } catch {}
       sessionStorage.removeItem('fb_super_token');
       sessionStorage.removeItem('fb_super_session');
-      sessionStorage.removeItem('fb_session');
+      localStorage.removeItem('fb_session');
       document.cookie = 'sa_entry=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/; SameSite=Strict';
       clearAuth();
       if (typeof APP !== 'undefined') { APP.tenant = null; APP.loggedIn = false; APP.role = null; APP.adminUser = null; }
@@ -998,7 +998,7 @@
             setTenantId(result.tenantId);
             const tenantObj = { id: result.tenantId, name: result.tenantName, location: result.tenantLocation||'', icon: result.tenantIcon||'⛽', color:'#d4940f', colorLight:'#f0b429', active:true };
             if (typeof mt_setActiveTenant === 'function') mt_setActiveTenant(tenantObj);
-            sessionStorage.setItem('fb_session', JSON.stringify({ loggedIn:true, role:'admin', adminUser:{name:result.userName, username:phone, role:result.userRole}, tenant:tenantObj, token:result.token }));
+            localStorage.setItem('fb_session', JSON.stringify({ loggedIn:true, role:'admin', adminUser:{name:result.userName, username:phone, role:result.userRole}, tenant:tenantObj, token:result.token }));
             if (typeof APP !== 'undefined') { APP.loggedIn=true; APP.role='admin'; APP.adminUser={name:result.userName, username:phone, role:result.userRole}; APP.tenant=tenantObj; }
             window.db = new FuelDB('FuelBunkPro_' + result.tenantId);
             try {
@@ -1024,7 +1024,7 @@
         if (result.success) {
           setAuthToken(result.token);
           setTenantId(tenant.id);
-          sessionStorage.setItem('fb_session', JSON.stringify({ loggedIn:true, role:'admin', adminUser:{name:result.userName, username:user, role:result.userRole}, tenant, token:result.token }));
+          localStorage.setItem('fb_session', JSON.stringify({ loggedIn:true, role:'admin', adminUser:{name:result.userName, username:user, role:result.userRole}, tenant, token:result.token }));
           if (typeof APP !== 'undefined') { APP.loggedIn=true; APP.role='admin'; APP.adminUser={name:result.userName, username:user, role:result.userRole}; APP.tenant=tenant; }
           window.db = new FuelDB('FuelBunkPro_' + tenant.id);
           if (typeof loadData === 'function') {
@@ -1044,7 +1044,7 @@
     // ── Session restore (uses sessionStorage + API token) ─────────────────
     window.loadSession = function() {
       try {
-        const raw = sessionStorage.getItem('fb_session');
+        const raw = localStorage.getItem('fb_session');
         if (!raw) return false;
         const session = JSON.parse(raw);
         if (!session || !session.loggedIn || !session.token) return false;
@@ -1072,7 +1072,7 @@
       if (typeof APP !== 'undefined') {
         APP.loggedIn = false; APP.role = null; APP.adminUser = null; APP.data = null;
       }
-      sessionStorage.removeItem('fb_session');
+      localStorage.removeItem('fb_session');
       clearAuth();
       // FIX: Clear snapshot on logout so stale data never persists across sessions.
       try { localStorage.removeItem('fb_data_snapshot'); } catch(e) {}
@@ -1212,6 +1212,261 @@
     };
 
   });
+
+  // ══════════════════════════════════════════════════════════════════
+  // ── WebAuthn Biometric — Frontend Logic ──────────────────────────
+  // Handles biometric registration after login and biometric prompt
+  // on app open when a saved credential exists on the device.
+  // ══════════════════════════════════════════════════════════════════
+
+  const WA_CRED_KEY = 'fb_wa_cred';   // localStorage key for saved credential ID
+  const WA_TENANT_KEY = 'fb_wa_tid';  // localStorage key for tenant ID
+
+  function _b64urlToBuffer(b64) {
+    const b64std = b64.replace(/-/g, '+').replace(/_/g, '/');
+    const bin = atob(b64std);
+    const arr = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+    return arr.buffer;
+  }
+  function _bufferToB64url(buf) {
+    const arr = new Uint8Array(buf);
+    let bin = '';
+    arr.forEach(b => bin += String.fromCharCode(b));
+    return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+  }
+
+  // ── Check if WebAuthn is supported on this device ─────────────────────────
+  function _webauthnAvailable() {
+    return !!(window.PublicKeyCredential && navigator.credentials && navigator.credentials.create);
+  }
+
+  // ── After successful password login: offer biometric registration ─────────
+  // Called from within bridge.js login success paths
+  async function _offerBiometricSetup(token, tenantId, userName) {
+    if (!_webauthnAvailable()) return;
+    if (!token) return;
+
+    // Don't ask again if already registered on this device
+    const existingCred = localStorage.getItem(WA_CRED_KEY);
+    if (existingCred) return;
+
+    // Small delay so the welcome toast shows first
+    await new Promise(r => setTimeout(r, 1500));
+
+    // Show native confirm — simple, no modal library needed
+    const wantsSetup = confirm(
+      '🔐 Set up biometric login?\n\n' +
+      'Next time you open the app, just use your fingerprint, face, or screen PIN — no password needed.\n\n' +
+      'Tap OK to set it up now.'
+    );
+    if (!wantsSetup) return;
+
+    try {
+      // Get registration options from server
+      const options = await AuthAPI.webauthnRegisterOptions();
+
+      // Convert base64url strings to ArrayBuffers for the browser API
+      const publicKey = {
+        ...options,
+        challenge: _b64urlToBuffer(options.challenge),
+        user: { ...options.user, id: _b64urlToBuffer(options.user.id) },
+        excludeCredentials: (options.excludeCredentials || []).map(c => ({
+          ...c, id: _b64urlToBuffer(c.id)
+        }))
+      };
+
+      // Trigger device biometric / PIN prompt
+      const credential = await navigator.credentials.create({ publicKey });
+
+      // Serialize the credential for sending to server
+      const credData = {
+        id: credential.id,
+        rawId: _bufferToB64url(credential.rawId),
+        type: credential.type,
+        response: {
+          clientDataJSON: _bufferToB64url(credential.response.clientDataJSON),
+          attestationObject: _bufferToB64url(credential.response.attestationObject)
+        }
+      };
+
+      const result = await AuthAPI.webauthnRegister(credData, 'My Device');
+
+      if (result.success) {
+        // Save credential ID locally for next app open
+        localStorage.setItem(WA_CRED_KEY, credential.id);
+        localStorage.setItem(WA_TENANT_KEY, tenantId);
+        if (typeof toast === 'function') toast('✅ Biometric login enabled! Use it next time.', 'success');
+      }
+    } catch (e) {
+      // User cancelled or device doesn't support it — silently ignore
+      if (e.name !== 'NotAllowedError') {
+        console.warn('[WebAuthn] Registration failed:', e.message);
+      }
+    }
+  }
+
+  // ── On app open: attempt biometric login if credential saved on device ────
+  // Called from initApp before showing login screen
+  async function _attemptBiometricLogin() {
+    if (!_webauthnAvailable()) return false;
+
+    const credentialId = localStorage.getItem(WA_CRED_KEY);
+    const tenantId = localStorage.getItem(WA_TENANT_KEY);
+    if (!credentialId || !tenantId) return false;
+
+    try {
+      // Get auth challenge from server
+      const options = await AuthAPI.webauthnAuthOptions(credentialId, tenantId);
+      if (!options.challenge) return false;
+
+      const publicKey = {
+        challenge: _b64urlToBuffer(options.challenge),
+        timeout: options.timeout || 60000,
+        rpId: options.rpId,
+        allowCredentials: (options.allowCredentials || []).map(c => ({
+          ...c, id: _b64urlToBuffer(c.id)
+        })),
+        userVerification: options.userVerification || 'required'
+      };
+
+      // This triggers the device biometric / PIN / pattern prompt
+      const assertion = await navigator.credentials.get({ publicKey });
+
+      const assertionData = {
+        id: assertion.id,
+        rawId: _bufferToB64url(assertion.rawId),
+        type: assertion.type,
+        response: {
+          clientDataJSON: _bufferToB64url(assertion.response.clientDataJSON),
+          authenticatorData: _bufferToB64url(assertion.response.authenticatorData),
+          signature: _bufferToB64url(assertion.response.signature),
+          userHandle: assertion.response.userHandle ? _bufferToB64url(assertion.response.userHandle) : null
+        }
+      };
+
+      // Send to server for verification
+      const result = await AuthAPI.webauthnAuthenticate(assertionData, tenantId);
+
+      if (result.success && result.token) {
+        // Full login — same as password login flow
+        setAuthToken(result.token);
+        const tenantObj = {
+          id: result.tenantId, name: result.tenantName,
+          location: result.tenantLocation || '',
+          icon: result.tenantIcon || '⛽',
+          color: '#d4940f', colorLight: '#f0b429', active: true
+        };
+        if (typeof mt_setActiveTenant === 'function') mt_setActiveTenant(tenantObj);
+        localStorage.setItem('fb_session', JSON.stringify({
+          loggedIn: true, role: 'admin',
+          adminUser: { name: result.userName, role: result.userRole },
+          tenant: tenantObj, token: result.token
+        }));
+        if (typeof APP !== 'undefined') {
+          APP.loggedIn = true; APP.role = 'admin';
+          APP.adminUser = { name: result.userName, role: result.userRole };
+          APP.tenant = tenantObj;
+        }
+        window.db = new FuelDB('FuelBunkPro_' + result.tenantId);
+        setTenantId(result.tenantId);
+        if (typeof loadData === 'function') {
+          try { await loadData(); } catch(e) { console.warn('[WebAuthn] loadData:', e.message); }
+        }
+        if (typeof enterApp === 'function') enterApp();
+        if (typeof toast === 'function') toast('👋 Welcome, ' + result.userName, 'success');
+        return true;
+      }
+    } catch (e) {
+      if (e.name === 'NotAllowedError') {
+        // User cancelled biometric — fall through to password login
+        console.log('[WebAuthn] Biometric cancelled by user — showing password login');
+      } else if (e.name === 'InvalidStateError' || e.name === 'NotFoundError') {
+        // Credential no longer valid on this device — clear it and show password login
+        console.warn('[WebAuthn] Credential invalid — clearing:', e.message);
+        localStorage.removeItem(WA_CRED_KEY);
+        localStorage.removeItem(WA_TENANT_KEY);
+      } else {
+        console.warn('[WebAuthn] Auth failed:', e.name, e.message);
+      }
+    }
+    return false;
+  }
+
+  // ── Expose biometric functions globally for use in app.js / admin.js ──────
+  window._attemptBiometricLogin  = _attemptBiometricLogin;
+  window._offerBiometricSetup    = _offerBiometricSetup;
+  window._webauthnAvailable      = _webauthnAvailable;
+
+  // ── Patch login success paths to offer biometric setup ───────────────────
+  // We wrap the phone-login and username-login paths to call _offerBiometricSetup
+  // after a successful login. We do this by patching appLogin after bridge.js loads.
+  const _patchLoginForBiometric = function() {
+    const _prevAppLogin = window.appLogin;
+    if (typeof _prevAppLogin === 'function') {
+      window.appLogin = async function() {
+        // Remember token state before login
+        const tokenBefore = localStorage.getItem('_fb_auth_token');
+        await _prevAppLogin.apply(this, arguments);
+        const tokenAfter = localStorage.getItem('_fb_auth_token');
+        // If a new token was set, login succeeded — offer biometric
+        if (tokenAfter && tokenAfter !== tokenBefore) {
+          const sess = JSON.parse(localStorage.getItem('fb_session') || '{}');
+          _offerBiometricSetup(tokenAfter, sess.tenant?.id, sess.adminUser?.name);
+        }
+      };
+    }
+  };
+  // Patch after DOM ready so all login overrides are in place
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', _patchLoginForBiometric);
+  } else {
+    setTimeout(_patchLoginForBiometric, 100);
+  }
+
+  // ── Patch initApp to try biometric BEFORE showing login screen ───────────
+  // We hook into showLoginScreen: if biometric is available, try it first.
+  const _origShowLoginScreen = window.showLoginScreen;
+  window.showLoginScreen = async function() {
+    // Only try biometric if not already logged in
+    if (typeof APP !== 'undefined' && APP.loggedIn) {
+      if (typeof _origShowLoginScreen === 'function') return _origShowLoginScreen.apply(this, arguments);
+      return;
+    }
+    const credentialId = localStorage.getItem(WA_CRED_KEY);
+    if (credentialId && _webauthnAvailable()) {
+      // Show a biometric prompt screen instead of the full login form
+      const tried = await _attemptBiometricLogin();
+      if (tried) return; // Biometric succeeded — no need to show login screen
+    }
+    // Biometric not available, not set up, or user cancelled — show normal login
+    if (typeof _origShowLoginScreen === 'function') return _origShowLoginScreen.apply(this, arguments);
+  };
+
+  // ── Manage biometric credentials (exposed for Settings page) ─────────────
+  window.removeBiometricCredential = async function() {
+    const credentialId = localStorage.getItem(WA_CRED_KEY);
+    if (!credentialId) { if(typeof toast==='function') toast('No biometric set up on this device', 'info'); return; }
+    try {
+      const list = await AuthAPI.webauthnCredentials();
+      const match = (list.credentials || []).find(c => c.credential_id === credentialId);
+      if (match) await AuthAPI.webauthnRemoveCredential(match.id);
+      localStorage.removeItem(WA_CRED_KEY);
+      localStorage.removeItem(WA_TENANT_KEY);
+      if(typeof toast==='function') toast('Biometric login removed from this device', 'success');
+    } catch(e) {
+      localStorage.removeItem(WA_CRED_KEY);
+      localStorage.removeItem(WA_TENANT_KEY);
+      if(typeof toast==='function') toast('Biometric login removed', 'success');
+    }
+  };
+
+  window.setupBiometricNow = function() {
+    const token = localStorage.getItem('_fb_auth_token');
+    const sess = JSON.parse(localStorage.getItem('fb_session') || '{}');
+    if (!token || !sess.tenant?.id) { if(typeof toast==='function') toast('Please log in first', 'error'); return; }
+    _offerBiometricSetup(token, sess.tenant.id, sess.adminUser?.name);
+  };
 
   console.log('[Bridge] Backend integration bridge loaded');
 })();

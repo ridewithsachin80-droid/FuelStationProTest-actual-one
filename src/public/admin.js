@@ -10266,6 +10266,105 @@ async function deletePump(pumpId) {
 }
 
 // ── Per-nozzle reading modal ─────────────────────────────────
+
+// ── Meter reading validation ──────────────────────────────────────────────
+// Rules:
+//  1. Must be a number
+//  2. Must be >= 0
+//  3. Must be <= 999999.99 (6-digit pump physical maximum)
+//  4. Max 2 decimal places only (pump meters show up to 2dp)
+//  5. Closing: must be >= previous reading (meter never goes backward)
+//  6. Closing: difference <= 50000 L (flag extremely large single-shift values)
+//  7. Opening: warn (not block) if value is suspiciously low vs last reading
+//  8. Opening: block if value < 1 AND previous reading was > 100 (e.g. .35689 typo)
+//
+// Returns: { ok: true } or { ok: false, error: string, warn: bool }
+// warn=true means show as warning (yellow) not hard error (red) — allow saving
+function validateMeterReading(rawValue, previousReading, mode) {
+  const METER_MAX = 999999.99;
+
+  // Rule 1 — Must be a number
+  if (rawValue === '' || rawValue === null || rawValue === undefined) {
+    return { ok: false, error: 'Enter a meter reading', warn: false };
+  }
+  // Strict numeric check — reject '9450x', '12abc', etc.
+  // Allow optional leading decimal: '.5', '0.5', '9450.12'
+  const strCheck = String(rawValue).trim();
+  if (!/^\d*\.?\d+$/.test(strCheck)) {
+    return { ok: false, error: 'Must be a number (e.g. 9450 or 9450.12)', warn: false };
+  }
+  const val = parseFloat(strCheck);
+  if (isNaN(val)) {
+    return { ok: false, error: 'Must be a number (e.g. 9450 or 9450.12)', warn: false };
+  }
+
+  // Rule 2 — Must be >= 0
+  if (val < 0) {
+    return { ok: false, error: 'Meter reading cannot be negative', warn: false };
+  }
+
+  // Rule 3 — Maximum physical pump limit
+  if (val > METER_MAX) {
+    return { ok: false, error: `Reading cannot exceed ${METER_MAX.toLocaleString()} (pump maximum)`, warn: false };
+  }
+
+  // Rule 4 — Max 2 decimal places
+  const strVal = String(rawValue).trim();
+  const dotIndex = strVal.indexOf('.');
+  if (dotIndex !== -1 && strVal.length - dotIndex - 1 > 2) {
+    return {
+      ok: false,
+      error: `Pump meters show max 2 decimal places — did you mean ${val.toFixed(2)}?`,
+      warn: false
+    };
+  }
+
+  const prev = parseFloat(previousReading) || 0;
+
+  if (mode === 'closing') {
+    // Rule 5 — Closing must be >= previous (meter never goes backward)
+    if (val < prev) {
+      return {
+        ok: false,
+        error: `Closing reading (${val.toLocaleString()}) cannot be less than opening reading (${prev.toLocaleString()})`,
+        warn: false
+      };
+    }
+    // Rule 6 — Closing: very large single-shift difference
+    const diff = val - prev;
+    if (diff > 50000) {
+      return {
+        ok: false,
+        error: `Difference of ${diff.toLocaleString()} L in one shift is unusually high — please verify`,
+        warn: false
+      };
+    }
+  }
+
+  if (mode === 'opening') {
+    // Rule 8 — Hard block: value < 1 but previous reading was significant
+    // This catches the exact bug in the screenshot (.35689 when prev was 0.97 or 9450)
+    if (val < 1 && prev >= 100) {
+      return {
+        ok: false,
+        error: `Reading of ${val} is too low — previous reading was ${prev.toLocaleString()}. Did you type a decimal by mistake?`,
+        warn: false
+      };
+    }
+    // Rule 7 — Soft warn: opening is dramatically lower than last closing (possible typo)
+    // Allow it (pump may have been replaced) but warn clearly
+    if (prev > 0 && val < prev * 0.5 && val > 0) {
+      return {
+        ok: true,
+        warn: true,
+        error: `⚠️ Opening (${val.toLocaleString()}) is much lower than last reading (${prev.toLocaleString()}). Save only if pump was replaced.`
+      };
+    }
+  }
+
+  return { ok: true, warn: false };
+}
+
 function _nozzleLabels(pump) {
   return pump.nozzleLabels || (pump.nozzles === 1 ? ['A'] : pump.nozzles === 2 ? ['A','B'] : ['A','B','C'].slice(0, pump.nozzles));
 }
@@ -10310,10 +10409,12 @@ function openReadingModal(pumpId) {
           <div style="font-size:16px;font-weight:800;color:var(--text-0);font-family:var(--mono)">${fmt(cur)}</div>
         </div>
       </div>
-      <input class="form-input" type="number" step="0.1" id="nozzleReading_${n}"
-        placeholder="New meter reading" value=""
+      <input class="form-input" type="number" step="0.01" min="0" max="999999.99"
+        inputmode="decimal" id="nozzleReading_${n}"
+        placeholder="e.g. ${fmt(cur)} or ${fmt(cur + 100)}"
+        value=""
         oninput="updateNozzlePreview(${pumpId},'${n}')"
-        style="font-size:18px;font-weight:700;text-align:center;margin-bottom:6px" />
+        style="font-size:18px;font-weight:700;text-align:center;margin-bottom:6px;transition:border-color 0.2s" />
       <div id="nozzlePreview_${n}" style="display:none;font-size:11px;padding:6px 10px;border-radius:6px;font-weight:600"></div>
     </div>`;
   }).join('');
@@ -10389,52 +10490,91 @@ function setReadingType(type, pumpId) {
   if (pump) _nozzleLabels(pump).forEach(n => updateNozzlePreview(pumpId, n));
 }
 window.setReadingType = setReadingType;
+window.validateMeterReading = validateMeterReading;
 
 function updateNozzlePreview(pumpId, nozzle) {
   const pump = APP.data.pumps.find(p => String(p.id) === String(pumpId));
   if (!pump) return;
   const cur     = _nozzleReading(pump, nozzle);
-  const newVal  = parseFloat(document.getElementById(`nozzleReading_${nozzle}`)?.value);
+  const rawVal  = document.getElementById(`nozzleReading_${nozzle}`)?.value;
+  const inputEl = document.getElementById(`nozzleReading_${nozzle}`);
   const preview = document.getElementById(`nozzlePreview_${nozzle}`);
-  if (!preview) return;
+  if (!preview || !inputEl) return;
 
+  // Empty input — reset to neutral
+  if (rawVal === '' || rawVal === null || rawVal === undefined) {
+    preview.style.display = 'none';
+    inputEl.style.borderColor = '';
+    return;
+  }
+
+  const rdgType   = document.getElementById('rdgTypeHidden')?.value || 'opening';
+  const isOpening = rdgType === 'opening';
+  const newVal    = parseFloat(rawVal);
+  const ft        = _nozzleFuelType(pump, nozzle);
+  const fuel      = getFuel(ft);
+  const tank      = APP.data.tanks.find(t => t.fuelType === ft);
+  const openVal   = (pump.nozzleOpen || {})[nozzle];
+
+  // ── Run validation ──────────────────────────────────────────────────────
+  const prevForValidation = isOpening ? cur : (openVal !== undefined ? openVal : cur);
+  const validation = validateMeterReading(rawVal, prevForValidation, rdgType);
+
+  // Style the input border based on validation state
+  if (!validation.ok) {
+    inputEl.style.borderColor = 'var(--red, #ef4444)';
+    inputEl.style.boxShadow   = '0 0 0 2px rgba(239,68,68,0.15)';
+  } else if (validation.warn) {
+    inputEl.style.borderColor = 'var(--accent, #d4940f)';
+    inputEl.style.boxShadow   = '0 0 0 2px rgba(212,148,15,0.15)';
+  } else {
+    inputEl.style.borderColor = 'var(--green, #22c55e)';
+    inputEl.style.boxShadow   = '0 0 0 2px rgba(34,197,94,0.1)';
+  }
+
+  preview.style.display = '';
+
+  // ── Show validation error ───────────────────────────────────────────────
+  if (!validation.ok) {
+    preview.style.background = 'rgba(239,68,68,0.08)';
+    preview.style.color      = 'var(--red, #ef4444)';
+    preview.style.border     = '1px solid rgba(239,68,68,0.2)';
+    preview.innerHTML = `❌ ${validation.error}`;
+    return;
+  }
+
+  // ── Show warning (soft — saving still allowed) ──────────────────────────
+  if (validation.warn) {
+    preview.style.background = 'rgba(212,148,15,0.08)';
+    preview.style.color      = 'var(--accent-light, #f0b429)';
+    preview.style.border     = '1px solid rgba(212,148,15,0.2)';
+    preview.innerHTML        = validation.error; // error field holds the warning text
+    return;
+  }
+
+  // ── Valid — show informational preview ──────────────────────────────────
   if (isNaN(newVal)) { preview.style.display = 'none'; return; }
 
-  // Check which mode the toggle is in (default: opening)
-  const rdgType = document.getElementById('rdgTypeHidden')?.value || 'opening';
-  const isOpening = rdgType === 'opening';
-
-  const ft   = _nozzleFuelType(pump, nozzle);
-  const fuel = getFuel(ft);
-  const tank = APP.data.tanks.find(t => t.fuelType === ft);
+  preview.style.border = 'none';
 
   if (isOpening) {
-    // Opening mode — no deduction, just show baseline confirmation
-    preview.style.display = '';
     preview.style.background = 'rgba(212,148,15,0.08)';
-    preview.style.color = 'var(--accent-light)';
+    preview.style.color      = 'var(--accent-light, #f0b429)';
     preview.innerHTML = `📋 Opening baseline set to <strong>${fmt(newVal)}</strong> — no tank deduction`;
     return;
   }
 
-  // Closing mode — existing deduction logic
-  const sold = newVal - cur;
-  if (sold < 0) {
-    preview.style.display = '';
-    preview.style.background = 'rgba(239,68,68,0.08)';
-    preview.style.color = 'var(--red)';
-    preview.textContent = '⚠️ Cannot be less than current reading';
-  } else if (sold === 0) {
-    preview.style.display = 'none';
-  } else {
-    const overDraw = tank && sold > tank.current;
-    preview.style.display = '';
-    preview.style.background = overDraw ? 'rgba(239,68,68,0.08)' : 'rgba(34,197,94,0.08)';
-    preview.style.color = overDraw ? 'var(--red)' : 'var(--green)';
-    preview.innerHTML = `⛽ ${fmt(sold)} L ${fuel.short} will be deducted from tank` +
-      (tank ? ` (${fmt(tank.current)} L → ${fmt(Math.max(0, tank.current - sold))} L)` : '') +
-      (overDraw ? ' — ⚠️ exceeds stock!' : '');
-  }
+  // Closing mode — show sold litres and tank impact
+  const prevReading = openVal !== undefined ? openVal : cur;
+  const sold = newVal - prevReading;
+  if (sold === 0) { preview.style.display = 'none'; return; }
+
+  const overDraw = tank && sold > tank.current;
+  preview.style.background = overDraw ? 'rgba(239,68,68,0.08)' : 'rgba(34,197,94,0.08)';
+  preview.style.color      = overDraw ? 'var(--red)' : 'var(--green)';
+  preview.innerHTML = `⛽ ${fmt(sold)} L ${fuel.short} will be deducted from tank` +
+    (tank ? ` (${fmt(tank.current)} L → ${fmt(Math.max(0, tank.current - sold))} L)` : '') +
+    (overDraw ? ' — ⚠️ exceeds stock!' : '');
 }
 
 function saveReading(pumpId) {
@@ -10461,8 +10601,22 @@ function saveReading(pumpId) {
     const newReading = parseFloat(rawVal);
     const oldReading = _nozzleReading(pump, n);
     const ft         = _nozzleFuelType(pump, n);
+    const openVal    = (pump.nozzleOpen || {})[n];
 
-    if (isNaN(newReading) || newReading < 0) { toast(`Nozzle ${n}: Invalid reading`, 'error'); return; }
+    // ── Full meter reading validation ──────────────────────────────────────
+    const prevForValidation = isOpening ? oldReading : (openVal !== undefined ? openVal : oldReading);
+    const validation = validateMeterReading(rawVal, prevForValidation, rdgType);
+    if (!validation.ok) {
+      toast(`Nozzle ${n}: ${validation.error}`, 'error');
+      // Highlight the offending input
+      if (inputEl) { inputEl.focus(); inputEl.style.borderColor = 'var(--red, #ef4444)'; }
+      return;
+    }
+    // Warn-level issues: confirm with user before proceeding
+    if (validation.warn) {
+      const confirmed = confirm(`Nozzle ${n}: ${validation.error}\n\nSave anyway?`);
+      if (!confirmed) return;
+    }
 
     if (isOpening) {
       // Opening: store as baseline, no deduction, no "must be greater" check
@@ -10471,13 +10625,13 @@ function saveReading(pumpId) {
       auditLines.push(`N${n}(${ft}): opening set to ${fmt(newReading)}`);
     } else {
       // Closing: calculate sold, deduct tank
-      if (newReading < oldReading) { toast(`Nozzle ${n}: Closing reading cannot be less than current (${fmt(oldReading)})`, 'error'); return; }
-      if (newReading - oldReading > 10000) { toast(`Nozzle ${n}: Jump >10000L — please verify reading`, 'error'); return; }
-      const sold = newReading - oldReading;
+      // validateMeterReading already enforced closing >= opening and diff <= 50000
+      const baseReading = openVal !== undefined ? openVal : oldReading;
+      const sold = newReading - baseReading;
       nozzleReadings[n] = newReading;
       if (sold > 0) deductions[ft] = (deductions[ft] || 0) + sold;
       totalSold += sold;
-      auditLines.push(`N${n}(${ft}): ${fmt(oldReading)}→${fmt(newReading)} sold ${fmt(sold)}L`);
+      auditLines.push(`N${n}(${ft}): ${fmt(baseReading)}→${fmt(newReading)} sold ${fmt(sold)}L`);
     }
   }
 

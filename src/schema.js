@@ -554,6 +554,18 @@ async function initDatabase() {
       created_at TIMESTAMPTZ DEFAULT NOW(),
       UNIQUE(endpoint)
     )`,
+    `CREATE TABLE IF NOT EXISTS webauthn_credentials (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL,
+      user_type TEXT NOT NULL DEFAULT 'admin',
+      tenant_id TEXT NOT NULL DEFAULT '',
+      credential_id TEXT NOT NULL UNIQUE,
+      public_key TEXT NOT NULL,
+      counter BIGINT NOT NULL DEFAULT 0,
+      device_name TEXT DEFAULT 'My Device',
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      last_used_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
     `CREATE TABLE IF NOT EXISTS alerts (
       id SERIAL PRIMARY KEY,
       tenant_id TEXT NOT NULL,

@@ -194,8 +194,8 @@ function validateExpenseInput(amount, category, desc) {
 }
 
 // Session expiry constants
-const SESSION_MAX_AGE = 12 * 60 * 60 * 1000; // 12 hours
-const SESSION_IDLE_TIMEOUT = 30 * 60 * 1000;  // 30 minutes
+const SESSION_MAX_AGE = 30 * 24 * 60 * 60 * 1000; // 30 days
+const SESSION_IDLE_TIMEOUT = 8 * 60 * 60 * 1000;   // 8 hours (covers a full work shift)
 let idleTimer = null;
 
 function resetIdleTimer() {
