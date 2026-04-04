@@ -1230,6 +1230,15 @@
       }
     };
 
+    // BUG-9 FIX: Re-wrap doAdminLogin HERE — after this DOMContentLoaded block
+    // has re-assigned window.doAdminLogin (above). The earlier wrap in
+    // _applyBiometricPatches() was applied to a version that this block overwrote.
+    // _wrapLoginFn is module-level and guards against double-wrapping with ._bioWrapped.
+    if (typeof _wrapLoginFn === 'function') {
+      _wrapLoginFn('doAdminLogin');
+      console.log('[Bridge] doAdminLogin re-wrapped for biometric offer after DOMContentLoaded');
+    }
+
   });
 
   // ══════════════════════════════════════════════════════════════════
@@ -1707,6 +1716,53 @@
   // CRITICAL: deferred so every script (app.js, employee.js, multitenant.js)
   // has fully executed and placed its globals on window before we wrap them.
   // ══════════════════════════════════════════════════════════════════════════
+  // ── BUG-9 FIX: _wrapLoginFn at module scope ──────────────────────────────
+  // PROBLEM: _applyBiometricPatches() runs synchronously at parse time, wrapping
+  // window.doAdminLogin. But the DOMContentLoaded block (line ~647) runs AFTER and
+  // re-assigns window.doAdminLogin — silently destroying the biometric wrap.
+  // Result: _offerBiometricSetup is never called → biometric setup sheet never appears.
+  //
+  // FIX: Define _wrapLoginFn at module scope so it can be called from BOTH:
+  //   a) _applyBiometricPatches() — for appLogin (not overwritten by DOMContentLoaded)
+  //   b) The END of the DOMContentLoaded block — for doAdminLogin (re-assigned there)
+  //
+  // Guard flag prevents double-wrapping if called twice on the same function.
+  function _wrapLoginFn(fnName) {
+    var orig = window[fnName];
+    if (typeof orig !== 'function') return;
+    if (orig._bioWrapped) return; // already wrapped — skip (prevents double-wrap)
+    var wrapped = async function() {
+      var tokenBefore = localStorage.getItem('_fb_auth_token');
+      // Set bioLock BEFORE calling orig — enterApp() is called inside orig,
+      // and it must see bioLock=true to pass through without showing the lock screen.
+      _bioLock.set(true);
+      try {
+        await orig.apply(this, arguments);
+      } catch (ex) {
+        // FIX-3: Always reset bioLock if the original login function throws.
+        _bioLock.reset();
+        throw ex;
+      }
+      var tokenAfter = localStorage.getItem('_fb_auth_token');
+      if (tokenAfter && tokenAfter !== tokenBefore) {
+        // Login succeeded — read tenant from APP directly.
+        // fb_session is signed ({payload,sig}) — JSON.parse gives the wrapper not data.
+        var tenantId = (typeof APP !== 'undefined' && APP.tenant && APP.tenant.id) || null;
+        var userName  = (typeof APP !== 'undefined' && APP.adminUser && APP.adminUser.name) || null;
+        if (tenantId) {
+          _offerBiometricSetup(tokenAfter, tenantId, userName);
+        } else {
+          console.warn('[WebAuthn] Login succeeded but tenantId missing — skipping biometric offer');
+        }
+      } else {
+        _bioLock.reset(); // login failed or cancelled
+      }
+    };
+    wrapped._bioWrapped = true; // mark so we never double-wrap
+    window[fnName] = wrapped;
+  }
+  window._wrapLoginFn = _wrapLoginFn; // expose so DOMContentLoaded block can call it
+
   function _applyBiometricPatches() {
 
     // Capture originals before patching
@@ -1748,49 +1804,12 @@
     }
 
     // ── PATCH 2: wrap ALL password login entry points ──────────────────────
-    // BUG-1 FIX: The HTML form calls doAdminLogin() (not appLogin). Both must
-    // be wrapped so that any successful password login sets _bioLock to true
-    // BEFORE enterApp() is called, preventing the lock screen from firing immediately
-    // after a deliberate password login.
-    function _wrapLoginFn(fnName) {
-      var orig = window[fnName];
-      if (typeof orig !== 'function') return;
-      window[fnName] = async function() {
-        var tokenBefore = localStorage.getItem('_fb_auth_token');
-        // Set bioLock BEFORE calling orig — enterApp() is called inside orig,
-        // and it must see bioLock=true to pass through without showing the lock screen.
-        _bioLock.set(true);
-        try {
-          await orig.apply(this, arguments);
-        } catch (ex) {
-          // FIX-3: Always reset bioLock if the original login function throws.
-          // Without this, an unhandled exception leaves _bioLock permanently true
-          // so the re-lock screen never fires again — even after a full app restart.
-          _bioLock.reset();
-          throw ex;
-        }
-        var tokenAfter = localStorage.getItem('_fb_auth_token');
-        if (tokenAfter && tokenAfter !== tokenBefore) {
-          // Login succeeded — read tenant from APP directly.
-          // fb_session is signed (stored as {payload,sig}) so JSON.parse gives the
-          // wrapper not the data — sess.tenant would always be undefined, causing
-          // _offerBiometricSetup to store tenantId="undefined" and break biometric auth.
-          var tenantId = (typeof APP !== 'undefined' && APP.tenant && APP.tenant.id) || null;
-          var userName  = (typeof APP !== 'undefined' && APP.adminUser && APP.adminUser.name) || null;
-          if (tenantId) {
-            _offerBiometricSetup(tokenAfter, tenantId, userName);
-          } else {
-            // Logged in but no tenant resolved yet — don't offer biometric
-            console.warn('[WebAuthn] Login succeeded but tenantId missing — skipping biometric offer');
-          }
-        } else {
-          // Login failed or cancelled — reset so lock works correctly next time
-          _bioLock.reset();
-        }
-      };
-    }
-    _wrapLoginFn('doAdminLogin'); // called by HTML button onclick="doAdminLogin()"
-    _wrapLoginFn('appLogin');     // called programmatically in some paths
+    // _wrapLoginFn is defined at module scope (see below) so it can be called
+    // both here AND at the end of the DOMContentLoaded block where doAdminLogin
+    // is re-assigned. Calling it here only for appLogin (not overwritten by DCL).
+    // doAdminLogin is wrapped inside the DOMContentLoaded handler instead —
+    // see the comment at line ~1233 for the full explanation.
+    _wrapLoginFn('appLogin'); // called programmatically — not overwritten by DCL
 
     // ── PATCH 3: wrap showLoginScreen — biometric-first for expired-session path ──
     // Covers the case where session has fully expired (8-hour idle or 30-day max).
