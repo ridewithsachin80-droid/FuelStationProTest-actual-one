@@ -1654,17 +1654,23 @@
 
     // ── PATCH 3: wrap showLoginScreen — biometric-first for expired-session path ──
     // Covers the case where session has fully expired (8-hour idle or 30-day max).
-    // In that case initApp() does call showLoginScreen(), so we still hook it here
-    // as a secondary safety net.
+    // IMPORTANT: must show the lock screen UI (button tap = user gesture) rather
+    // than calling _attemptBiometricLogin() directly. Chrome Android requires an
+    // explicit user gesture for navigator.credentials.get() — calling it without
+    // one throws NotAllowedError immediately and falls through to the login form.
     if (typeof _origShowLoginScreen === 'function') {
-      window.showLoginScreen = async function() {
+      window.showLoginScreen = function() {
         if (typeof APP !== 'undefined' && APP.loggedIn) {
           return _origShowLoginScreen.apply(this, arguments);
         }
         var credentialId = localStorage.getItem(WA_CRED_KEY);
         if (credentialId && _webauthnAvailable()) {
-          var tried = await _attemptBiometricLogin();
-          if (tried) return;
+          _showBiometricLockScreen({
+            onFallback: function() {
+              return _origShowLoginScreen.apply(window, arguments);
+            }
+          });
+          return;
         }
         return _origShowLoginScreen.apply(this, arguments);
       };
@@ -1726,12 +1732,16 @@
     console.log('[Bridge] Biometric patches applied — enterApp intercepted, visibilitychange armed');
   }
 
-  // Defer until all bottom-of-body scripts have executed
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', _applyBiometricPatches, { once: true });
-  } else {
-    _applyBiometricPatches();
-  }
+  // Apply patches immediately at script-execution time.
+  // employee.js and app.js both load before bridge.js (see index.html script order),
+  // so enterApp / showLoginScreen / appLogout are already defined on window.
+  // app.js registers its DOMContentLoaded → initApp() handler before this script
+  // loads, but DOMContentLoaded hasn't fired yet, so patching here guarantees
+  // the wrapped versions are in place before initApp() runs.
+  // Previously this was deferred to DOMContentLoaded which caused a race:
+  // initApp() fired first (registered first), called the ORIGINAL enterApp/
+  // showLoginScreen before patches were applied, and biometric was skipped entirely.
+  _applyBiometricPatches();
 
   // ── Manage biometric credentials (exposed for Settings page) ─────────────
   window.removeBiometricCredential = async function() {
