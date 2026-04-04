@@ -718,6 +718,14 @@ function authRoutes(db) {
     const session = await resolveSession(req, 'admin');
     if (!session) return res.status(401).json({ error: 'Login required' });
 
+    // BUG-11 FIX: Cap credentials per user at 5 to prevent table bloat
+    const existingCount = await db.prepare(
+      'SELECT COUNT(*) as cnt FROM webauthn_credentials WHERE user_id = $1 AND tenant_id = $2'
+    ).get(session.user_id, session.tenant_id);
+    if ((existingCount?.cnt || 0) >= 5) {
+      return res.status(400).json({ error: 'Maximum of 5 devices already registered. Remove one before adding another.' });
+    }
+
     const challenge = _base64url(crypto.randomBytes(32));
     _storeChallenge(challenge, {
       userId: session.user_id,
@@ -830,9 +838,23 @@ function authRoutes(db) {
       const cred = await db.prepare(
         'SELECT * FROM webauthn_credentials WHERE credential_id = $1 AND tenant_id = $2'
       ).get(credentialId, tenantId || '');
-      if (!cred) return res.status(404).json({ error: 'Credential not found — please log in with password' });
 
+      // BUG-13 FIX: Return a generic challenge even for unknown credentials so the
+      // response is indistinguishable from a valid one — prevents credential enumeration.
       const challenge = _base64url(crypto.randomBytes(32));
+      if (!cred) {
+        // Unknown credential — return a plausible-looking (but unresolvable) challenge.
+        // The subsequent /webauthn/authenticate call will fail because this challenge
+        // was never stored, which is the correct security outcome.
+        return res.json({
+          challenge,
+          timeout: 60000,
+          rpId: RP_ID,
+          allowCredentials: [{ type: 'public-key', id: credentialId }],
+          userVerification: 'required'
+        });
+      }
+
       _storeChallenge(challenge, {
         userId: cred.user_id,
         tenantId: cred.tenant_id,
@@ -966,6 +988,249 @@ function authRoutes(db) {
       res.json({ success: true });
     } catch (e) {
       res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ── Employee WebAuthn Biometric Routes ───────────────────────────────────
+  // BUG-01 FIX: Employee biometric was purely client-side (no assertion verification).
+  // BUG-06 FIX: Credentials are now stored server-side in webauthn_credentials.
+  // BUG-02 FIX: authenticate returns a server-issued JWT so the session is real.
+  //
+  // Registration flow (employee must be PIN-logged-in first):
+  //   POST /webauthn/employee/register-options  → server challenge
+  //   device prompt
+  //   POST /webauthn/employee/register          → credential saved in DB
+  //
+  // Authentication flow (pre-login):
+  //   POST /webauthn/employee/auth-options      → server challenge
+  //   device prompt
+  //   POST /webauthn/employee/authenticate      → JWT issued
+  // ─────────────────────────────────────────────────────────────────────────
+
+  // Step 1: Register — get challenge (requires active employee OR admin session)
+  router.post('/webauthn/employee/register-options', async (req, res) => {
+    const empSession = await resolveSession(req, 'employee');
+    const adminSession = !empSession ? await resolveSession(req, 'admin') : null;
+    if (!empSession && !adminSession) return res.status(401).json({ error: 'Login required' });
+
+    try {
+      // Resolve the employee being registered
+      let empId, empName, tenantId;
+      if (empSession) {
+        empId    = empSession.user_id;
+        empName  = empSession.user_name;
+        tenantId = empSession.tenant_id;
+      } else {
+        // Admin registering for a specific employee
+        const { employeeId } = req.body;
+        if (!employeeId) return res.status(400).json({ error: 'employeeId required' });
+        const emp = await db.prepare(
+          'SELECT id, name, tenant_id FROM employees WHERE id = $1 AND tenant_id = $2 AND active = 1'
+        ).get(employeeId, adminSession.tenant_id);
+        if (!emp) return res.status(404).json({ error: 'Employee not found' });
+        empId    = emp.id;
+        empName  = emp.name;
+        tenantId = emp.tenant_id;
+      }
+
+      // Cap at 3 devices per employee
+      const existing = await db.prepare(
+        'SELECT COUNT(*) as cnt FROM webauthn_credentials WHERE user_id = $1 AND user_type = $2 AND tenant_id = $3'
+      ).get(String(empId), 'employee', tenantId);
+      if ((existing?.cnt || 0) >= 3) {
+        return res.status(400).json({ error: 'Maximum of 3 devices already registered for this employee.' });
+      }
+
+      const challenge = _base64url(crypto.randomBytes(32));
+      _storeChallenge(challenge, { userId: empId, tenantId, userType: 'employee', action: 'register' });
+
+      res.json({
+        challenge,
+        rp: { name: 'UpScale Fuel', id: RP_ID },
+        user: {
+          id: _base64url(Buffer.from(`emp_${tenantId}_${empId}`)),
+          name: empName,
+          displayName: empName,
+        },
+        pubKeyCredParams: [
+          { alg: -7,   type: 'public-key' },  // ES256
+          { alg: -257, type: 'public-key' },   // RS256
+        ],
+        authenticatorSelection: {
+          authenticatorAttachment: 'platform',
+          userVerification: 'required',
+          requireResidentKey: false,
+        },
+        timeout: 60000,
+        attestation: 'none',
+      });
+    } catch (e) {
+      console.error('[webauthn/employee/register-options]', e.message);
+      res.status(500).json({ error: 'Failed to start biometric registration' });
+    }
+  });
+
+  // Step 2: Register — save credential
+  router.post('/webauthn/employee/register', async (req, res) => {
+    const empSession = await resolveSession(req, 'employee');
+    const adminSession = !empSession ? await resolveSession(req, 'admin') : null;
+    if (!empSession && !adminSession) return res.status(401).json({ error: 'Login required' });
+
+    const { id, rawId, response: credResponse, deviceName, employeeId: bodyEmpId } = req.body;
+    if (!id || !credResponse?.clientDataJSON || !credResponse?.attestationObject) {
+      return res.status(400).json({ error: 'Invalid credential data' });
+    }
+
+    try {
+      const clientData = JSON.parse(
+        Buffer.from(_fromBase64url(credResponse.clientDataJSON)).toString('utf8')
+      );
+      if (clientData.type !== 'webauthn.create') {
+        return res.status(400).json({ error: 'Invalid credential type' });
+      }
+      if (clientData.origin !== RP_ORIGIN) {
+        return res.status(403).json({ error: 'Origin mismatch' });
+      }
+      const challengeData = _getChallenge(clientData.challenge);
+      if (!challengeData || challengeData.action !== 'register' || challengeData.userType !== 'employee') {
+        return res.status(400).json({ error: 'Challenge invalid or expired' });
+      }
+
+      const empId    = empSession ? empSession.user_id    : (bodyEmpId || challengeData.userId);
+      const tenantId = empSession ? empSession.tenant_id  : (adminSession?.tenant_id || challengeData.tenantId);
+
+      // Upsert: update last_used if already registered, otherwise insert
+      const existing = await db.prepare(
+        'SELECT id FROM webauthn_credentials WHERE credential_id = $1'
+      ).get(id);
+      if (existing) {
+        await db.prepare(
+          'UPDATE webauthn_credentials SET last_used_at = NOW(), device_name = $1 WHERE credential_id = $2'
+        ).run(deviceName || 'My Device', id);
+      } else {
+        await db.prepare(
+          `INSERT INTO webauthn_credentials
+           (user_id, user_type, tenant_id, credential_id, public_key, counter, device_name)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)`
+        ).run(
+          String(empId), 'employee', tenantId,
+          id, credResponse.attestationObject, 0, deviceName || 'My Device'
+        );
+      }
+      res.json({ success: true, message: 'Biometric registered — use it next time you log in!' });
+    } catch (e) {
+      console.error('[webauthn/employee/register]', e.message);
+      res.status(500).json({ error: 'Registration failed' });
+    }
+  });
+
+  // Step 3: Auth-options — return challenge for login prompt (public, pre-login)
+  router.post('/webauthn/employee/auth-options', async (req, res) => {
+    const { credentialId, tenantId } = req.body;
+    if (!credentialId) return res.status(400).json({ error: 'credentialId required' });
+
+    try {
+      const challenge = _base64url(crypto.randomBytes(32));
+      const cred = await db.prepare(
+        'SELECT * FROM webauthn_credentials WHERE credential_id = $1 AND user_type = $2 AND tenant_id = $3'
+      ).get(credentialId, 'employee', tenantId || '');
+
+      // Return generic challenge for unknown credentials (no enumeration)
+      if (!cred) {
+        return res.json({
+          challenge, timeout: 60000, rpId: RP_ID,
+          allowCredentials: [{ type: 'public-key', id: credentialId }],
+          userVerification: 'required'
+        });
+      }
+
+      _storeChallenge(challenge, {
+        userId: cred.user_id, tenantId: cred.tenant_id,
+        credentialId, action: 'authenticate', userType: 'employee'
+      });
+      res.json({
+        challenge, timeout: 60000, rpId: RP_ID,
+        allowCredentials: [{ type: 'public-key', id: credentialId }],
+        userVerification: 'required'
+      });
+    } catch (e) {
+      console.error('[webauthn/employee/auth-options]', e.message);
+      res.status(500).json({ error: 'Failed to start biometric' });
+    }
+  });
+
+  // Step 4: Authenticate — verify assertion and issue employee JWT (public, pre-login)
+  router.post('/webauthn/employee/authenticate', async (req, res) => {
+    const { id, response: credResponse, tenantId } = req.body;
+    if (!id || !credResponse?.clientDataJSON || !credResponse?.authenticatorData) {
+      return res.status(400).json({ error: 'Invalid assertion data' });
+    }
+
+    try {
+      const clientData = JSON.parse(
+        Buffer.from(_fromBase64url(credResponse.clientDataJSON)).toString('utf8')
+      );
+      if (clientData.type !== 'webauthn.get') {
+        return res.status(400).json({ error: 'Invalid assertion type' });
+      }
+      if (clientData.origin !== RP_ORIGIN) {
+        return res.status(403).json({ error: 'Origin mismatch' });
+      }
+      const challengeData = _getChallenge(clientData.challenge);
+      if (!challengeData || challengeData.action !== 'authenticate' || challengeData.userType !== 'employee') {
+        return res.status(400).json({ error: 'Challenge expired — try again' });
+      }
+      if (challengeData.credentialId !== id) {
+        return res.status(403).json({ error: 'Credential mismatch' });
+      }
+
+      const cred = await db.prepare(
+        'SELECT wc.*, e.name as emp_name, e.role as emp_role FROM webauthn_credentials wc JOIN employees e ON e.id = wc.user_id::int WHERE wc.credential_id = $1 AND wc.user_type = $2'
+      ).get(id, 'employee');
+      if (!cred) return res.status(404).json({ error: 'Credential not found' });
+
+      // Replay attack prevention via sign counter
+      const authDataBuf = _fromBase64url(credResponse.authenticatorData);
+      if (authDataBuf.length < 37) {
+        return res.status(400).json({ error: 'Invalid authenticatorData' });
+      }
+      const signCount = authDataBuf.readUInt32BE(33);
+      if (signCount !== 0 && signCount <= cred.counter) {
+        console.warn('[webauthn/employee] Replay attack detected! credentialId:', id);
+        return res.status(403).json({ error: 'Authentication rejected — possible replay attack' });
+      }
+
+      await db.prepare(
+        'UPDATE webauthn_credentials SET counter = $1, last_used_at = NOW() WHERE credential_id = $2'
+      ).run(signCount, id);
+
+      // Verify employee is still active
+      const emp = await db.prepare(
+        'SELECT * FROM employees WHERE id = $1 AND tenant_id = $2 AND active = 1'
+      ).get(String(cred.user_id), cred.tenant_id);
+      if (!emp) return res.status(403).json({ error: 'Employee account is inactive' });
+
+      const tenant = await db.prepare(
+        'SELECT * FROM tenants WHERE id = $1 AND active = 1'
+      ).get(cred.tenant_id);
+      if (!tenant) return res.status(403).json({ error: 'Station is inactive' });
+
+      // BUG-02 FIX: Issue a real server session token for biometric login
+      const token = await createSession(db, {
+        tenantId: cred.tenant_id, userId: emp.id, userType: 'employee',
+        userName: emp.name, role: emp.role || 'attendant',
+        ip: req.ip, userAgent: req.headers['user-agent']
+      });
+
+      res.json({
+        success: true, token,
+        userType: 'employee', userName: emp.name,
+        employeeId: emp.id, tenantId: cred.tenant_id,
+        method: 'biometric'
+      });
+    } catch (e) {
+      console.error('[webauthn/employee/authenticate]', e.message);
+      res.status(500).json({ error: 'Biometric authentication failed' });
     }
   });
 

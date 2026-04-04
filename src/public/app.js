@@ -337,51 +337,90 @@ async function saveMyPassword() {
 function openResetEmployeePasswordModal(empId) {
   const emp = APP.data.employees.find(e => parseInt(e.id) === parseInt(empId));
   if (!emp) return;
-  openModal(`🔑 Reset PIN — ${sanitize(emp.name)}`,
+  // BUG-12 FIX: require admin to confirm their own password before resetting a PIN.
+  // Without this, anyone who briefly accesses an unlocked admin session can change all PINs.
+  // BUG-05 FIX: accept 4-8 digits to match server validation (/^\d{4,8}$/).
+  openModal(`\uD83D\uDD11 Reset PIN \u2014 ${sanitize(emp.name)}`,
     `<div style="margin-bottom:12px;font-size:12px;color:var(--text-2);padding:10px;background:var(--bg-0);border-radius:8px">
-       Reset the 4-digit login PIN for <strong style="color:var(--accent-light)">${sanitize(emp.name)}</strong>.
+       Reset the login PIN for <strong style="color:var(--accent-light)">${sanitize(emp.name)}</strong>.
+       Your admin password is required to confirm.
      </div>
-     <div class="form-group"><label class="form-label">New 4-Digit PIN *</label>
-       <input class="form-input mono" id="newEmpPIN" type="password" inputmode="numeric" maxlength="4" placeholder="••••" style="font-size:24px;letter-spacing:8px;text-align:center" />
+     <div class="form-group"><label class="form-label">New PIN (4\u20138 digits) *</label>
+       <input class="form-input mono" id="newEmpPIN" type="password" inputmode="numeric" maxlength="8" placeholder="\u2022\u2022\u2022\u2022" style="font-size:24px;letter-spacing:8px;text-align:center" />
      </div>
      <div class="form-group"><label class="form-label">Confirm PIN *</label>
-       <input class="form-input mono" id="confEmpPIN" type="password" inputmode="numeric" maxlength="4" placeholder="••••" style="font-size:24px;letter-spacing:8px;text-align:center" />
+       <input class="form-input mono" id="confEmpPIN" type="password" inputmode="numeric" maxlength="8" placeholder="\u2022\u2022\u2022\u2022" style="font-size:24px;letter-spacing:8px;text-align:center" />
+     </div>
+     <div class="form-group" style="margin-top:14px;border-top:1px solid var(--border);padding-top:14px">
+       <label class="form-label">Your Admin Password *</label>
+       <input class="form-input" id="adminConfirmPass" type="password" placeholder="Confirm your password" autocomplete="current-password" />
+       <div style="font-size:11px;color:var(--text-3);margin-top:4px">Required to authorise PIN changes</div>
      </div>
      <input type="hidden" id="resetEmpId" value="${empId}" />`,
     `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-accent" onclick="doResetEmployeePin()">🔑 Reset PIN</button>`
+     <button class="btn btn-accent" onclick="doResetEmployeePin()">\uD83D\uDD11 Reset PIN</button>`
   );
-  // Fix (e): auto-focus the new PIN input
   requestAnimationFrame(() => { const el = document.getElementById('newEmpPIN'); if (el) el.focus(); });
 }
 
 async function doResetEmployeePin() {
-  const empId = parseInt(document.getElementById('resetEmpId')?.value);
-  const pin = document.getElementById('newEmpPIN')?.value?.trim();
-  const conf = document.getElementById('confEmpPIN')?.value?.trim();
-  if (!pin || pin.length !== 4 || !/^\d{4}$/.test(pin)) { toast('PIN must be exactly 4 digits', 'error'); return; }
+  const empId     = parseInt(document.getElementById('resetEmpId')?.value);
+  const pin       = document.getElementById('newEmpPIN')?.value?.trim();
+  const conf      = document.getElementById('confEmpPIN')?.value?.trim();
+  const adminPass = document.getElementById('adminConfirmPass')?.value || '';
+
+  // BUG-05: validate 4-8 digits to match server regex /^\d{4,8}$/
+  if (!pin || !/^\d{4,8}$/.test(pin)) { toast('PIN must be 4\u20138 digits', 'error'); return; }
   if (pin !== conf) { toast('PINs do not match', 'error'); return; }
+
+  // BUG-12: require a non-empty admin password before touching the server
+  if (!adminPass) {
+    toast('Enter your admin password to confirm', 'error');
+    document.getElementById('adminConfirmPass')?.focus();
+    return;
+  }
+
   const emp = APP.data.employees.find(e => parseInt(e.id) === parseInt(empId));
   if (!emp) { toast('Employee not found', 'error'); return; }
+
   try {
+    // BUG-12: re-authenticate the admin on the server before resetting the PIN.
+    const tenant = (typeof mt_getActiveTenant === 'function') ? mt_getActiveTenant() : null;
+    if (!tenant?.id) { toast('No active station \u2014 please reload', 'error'); return; }
+
+    const adminUser = APP.adminUser;
+    if (!adminUser?.name) { toast('Could not identify admin \u2014 please log in again', 'error'); return; }
+
+    const authCheck = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: adminUser.name, password: adminPass, tenantId: tenant.id })
+    });
+    if (!authCheck.ok) {
+      toast('Incorrect admin password \u2014 PIN not changed', 'error');
+      const passEl = document.getElementById('adminConfirmPass');
+      if (passEl) { passEl.value = ''; passEl.focus(); }
+      return;
+    }
+
+    // Admin verified — proceed with PIN reset
     if (db && typeof db.setEmployeePin === 'function') {
       await db.setEmployeePin(empId, pin);
     } else {
-      // Legacy fallback if setEmployeePin not available
-      const hash = await sha256(pin);
-      emp.pinHash = hash;
-      await db.put('employees', emp);
+      const token = typeof getAuthToken === 'function' ? getAuthToken() : '';
+      await fetch('/api/data/employees/' + encodeURIComponent(empId) + '/set-pin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+        body: JSON.stringify({ pin })
+      });
     }
-    // PERMANENT FIX: Do not write SHA-256 to fb_emp_pins.
-    // Online login always verifies via server (bcrypt). No local hash cache needed.
     closeModal();
     toast(`PIN reset for ${emp.name}`, 'success');
     renderPage();
   } catch(e) {
-    toast('Failed to reset PIN: ' + (e.message||e), 'error');
+    toast('Failed to reset PIN: ' + (e.message || e), 'error');
   }
 }
-
 function openChangeAdminPassModal(userIdx) {
   const t = mt_getActiveTenant();
   if (!t) return;

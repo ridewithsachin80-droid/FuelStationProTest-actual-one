@@ -76,12 +76,23 @@ function verifyData(stored) {
 }
 
 // Rate Limiting
-const loginAttempts = {};
+// BUG-03 FIX: Counters are now persisted in sessionStorage so a page reload does not
+// reset them. sessionStorage is scoped to the browser tab and is cleared when the tab
+// is closed — making a silent counter-reset much harder than deleting a localStorage key.
+const _RL_SS_KEY = 'fb_login_rl';
 const MAX_LOGIN_ATTEMPTS = 5;
 const LOCKOUT_MS = 5 * 60 * 1000; // 5 minutes
 
+function _rlLoad() {
+  try { return JSON.parse(sessionStorage.getItem(_RL_SS_KEY) || '{}'); } catch { return {}; }
+}
+function _rlSave(data) {
+  try { sessionStorage.setItem(_RL_SS_KEY, JSON.stringify(data)); } catch {}
+}
+
 function checkRateLimit(key) {
-  const r = loginAttempts[key];
+  const attempts = _rlLoad();
+  const r = attempts[key];
   if (!r) return true;
   if (r.lockedUntil && Date.now() < r.lockedUntil) {
     const sec = Math.ceil((r.lockedUntil - Date.now()) / 1000);
@@ -89,20 +100,27 @@ function checkRateLimit(key) {
     return false;
   }
   if (r.lockedUntil && Date.now() >= r.lockedUntil) {
-    delete loginAttempts[key];
+    delete attempts[key];
+    _rlSave(attempts);
     return true;
   }
   return r.count < MAX_LOGIN_ATTEMPTS;
 }
 function recordFailedLogin(key) {
-  if (!loginAttempts[key]) loginAttempts[key] = { count: 0 };
-  loginAttempts[key].count++;
-  if (loginAttempts[key].count >= MAX_LOGIN_ATTEMPTS) {
-    loginAttempts[key].lockedUntil = Date.now() + LOCKOUT_MS;
+  const attempts = _rlLoad();
+  if (!attempts[key]) attempts[key] = { count: 0 };
+  attempts[key].count++;
+  if (attempts[key].count >= MAX_LOGIN_ATTEMPTS) {
+    attempts[key].lockedUntil = Date.now() + LOCKOUT_MS;
     toast('Too many failed attempts. Locked for 5 minutes.', 'error');
   }
+  _rlSave(attempts);
 }
-function recordSuccessLogin(key) { delete loginAttempts[key]; }
+function recordSuccessLogin(key) {
+  const attempts = _rlLoad();
+  delete attempts[key];
+  _rlSave(attempts);
+}
 
 // Audit Log
 function auditLog(action, details) {

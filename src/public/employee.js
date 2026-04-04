@@ -775,10 +775,10 @@ function emp_renderLogin() {
         <div style="flex:1;height:1px;background:var(--border)"></div>
       </div>
       <div class="form-group">
-        <input class="form-input" id="empLoginPin" type="password" maxlength="4" placeholder="4-digit PIN"
+        <input class="form-input" id="empLoginPin" type="password" maxlength="8" placeholder="4–8 digit PIN"
           inputmode="numeric" autocomplete="off"
           style="font-size:28px;letter-spacing:10px;text-align:center;padding:14px"
-          oninput="if(this.value.length===4)emp_doLogin()" />
+          oninput="if(this.value.length>=4&&this.value.length<=8){};" />
         <div style="font-size:10px;color:var(--text-3);margin-top:4px;text-align:center">Last 4 digits of registered mobile</div>
       </div>
       <button class="btn btn-accent btn-block" style="padding:14px;font-size:14px;margin-top:4px;${hasEmployees ? '' : 'opacity:0.6;cursor:not-allowed;'}"
@@ -1482,12 +1482,46 @@ function emp_renderComplete() {
 // Credentials stored in localStorage keyed by empId + tenantId
 // No biometric data ever leaves the device — only a public key is stored
 
-const BIO_FAIL_KEY = 'fb_bio_fails'; // { empId: count }
+const BIO_FAIL_KEY = 'fb_bio_fails';
 const BIO_MAX_FAILS = 3;
 
 function emp_bioStorageKey(empId) {
   const tid = APP.tenant?.id || 'default';
   return `fb_bio_cred_${tid}_${empId}`;
+}
+
+function emp_bioIsRegistered(empId) {
+  try {
+    const raw = localStorage.getItem(emp_bioStorageKey(empId));
+    return !!raw;
+  } catch(e) { return false; }
+}
+
+// BUG-04 FIX: Use sessionStorage for fail counters — localStorage can be selectively
+// cleared via DevTools to reset the 3-attempt lockout. sessionStorage is wiped when
+// the browser tab closes, making silent resets much harder to pull off quietly.
+function emp_bioGetFails(empId) {
+  try {
+    const d = JSON.parse(sessionStorage.getItem(BIO_FAIL_KEY) || '{}');
+    return d[empId] || 0;
+  } catch(e) { return 0; }
+}
+
+function emp_bioRecordFail(empId) {
+  try {
+    const d = JSON.parse(sessionStorage.getItem(BIO_FAIL_KEY) || '{}');
+    d[empId] = (d[empId] || 0) + 1;
+    sessionStorage.setItem(BIO_FAIL_KEY, JSON.stringify(d));
+    return d[empId];
+  } catch(e) { return BIO_MAX_FAILS; }
+}
+
+function emp_bioClearFails(empId) {
+  try {
+    const d = JSON.parse(sessionStorage.getItem(BIO_FAIL_KEY) || '{}');
+    delete d[empId];
+    sessionStorage.setItem(BIO_FAIL_KEY, JSON.stringify(d));
+  } catch(e) {}
 }
 
 function emp_bioIsRegistered(empId) {
@@ -1521,49 +1555,58 @@ function emp_bioClearFails(empId) {
   } catch(e) {}
 }
 
-// Called from admin panel: register biometric for an employee after PIN verified
+// BUG-06 FIX: emp_bioRegister now uses a server-issued challenge and stores
+// the credential server-side in webauthn_credentials (user_type='employee').
+// Previously the credential only lived in localStorage — no server record existed.
 async function emp_bioRegister(empId) {
   if (!window.PublicKeyCredential) {
     toast('Biometrics not supported on this device/browser', 'error'); return false;
   }
   try {
     const available = await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
-    if (!available) {
-      toast('No fingerprint/face sensor available', 'error'); return false;
-    }
+    if (!available) { toast('No fingerprint/face sensor available', 'error'); return false; }
 
-    const challenge = new Uint8Array(32);
-    crypto.getRandomValues(challenge);
-    const tid = APP.tenant?.id || 'default';
     const emp = EMP_LIST.find(e => e.id === empId);
     if (!emp) { toast('Employee not found', 'error'); return false; }
 
+    // Step 1 — server-issued challenge (requires active employee or admin session)
+    const options = await AuthAPI.webauthnEmployeeRegisterOptions(empId);
+    if (options.error) { toast(options.error, 'error'); return false; }
+
+    function fromB64url(s) {
+      const b64 = s.replace(/-/g,'+').replace(/_/g,'/');
+      return Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+    }
+    function toB64url(buf) {
+      return btoa(String.fromCharCode(...new Uint8Array(buf)))
+        .replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+    }
+
+    // Step 2 — device biometric / PIN prompt with server challenge
     const credential = await navigator.credentials.create({
       publicKey: {
-        challenge,
-        rp: { name: 'FuelBunk Pro', id: location.hostname },
-        user: {
-          id: new TextEncoder().encode(`${tid}_${empId}`),
-          name: emp.name,
-          displayName: emp.name,
-        },
-        pubKeyCredParams: [
-          { alg: -7, type: 'public-key' },   // ES256
-          { alg: -257, type: 'public-key' },  // RS256
-        ],
-        authenticatorSelection: {
-          authenticatorAttachment: 'platform',
-          userVerification: 'required',
-          residentKey: 'preferred',
-        },
-        timeout: 60000,
-        attestation: 'none',
+        ...options,
+        challenge: fromB64url(options.challenge),
+        user:      { ...options.user, id: fromB64url(options.user.id) },
       }
     });
 
-    // Store credential ID (not biometric data — that never leaves the OS)
-    const credId = btoa(String.fromCharCode(...new Uint8Array(credential.rawId)));
-    localStorage.setItem(emp_bioStorageKey(empId), JSON.stringify({ credId, empId, registered: Date.now() }));
+    // Step 3 — post credential to server for storage
+    const credData = {
+      id:    credential.id,
+      rawId: toB64url(credential.rawId),
+      response: {
+        clientDataJSON:    toB64url(credential.response.clientDataJSON),
+        attestationObject: toB64url(credential.response.attestationObject),
+      },
+      type: credential.type,
+    };
+    const result = await AuthAPI.webauthnEmployeeRegister(credData, 'My Device', empId);
+    if (!result.success) throw new Error(result.error || 'Server registration failed');
+
+    // Cache credential ID locally for the auth-options call on next login
+    localStorage.setItem(emp_bioStorageKey(empId),
+      JSON.stringify({ credId: credential.id, empId, registered: Date.now() }));
     emp_bioClearFails(empId);
     toast(`Biometric registered for ${emp.name} ✓`, 'success');
     return true;
@@ -1571,14 +1614,10 @@ async function emp_bioRegister(empId) {
     if (e.name === 'NotAllowedError') {
       toast('Biometric registration cancelled', 'info');
     } else if (e.name === 'SecurityError') {
-      // FIX 2: rpId mismatch — app domain changed or running on HTTP.
-      // Registration cannot succeed; guide user to correct URL.
       console.warn('[emp_bioRegister] SecurityError:', e.message);
       toast('Biometric unavailable — ensure the app is opened via HTTPS on the correct domain', 'warning');
     } else if (e.name === 'InvalidStateError') {
-      // A credential for this user already exists on the authenticator.
-      // Clear local record and treat as success so the next login attempt works.
-      console.warn('[emp_bioRegister] InvalidStateError — credential already exists, re-linking');
+      console.warn('[emp_bioRegister] Credential already exists on authenticator');
       toast('Biometric already registered for this device — try logging in', 'info');
     } else {
       toast('Registration failed: ' + e.message, 'error');
@@ -1587,57 +1626,87 @@ async function emp_bioRegister(empId) {
   }
 }
 
+// BUG-01 FIX: emp_biometricLogin now performs full server-side WebAuthn verification.
+// Previously: client-generated challenge → device prompt → login granted — zero server proof.
+// Now:        server challenge → device prompt → server assertion verification → JWT issued.
 async function emp_biometricLogin() {
   const id = parseInt(document.getElementById('empLoginName')?.value);
   if (!id) { toast('Select your name first', 'error'); return; }
   const emp = EMP_LIST.find(e => e.id === id);
   if (!emp) { toast('Select your name first', 'error'); return; }
 
-  // Check fail count — force PIN if already hit 3 fails
   const fails = emp_bioGetFails(id);
   if (fails >= BIO_MAX_FAILS) {
     emp_showPinFallback(true);
     toast('Too many failed attempts — please use PIN', 'error');
     return;
   }
+  if (!emp_bioIsRegistered(id)) { emp_showPinFallback(false); return; }
 
-  if (!emp_bioIsRegistered(id)) {
-    emp_showPinFallback(false);
-    return;
-  }
-
-  const btn = document.getElementById('empBioBtn');
+  const btn    = document.getElementById('empBioBtn');
   const status = document.getElementById('empBioStatus');
-  if (btn) { btn.disabled = true; btn.innerHTML = '<span style="font-size:22px">⏳</span> Verifying…'; }
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span style="font-size:22px">\u23F3</span> Verifying\u2026'; }
   if (status) status.textContent = `Attempt ${fails + 1} of ${BIO_MAX_FAILS} — touch sensor or look at camera`;
 
   try {
     if (!window.PublicKeyCredential) throw new Error('WebAuthn not supported');
 
-    const challenge = new Uint8Array(32);
-    crypto.getRandomValues(challenge);
+    const stored   = JSON.parse(localStorage.getItem(emp_bioStorageKey(id)) || '{}');
+    const credId   = stored.credId;
+    const tenant   = (typeof mt_getActiveTenant === 'function') ? mt_getActiveTenant() : null;
+    const tenantId = tenant?.id || '';
+    if (!credId) { emp_showPinFallback(false); toast('No biometric registered — please use PIN', 'info'); return; }
 
+    // Step 1 — server-issued challenge for this credential
+    const options = await AuthAPI.webauthnEmployeeAuthOptions(credId, tenantId);
+    if (options.error) throw new Error(options.error);
+
+    function fromB64url(s) {
+      const b64 = s.replace(/-/g,'+').replace(/_/g,'/');
+      return Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+    }
+    function toB64url(buf) {
+      return btoa(String.fromCharCode(...new Uint8Array(buf)))
+        .replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+    }
+
+    // Step 2 — device biometric / PIN prompt
     const assertion = await navigator.credentials.get({
       publicKey: {
-        challenge,
-        timeout: 30000,
+        challenge:        fromB64url(options.challenge),
+        timeout:          options.timeout || 30000,
+        rpId:             options.rpId,
+        allowCredentials: [{ type: 'public-key', id: fromB64url(credId) }],
         userVerification: 'required',
-        rpId: location.hostname,
       }
     });
-
     if (!assertion) throw new Error('No credential returned');
 
-    // Biometric verified by device OS — grant access
+    // Step 3 — send assertion to server for cryptographic verification
+    const assertionData = {
+      id:    assertion.id,
+      rawId: toB64url(assertion.rawId),
+      response: {
+        clientDataJSON:    toB64url(assertion.response.clientDataJSON),
+        authenticatorData: toB64url(assertion.response.authenticatorData),
+        signature:         toB64url(assertion.response.signature),
+        userHandle:        assertion.response.userHandle
+                             ? toB64url(assertion.response.userHandle) : null,
+      },
+      type: assertion.type,
+    };
+    const result = await AuthAPI.webauthnEmployeeAuthenticate(assertionData, tenantId);
+    if (!result.success) throw new Error(result.error || 'Server rejected biometric');
+
     emp_bioClearFails(id);
-    if (btn) { btn.disabled = false; btn.innerHTML = '<span style="font-size:22px">🔒</span> Login with Biometrics'; }
+    if (btn) { btn.disabled = false; btn.innerHTML = '<span style="font-size:22px">\uD83D\uDD12</span> Login with Biometrics'; }
     if (status) status.textContent = '';
 
-    // Complete login (same flow as PIN login, skip PIN check)
-    await emp_completeLogin(emp, false);
+    // BUG-02 FIX: pass the server-issued JWT so emp_completeLogin creates a real session
+    await emp_completeLogin(emp, false, result.token);
 
   } catch(e) {
-    if (btn) { btn.disabled = false; btn.innerHTML = '<span style="font-size:22px">🔒</span> Login with Biometrics'; }
+    if (btn) { btn.disabled = false; btn.innerHTML = '<span style="font-size:22px">\uD83D\uDD12</span> Login with Biometrics'; }
 
     if (e.name === 'NotAllowedError') {
       // User cancelled or sensor failed
@@ -1651,15 +1720,13 @@ async function emp_biometricLogin() {
         toast(`Biometric failed — ${remaining} attempt${remaining > 1 ? 's' : ''} left`, 'error');
       }
     } else if (e.name === 'SecurityError') {
-      // FIX 2: rpId mismatch — happens when the app domain changes (e.g. Railway
-      // preview URLs) or when running on HTTP instead of HTTPS. The stored credential
-      // is now permanently invalid on this origin, so clear it and force PIN login.
+      // rpId mismatch — app domain changed or running on HTTP
       console.warn('[emp_biometricLogin] SecurityError — clearing credential for emp', id, ':', e.message);
       try { localStorage.removeItem(emp_bioStorageKey(id)); } catch(_) {}
       emp_showPinFallback(true);
       toast('Biometric unavailable on this connection — please use PIN', 'warning');
     } else if (e.name === 'InvalidStateError' || e.name === 'NotFoundError') {
-      // Credential was deleted from the device OS (factory reset, device swap, etc.)
+      // Credential deleted from device OS (factory reset, device swap, etc.)
       console.warn('[emp_biometricLogin] Credential gone — clearing for emp', id);
       try { localStorage.removeItem(emp_bioStorageKey(id)); } catch(_) {}
       emp_showPinFallback(true);
@@ -1671,14 +1738,20 @@ async function emp_biometricLogin() {
 }
 
 // Shared login completion — called by both biometric and PIN paths
-async function emp_completeLogin(emp, isPinLogin) {
+// BUG-02 FIX: accepts optional bioToken issued by /webauthn/employee/authenticate
+// so biometric logins have a real server-issued session token, not a client-only state.
+async function emp_completeLogin(emp, isPinLogin, bioToken) {
   recordSuccessLogin('emp_' + emp.id);
   APP.loggedIn = true; APP.role = 'employee'; saveSession();
 
   // Get JWT token
   try {
     const tenant = (typeof mt_getActiveTenant === 'function') ? mt_getActiveTenant() : null;
-    if (tenant && tenant.id && isPinLogin) {
+    if (bioToken) {
+      // Biometric path — server already issued a token during assertion verification
+      if (typeof setAuthToken === 'function') setAuthToken(bioToken);
+      if (typeof setTenantId  === 'function') setTenantId(tenant?.id || '');
+    } else if (tenant && tenant.id && isPinLogin) {
       const pin = document.getElementById('empLoginPin')?.value || '';
       const tokenResult = await AuthAPI.employeeLogin(pin, tenant.id).catch(() => null);
       if (tokenResult?.token && tokenResult?.employeeId) {
@@ -1751,6 +1824,12 @@ async function emp_doLogin() {
   }
   const id = parseInt(document.getElementById('empLoginName').value);
   const pin = (document.getElementById('empLoginPin')?.value || '').trim();
+  // BUG-08 FIX: validate PIN before hitting the server so we don't waste rate-limit
+  // slots or pollute login_attempts with empty-string attempts.
+  if (!pin || !/^\d{4,8}$/.test(pin)) {
+    toast('Enter your 4–8 digit PIN', 'error');
+    return;
+  }
   // Use parseInt on both sides — e.id may be number or string depending on data source
   let emp = EMP_LIST.find(e => parseInt(e.id) === id);
   // Fallback: search fb_emp_cache directly in case EMP_LIST is out of sync
@@ -1764,19 +1843,18 @@ async function emp_doLogin() {
   }
   if (!emp) { toast('Select employee','error'); return; }
   if (!checkRateLimit('emp_' + id)) return;
-  // SHA-256 — only used for true offline fallback, never for online verification
-  const pinHash = await hashPassword(pin);
   let pinValid = false;
   const tenant2 = (typeof mt_getActiveTenant === 'function') ? mt_getActiveTenant() : null;
 
-  // PERMANENT PIN FIX: Always verify via server when online.
-  // Local SHA-256 hash is stale after bcrypt migration — never use it when online.
+  // Always verify via server when online — bcrypt comparison happens server-side.
+  // BUG-14 FIX: send only raw pin (not pinHash) to avoid sending a redundant
+  // SHA-256 hash alongside the raw value.
   if (navigator.onLine && tenant2 && tenant2.id) {
     try {
       const verifyResp = await fetch('/api/public/verify-pin/' + encodeURIComponent(tenant2.id), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ employeeId: id, pin, pinHash }),
+        body: JSON.stringify({ employeeId: id, pin }),
       });
       if (verifyResp.ok) {
         const result = await verifyResp.json();

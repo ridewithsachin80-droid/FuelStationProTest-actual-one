@@ -643,14 +643,16 @@ async function startServer() {
   // ── IR-01 FIX: Server-side PIN verification — hash never leaves DB ───────────
   // FIX: CRITICAL - Strengthen PIN rate limiting to prevent brute force (was 15/5min, now 10/1min per employee)
   const pinVerifyLimiter = rateLimit({ 
-    windowMs: 60000,  // 1 minute (reduced from 5 minutes)
-    max: 10,          // Only 10 attempts per minute (reduced from 15)
+    windowMs: 60000,  // 1 minute
+    max: 10,          // 10 attempts per minute per IP per tenant
     standardHeaders: true, 
     legacyHeaders: false,
     keyGenerator: (req) => {
-      // FIX: Rate limit per tenant + employee combination (not per IP)
-      // This prevents an attacker from trying different employee PINs from same IP
-      return `${req.params.tenantId}-${req.body.employeeId || 'unknown'}`;
+      // BUG-07 FIX: Key on tenantId + IP — NOT on body.employeeId which is
+      // attacker-controlled. Sending employeeId:null previously bypassed per-employee
+      // limits by landing all attempts in one shared "unknown" bucket.
+      // Per-employee lockout is authoritative via the login_attempts table (5 fails / 15 min).
+      return `${req.params.tenantId}-${req.ip || 'unknown'}`;
     },
     handler: (req, res) => {
       res.status(429).json({ 
@@ -678,8 +680,8 @@ async function startServer() {
       // If raw `pin` is provided → use bcrypt verifyPassword() (correct, secure).
       // If only `pinHash` (SHA-256) provided → fall back to direct compare for legacy cached hashes.
       // Client updated below to send raw `pin` instead of pre-hashed value.
-      const { employeeId, pin, pinHash } = req.body;
-      if (!employeeId || (!pin && !pinHash)) {
+      const { employeeId, pin } = req.body;
+      if (!employeeId || !pin) {
         return res.status(400).json({ valid: false, error: 'Missing fields' });
       }
 
@@ -751,19 +753,8 @@ async function startServer() {
           console.warn('[verify-pin] Unknown hash format for employee', r.rows[0].id, 'len:', storedHash.length);
           match = false;
         }
-      } else if (pinHash) {
-        // SECURITY FIX SC7: Legacy client sending SHA-256 only (no raw pin available).
-        // Only allow this path if the STORED hash is also SHA-256 format.
-        // Reject if stored hash is bcrypt — prevents any cross-format collision attack.
-        if (isSha256) {
-          match = storedHash === pinHash;
-        } else {
-          // Stored is bcrypt but client sent SHA-256 — cannot compare, deny.
-          // This path should not occur with current clients (all send raw pin now).
-          console.warn('[verify-pin] Legacy pinHash sent but stored hash is bcrypt — denying.', 'emp:', r.rows[0].id);
-          match = false;
-        }
       }
+      // BUG-14 FIX: pinHash (SHA-256) fallback path removed — raw pin is always sent now.
       
       // Log the attempt
       await pool.query(

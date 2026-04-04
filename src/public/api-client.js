@@ -129,6 +129,27 @@ const AuthAPI = {
   async webauthnCredentials() { return apiFetch('/auth/webauthn/credentials'); },
   async webauthnRemoveCredential(credId) {
     return apiFetch('/auth/webauthn/credentials/' + credId, { method: 'DELETE' });
+  },
+  // ── Employee WebAuthn Biometric (BUG-01/BUG-02/BUG-06 FIX) ─────────────
+  async webauthnEmployeeRegisterOptions(employeeId) {
+    return apiFetch('/auth/webauthn/employee/register-options', {
+      method: 'POST', body: JSON.stringify({ employeeId })
+    });
+  },
+  async webauthnEmployeeRegister(credentialData, deviceName, employeeId) {
+    return apiFetch('/auth/webauthn/employee/register', {
+      method: 'POST', body: JSON.stringify({ ...credentialData, deviceName, employeeId })
+    });
+  },
+  async webauthnEmployeeAuthOptions(credentialId, tenantId) {
+    return apiFetch('/auth/webauthn/employee/auth-options', {
+      method: 'POST', body: JSON.stringify({ credentialId, tenantId })
+    });
+  },
+  async webauthnEmployeeAuthenticate(assertionData, tenantId) {
+    return apiFetch('/auth/webauthn/employee/authenticate', {
+      method: 'POST', body: JSON.stringify({ ...assertionData, tenantId })
+    });
   }
 };
 

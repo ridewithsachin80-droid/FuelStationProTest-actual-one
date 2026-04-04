@@ -1244,6 +1244,13 @@
   // false = biometric identity not yet verified this session
   // true  = user passed biometric (or just logged in via password) this session
   // Reset to false when: app goes to background for > RELOCK_AFTER ms, or logout.
+  //
+  // BUG-09 NOTE — security boundary: _biometricUnlocked is a JavaScript variable
+  // and can be set from DevTools or a bookmarklet. It is a UX gate, not a security
+  // boundary. The actual security control is the server-side session token stored
+  // by setAuthToken(): every API call requires a valid Bearer token, and the server
+  // validates it on every request. If the token is missing or expired the server
+  // returns 401 regardless of this flag's value.
   let _biometricUnlocked = false;
   let _hiddenAt          = null;       // timestamp when app was last hidden
   const RELOCK_AFTER     = 60 * 1000; // re-lock after 60 s in background
@@ -1737,10 +1744,32 @@
     }
   };
 
-  window.setupBiometricNow = function() {
+  // BUG-10 FIX: Validate the session token with the server before triggering the
+  // device biometric prompt. Previously, an expired token in localStorage would
+  // still initiate credentials.create() — the user sees the OS biometric dialog,
+  // the sensor fires, then the server rejects the credential with a confusing error.
+  // Now we verify first; if the token is expired we redirect to password login.
+  window.setupBiometricNow = async function() {
     const token = localStorage.getItem('_fb_auth_token');
-    const sess = JSON.parse(localStorage.getItem('fb_session') || '{}');
-    if (!token || !sess.tenant?.id) { if(typeof toast==='function') toast('Please log in first', 'error'); return; }
+    const sess  = JSON.parse(localStorage.getItem('fb_session') || '{}');
+    if (!token || !sess.tenant?.id) {
+      if (typeof toast === 'function') toast('Please log in first', 'error');
+      return;
+    }
+    try {
+      // Lightweight server-side token check before touching the authenticator
+      const check = await fetch('/api/auth/session', {
+        headers: { Authorization: 'Bearer ' + token }
+      });
+      if (!check.ok) {
+        if (typeof toast === 'function') toast('Session expired — please log in again to set up biometrics', 'warning');
+        if (typeof showLoginScreen === 'function') showLoginScreen();
+        return;
+      }
+    } catch(e) {
+      // Network error — proceed optimistically; the register call will fail if token is bad
+      console.warn('[setupBiometricNow] Session check failed (offline?):', e.message);
+    }
     _offerBiometricSetup(token, sess.tenant.id, sess.adminUser?.name);
   };
 
