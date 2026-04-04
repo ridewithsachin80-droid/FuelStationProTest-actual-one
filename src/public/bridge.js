@@ -1469,24 +1469,17 @@
       }
     } catch (e) {
       if (e.name === 'NotAllowedError') {
-        // User dismissed or timed out — show a gentle hint and fall through to password login
-        console.log('[WebAuthn] Biometric cancelled by user — showing password login');
-        if (typeof toast === 'function') toast('Biometric cancelled — enter your password to log in', 'info');
+        console.log('[WebAuthn] Biometric cancelled by user');
       } else if (e.name === 'SecurityError') {
-        // rpId mismatch or insecure context — clear stored credential and inform user
-        console.warn('[WebAuthn] SecurityError (rpId mismatch or HTTP?) — clearing credential:', e.message);
+        console.warn('[WebAuthn] SecurityError:', e.message);
         localStorage.removeItem(WA_CRED_KEY);
         localStorage.removeItem(WA_TENANT_KEY);
-        if (typeof toast === 'function') toast('Biometric login unavailable on this connection — please log in with your password', 'warning');
       } else if (e.name === 'InvalidStateError' || e.name === 'NotFoundError') {
-        // Credential no longer valid on this device — clear it and show password login
         console.warn('[WebAuthn] Credential invalid — clearing:', e.message);
         localStorage.removeItem(WA_CRED_KEY);
         localStorage.removeItem(WA_TENANT_KEY);
-        if (typeof toast === 'function') toast('Biometric session expired — please log in with your password to re-enable it', 'info');
       } else {
         console.warn('[WebAuthn] Auth failed:', e.name, e.message);
-        if (typeof toast === 'function') toast('Biometric failed — please log in with your password', 'warning');
       }
     }
     return false;
@@ -1587,11 +1580,12 @@
       }
     });
 
-    // BUG-09 FIX: Use double requestAnimationFrame instead of a hardcoded 400ms
-    // delay. rAF fires after the browser has committed the current frame to the
-    // screen, so the lock-screen overlay is guaranteed to be visible before the
-    // biometric prompt appears — regardless of device speed.
-    requestAnimationFrame(() => requestAnimationFrame(doUnlock));
+    // Do NOT auto-trigger navigator.credentials.get() here.
+    // Chrome Android requires an explicit user gesture (button tap) for WebAuthn —
+    // calling it via requestAnimationFrame consumes no gesture, throws NotAllowedError
+    // immediately, and makes the "Try Again" button appear to do nothing because
+    // the error toast is hidden behind this overlay's z-index.
+    // The user will tap the button naturally.
   }
 
   // ══════════════════════════════════════════════════════════════════════════
