@@ -1219,8 +1219,16 @@
   // on app open when a saved credential exists on the device.
   // ══════════════════════════════════════════════════════════════════
 
-  const WA_CRED_KEY = 'fb_wa_cred';   // localStorage key for saved credential ID
-  const WA_TENANT_KEY = 'fb_wa_tid';  // localStorage key for tenant ID
+  const WA_CRED_KEY    = 'fb_wa_cred'; // localStorage key for saved credential ID
+  const WA_TENANT_KEY  = 'fb_wa_tid';  // localStorage key for tenant ID
+
+  // ── Unlock state ────────────────────────────────────────────────────────────
+  // false = biometric identity not yet verified this session
+  // true  = user passed biometric (or just logged in via password) this session
+  // Reset to false when: app goes to background for > RELOCK_AFTER ms, or logout.
+  let _biometricUnlocked = false;
+  let _hiddenAt          = null;       // timestamp when app was last hidden
+  const RELOCK_AFTER     = 60 * 1000; // re-lock after 60 s in background
 
   function _b64urlToBuffer(b64) {
     const b64std = b64.replace(/-/g, '+').replace(/_/g, '/');
@@ -1373,6 +1381,7 @@
         if (typeof loadData === 'function') {
           try { await loadData(); } catch(e) { console.warn('[WebAuthn] loadData:', e.message); }
         }
+        _biometricUnlocked = true; // ← must be true BEFORE enterApp() so the wrap passes through
         if (typeof enterApp === 'function') enterApp();
         if (typeof toast === 'function') toast('👋 Welcome, ' + result.userName, 'success');
         return true;
@@ -1403,63 +1412,228 @@
   }
 
   // ── Expose biometric functions globally for use in app.js / admin.js ──────
-  window._attemptBiometricLogin  = _attemptBiometricLogin;
-  window._offerBiometricSetup    = _offerBiometricSetup;
-  window._webauthnAvailable      = _webauthnAvailable;
+  window._attemptBiometricLogin = _attemptBiometricLogin;
+  window._offerBiometricSetup   = _offerBiometricSetup;
+  window._webauthnAvailable     = _webauthnAvailable;
 
-  // ── Patch login success paths AND showLoginScreen AFTER DOMContentLoaded ──
-  // IMPORTANT: Both patches are deferred to DOMContentLoaded so that all
-  // scripts (app.js, multitenant.js, etc.) have fully executed and defined
-  // their globals before we capture and wrap them. Patching at script-eval
-  // time would capture `undefined` for showLoginScreen because app.js has
-  // not yet exposed it on window at that point.
+  // ══════════════════════════════════════════════════════════════════════════
+  // ── Biometric Lock Screen UI ───────────────────────────────────────────
+  // A full-screen overlay shown when biometric verification is required.
+  // Matches the app's dark splash theme (#0a0c10 bg, #d4940f gold accent).
+  // opts.onSuccess  : called after successful biometric (overlay already gone)
+  // opts.onFallback : called when user taps "Use Password Instead"
+  // ══════════════════════════════════════════════════════════════════════════
+  function _showBiometricLockScreen(opts) {
+    opts = opts || {};
+
+    // Never stack two lock screens
+    if (document.getElementById('fb-bio-lock')) return;
+
+    const tenantName = (typeof APP !== 'undefined' && APP.tenant && APP.tenant.name)
+      ? APP.tenant.name : 'FuelBunk Pro';
+
+    const overlay = document.createElement('div');
+    overlay.id = 'fb-bio-lock';
+    overlay.style.cssText = [
+      'position:fixed;inset:0;z-index:999999',
+      'background:#0a0c10',
+      'display:flex;flex-direction:column;align-items:center;justify-content:center',
+      'gap:16px;padding:32px;box-sizing:border-box',
+      'font-family:inherit'
+    ].join(';');
+
+    overlay.innerHTML =
+      '<div style="font-size:52px">⛽</div>' +
+      '<div style="font-size:20px;font-weight:800;color:#f4f5f7;letter-spacing:-0.5px">' + tenantName + '</div>' +
+      '<div style="font-size:13px;color:#9498a5;text-align:center;max-width:260px;line-height:1.6">' +
+        'App locked — verify your identity to continue' +
+      '</div>' +
+      '<button id="fb-bio-btn" style="' +
+        'margin-top:8px;background:#d4940f;color:#000;border:none;' +
+        'padding:14px 36px;border-radius:12px;font-size:16px;font-weight:700;' +
+        'cursor:pointer;display:flex;align-items:center;gap:8px;' +
+      '">🔐 Unlock with Biometric</button>' +
+      '<button id="fb-bio-pw-btn" style="' +
+        'background:transparent;color:#9498a5;border:1px solid #2a2f3e;' +
+        'padding:10px 24px;border-radius:10px;font-size:13px;font-weight:600;' +
+        'cursor:pointer;' +
+      '">Use Password Instead</button>' +
+      '<div id="fb-bio-status" style="font-size:12px;color:#9498a5;min-height:18px;text-align:center"></div>';
+
+    document.body.appendChild(overlay);
+
+    function dismiss() {
+      var el = document.getElementById('fb-bio-lock');
+      if (el) el.remove();
+    }
+
+    async function doUnlock() {
+      var btn    = document.getElementById('fb-bio-btn');
+      var status = document.getElementById('fb-bio-status');
+      if (btn)    { btn.disabled = true; btn.textContent = '⏳ Waiting for biometric...'; }
+      if (status) { status.textContent = ''; }
+
+      var ok = await _attemptBiometricLogin();
+
+      if (ok) {
+        // _biometricUnlocked was set true inside _attemptBiometricLogin.
+        // enterApp() was also already called there — dismiss overlay and done.
+        dismiss();
+        if (opts.onSuccess) opts.onSuccess();
+        return;
+      }
+
+      // Biometric failed or was cancelled — let user retry or fall back
+      if (btn) {
+        btn.disabled = false;
+        btn.innerHTML = '🔐 Try Again';
+      }
+      if (status) { status.textContent = 'Could not verify — tap to retry'; }
+    }
+
+    document.getElementById('fb-bio-btn').addEventListener('click', doUnlock);
+
+    document.getElementById('fb-bio-pw-btn').addEventListener('click', function() {
+      dismiss();
+      _biometricUnlocked = false;
+      if (opts.onFallback) {
+        opts.onFallback();
+      } else {
+        // Default: clear session and show the original password login screen
+        if (typeof clearSession === 'function') clearSession();
+        if (typeof clearAuth    === 'function') clearAuth();
+        if (typeof showLoginScreen === 'function') showLoginScreen();
+      }
+    });
+
+    // Auto-trigger biometric after a short delay so the overlay renders first
+    setTimeout(doUnlock, 400);
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // ── Apply all patches after DOMContentLoaded ──────────────────────────
+  // CRITICAL: deferred so every script (app.js, employee.js, multitenant.js)
+  // has fully executed and placed its globals on window before we wrap them.
+  // ══════════════════════════════════════════════════════════════════════════
   function _applyBiometricPatches() {
-    // ── Patch 1: wrap appLogin to offer biometric setup after password login ──
-    const _prevAppLogin = window.appLogin;
-    if (typeof _prevAppLogin === 'function') {
+
+    // Capture all originals before patching
+    var _origEnterApp        = window.enterApp;
+    var _origShowLoginScreen = window.showLoginScreen;
+    var _origAppLogin        = window.appLogin;
+    var _origAppLogout       = window.appLogout;
+
+    // ── PATCH 1 (THE CORE FIX): wrap enterApp ──────────────────────────────
+    // THE ROOT CAUSE: initApp() calls loadSession() first. When a valid session
+    // exists it goes straight to enterApp() — showLoginScreen() is NEVER called.
+    // The previous fix only hooked showLoginScreen, so biometric was completely
+    // skipped every time the app opened with a valid session.
+    // FIX: intercept enterApp itself. If a biometric credential is saved and
+    // _biometricUnlocked is still false, show the lock screen before entering.
+    if (typeof _origEnterApp === 'function') {
+      window.enterApp = function() {
+        var credentialId = localStorage.getItem(WA_CRED_KEY);
+        if (credentialId && _webauthnAvailable() && !_biometricUnlocked) {
+          // Show lock screen — it will call _attemptBiometricLogin(), which on
+          // success sets _biometricUnlocked = true then calls enterApp() again.
+          // That second call will see _biometricUnlocked = true and pass through.
+          _showBiometricLockScreen({
+            onFallback: function() {
+              // User chose password — clear session and show original login form
+              if (typeof clearSession === 'function') clearSession();
+              if (typeof clearAuth    === 'function') clearAuth();
+              if (typeof _origShowLoginScreen === 'function') _origShowLoginScreen();
+            }
+          });
+          return; // do NOT enter app yet
+        }
+        // Unlocked (or no biometric set up) — enter normally
+        return _origEnterApp.apply(this, arguments);
+      };
+    }
+
+    // ── PATCH 2: wrap appLogin — unlock + offer biometric after password login ──
+    if (typeof _origAppLogin === 'function') {
       window.appLogin = async function() {
-        const tokenBefore = localStorage.getItem('_fb_auth_token');
-        await _prevAppLogin.apply(this, arguments);
-        const tokenAfter = localStorage.getItem('_fb_auth_token');
-        // Token changed → login succeeded → offer biometric registration
+        var tokenBefore = localStorage.getItem('_fb_auth_token');
+        await _origAppLogin.apply(this, arguments);
+        var tokenAfter = localStorage.getItem('_fb_auth_token');
         if (tokenAfter && tokenAfter !== tokenBefore) {
-          const sess = JSON.parse(localStorage.getItem('fb_session') || '{}');
-          _offerBiometricSetup(tokenAfter, sess.tenant?.id, sess.adminUser?.name);
+          // Password login succeeded → mark unlocked so enterApp passes through
+          _biometricUnlocked = true;
+          var sess = JSON.parse(localStorage.getItem('fb_session') || '{}');
+          _offerBiometricSetup(tokenAfter, sess.tenant && sess.tenant.id, sess.adminUser && sess.adminUser.name);
         }
       };
     }
 
-    // ── Patch 2: wrap showLoginScreen to attempt biometric FIRST on app open ──
-    // FIX: captured here (deferred) so window.showLoginScreen is already defined
-    // by app.js instead of being undefined at bridge.js script-evaluation time.
-    const _origShowLoginScreen = window.showLoginScreen;
-    window.showLoginScreen = async function() {
-      // Skip biometric attempt if already logged in
-      if (typeof APP !== 'undefined' && APP.loggedIn) {
-        return typeof _origShowLoginScreen === 'function'
-          ? _origShowLoginScreen.apply(this, arguments)
-          : undefined;
-      }
-      const credentialId = localStorage.getItem(WA_CRED_KEY);
-      if (credentialId && _webauthnAvailable()) {
-        const tried = await _attemptBiometricLogin();
-        if (tried) return; // Biometric succeeded — skip login screen entirely
-        // Biometric failed / cancelled — fall through to password login below
-      }
-      if (typeof _origShowLoginScreen === 'function') {
+    // ── PATCH 3: wrap showLoginScreen — biometric-first for expired-session path ──
+    // Covers the case where session has fully expired (8-hour idle or 30-day max).
+    // In that case initApp() does call showLoginScreen(), so we still hook it here
+    // as a secondary safety net.
+    if (typeof _origShowLoginScreen === 'function') {
+      window.showLoginScreen = async function() {
+        if (typeof APP !== 'undefined' && APP.loggedIn) {
+          return _origShowLoginScreen.apply(this, arguments);
+        }
+        var credentialId = localStorage.getItem(WA_CRED_KEY);
+        if (credentialId && _webauthnAvailable()) {
+          var tried = await _attemptBiometricLogin();
+          if (tried) return;
+        }
         return _origShowLoginScreen.apply(this, arguments);
-      }
-    };
+      };
+    }
 
-    console.log('[Bridge] Biometric patches applied');
+    // ── PATCH 4: wrap appLogout — reset unlock state ────────────────────────
+    if (typeof _origAppLogout === 'function' && !_origAppLogout._bioWrapped) {
+      window.appLogout = async function() {
+        _biometricUnlocked = false;
+        return _origAppLogout.apply(this, arguments);
+      };
+      window.appLogout._bioWrapped = true;
+    }
+
+    // ── PATCH 5: visibilitychange — re-lock when PWA returns from background ──
+    // On mobile, opening a PWA from the home screen or app switcher does NOT fire
+    // DOMContentLoaded — the page is already loaded. Instead, the browser fires
+    // visibilitychange (hidden → visible). We track how long the app was hidden:
+    // if it exceeds RELOCK_AFTER (60 s) and the user is logged in with biometric
+    // set up, we set _biometricUnlocked = false and show the lock screen again.
+    document.addEventListener('visibilitychange', function() {
+      if (document.visibilityState === 'hidden') {
+        _hiddenAt = Date.now();
+        return;
+      }
+      // App became visible
+      if (!_hiddenAt) return;
+      var elapsed = Date.now() - _hiddenAt;
+      _hiddenAt = null;
+
+      if (elapsed < RELOCK_AFTER) return; // brief switch — don't re-lock
+
+      var credentialId = localStorage.getItem(WA_CRED_KEY);
+      var isLoggedIn   = typeof APP !== 'undefined' && APP.loggedIn;
+      if (!isLoggedIn || !credentialId || !_webauthnAvailable()) return;
+
+      // Enough time has passed — re-lock
+      _biometricUnlocked = false;
+      _showBiometricLockScreen({
+        // onSuccess: overlay dismissed, app already running — nothing else needed
+        onFallback: function() {
+          // User wants to re-authenticate via password — log them out
+          if (typeof appLogout === 'function') appLogout();
+        }
+      });
+    });
+
+    console.log('[Bridge] Biometric patches applied — enterApp intercepted, visibilitychange armed');
   }
 
-  // Defer until all scripts have run. DOMContentLoaded fires after all
-  // synchronous bottom-of-body scripts execute, so this is the safe moment.
+  // Defer until all bottom-of-body scripts have executed
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', _applyBiometricPatches, { once: true });
   } else {
-    // DOMContentLoaded already fired (e.g. script injected dynamically)
     _applyBiometricPatches();
   }
 
