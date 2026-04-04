@@ -889,6 +889,11 @@ function authRoutes(db) {
 
       // Parse authenticatorData to get sign count (replay attack prevention)
       const authDataBuf = _fromBase64url(credResponse.authenticatorData);
+      // FIX 8: WebAuthn spec guarantees ≥37 bytes, but reject malformed/tampered bodies
+      // before readUInt32BE(33) throws an unhandled RangeError that leaks a stack trace.
+      if (authDataBuf.length < 37) {
+        return res.status(400).json({ error: 'Invalid authenticatorData — too short' });
+      }
       // Bytes 33-36 are the sign count (big-endian uint32)
       const signCount = authDataBuf.readUInt32BE(33);
 
