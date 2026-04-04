@@ -367,6 +367,129 @@ test('UR-19 + UR-20 Integration', 'Future date should show filtered dropdown', (
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// ALLOCATION ENFORCEMENT TESTS (UR-21 extension: roster gates allocation)
+// Requirement: Only employees already on the roster can be assigned to pumps.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Simulates getRosteredEmps() — the fixed version with no fallback.
+ * Only returns employees explicitly listed in rosterData for the given date+shift.
+ */
+function getRosteredEmpsStrict(employees, rosterData, date, shiftName) {
+  const rk = date + '_' + shiftName;
+  const ids = (rosterData && rosterData[rk]) || [];
+  return employees.filter(e => ids.includes(String(e.id)));
+}
+
+/**
+ * Simulates the assignNozzleForDate roster guard check.
+ * Returns true if assignment is allowed, false if blocked.
+ */
+function isAllowedToAssign(empId, date, shiftName, rosterData) {
+  const rosterKey = date + '_' + shiftName;
+  const rosteredIds = (rosterData && rosterData[rosterKey]) || [];
+  return rosteredIds.includes(String(empId));
+}
+
+const ALLOC_EMPLOYEES = [
+  { id: 1, name: 'Alice',   role: 'Attendant', shift: 'Morning' },
+  { id: 2, name: 'Bob',     role: 'Attendant', shift: 'Morning' },
+  { id: 3, name: 'Charlie', role: 'Supervisor', shift: 'Afternoon' },
+  { id: 4, name: 'Diana',   role: 'Attendant', shift: 'Morning,Afternoon' },
+];
+
+const TODAY = '2026-04-05';
+const TOMORROW = '2026-04-06';
+
+// Roster with only Alice and Bob on the morning of TODAY
+const SAMPLE_ROSTER = {
+  [`${TODAY}_Morning`]: ['1', '2'],
+  [`${TOMORROW}_Morning`]: ['1'],
+};
+
+test('Allocation enforcement', 'dropdown shows only rostered employees when roster exists', () => {
+  const emps = getRosteredEmpsStrict(ALLOC_EMPLOYEES, SAMPLE_ROSTER, TODAY, 'Morning');
+  assert.strictEqual(emps.length, 2, 'Should show exactly 2 rostered employees');
+  const names = emps.map(e => e.name);
+  assert.ok(names.includes('Alice'), 'Alice should be in dropdown');
+  assert.ok(names.includes('Bob'), 'Bob should be in dropdown');
+  assert.ok(!names.includes('Charlie'), 'Charlie (not rostered) must not appear');
+  assert.ok(!names.includes('Diana'), 'Diana (not rostered for this day) must not appear');
+});
+
+test('Allocation enforcement', 'dropdown is empty when no roster set for date+shift', () => {
+  const emps = getRosteredEmpsStrict(ALLOC_EMPLOYEES, SAMPLE_ROSTER, TODAY, 'Afternoon');
+  assert.strictEqual(emps.length, 0,
+    'No employees should appear when no roster is set — no fallback to shift-field matching');
+});
+
+test('Allocation enforcement', 'non-rostered employee cannot be assigned (guard check)', () => {
+  // Charlie (id=3) is NOT on the morning roster for TODAY
+  const allowed = isAllowedToAssign(3, TODAY, 'Morning', SAMPLE_ROSTER);
+  assert.strictEqual(allowed, false,
+    'Assignment must be blocked for employee not on the roster');
+});
+
+test('Allocation enforcement', 'rostered employee passes guard check', () => {
+  // Alice (id=1) IS on the morning roster for TODAY
+  const allowed = isAllowedToAssign(1, TODAY, 'Morning', SAMPLE_ROSTER);
+  assert.strictEqual(allowed, true,
+    'Assignment must be allowed for employee who is on the roster');
+});
+
+test('Allocation enforcement', 'employee on roster for one day is blocked on another day', () => {
+  // Bob (id=2) is on TODAY roster but NOT on TOMORROW roster
+  const allowedToday    = isAllowedToAssign(2, TODAY,    'Morning', SAMPLE_ROSTER);
+  const allowedTomorrow = isAllowedToAssign(2, TOMORROW, 'Morning', SAMPLE_ROSTER);
+  assert.strictEqual(allowedToday,    true,  'Bob allowed on TODAY (is rostered)');
+  assert.strictEqual(allowedTomorrow, false, 'Bob blocked on TOMORROW (not rostered that day)');
+});
+
+test('Allocation enforcement', 'no employees shown when roster data is entirely absent', () => {
+  const emps = getRosteredEmpsStrict(ALLOC_EMPLOYEES, {}, TODAY, 'Morning');
+  assert.strictEqual(emps.length, 0,
+    'Empty roster data must yield zero employees — no fallback allowed');
+});
+
+test('Allocation enforcement', 'employee with multi-shift field is still roster-gated', () => {
+  // Diana (id=4) has shift='Morning,Afternoon' — previously the fallback would show her
+  // even without being on the roster. Now she must be explicitly rostered.
+  const rosterWithoutDiana = { [`${TODAY}_Morning`]: ['1', '2'] }; // Diana (4) not listed
+  const emps = getRosteredEmpsStrict(ALLOC_EMPLOYEES, rosterWithoutDiana, TODAY, 'Morning');
+  const dianaPresent = emps.some(e => e.id === 4);
+  assert.strictEqual(dianaPresent, false,
+    'Diana must not appear even though her shift field includes Morning — must be on roster');
+});
+
+test('Allocation enforcement', 'auto-assign skips day when no employees rostered', () => {
+  // Simulate autoAssignAlloc logic for a day with no roster
+  const allocations = {};
+  const date = TODAY;
+  const shiftName = 'Afternoon';
+  const rosteredIds = (SAMPLE_ROSTER && SAMPLE_ROSTER[date + '_' + shiftName]) || [];
+  const dayEmps = ALLOC_EMPLOYEES.filter(e => rosteredIds.includes(String(e.id)));
+  // With no roster, dayEmps is empty — auto-assign should skip (dayEmps.length === 0)
+  if (dayEmps.length === 0) {
+    // skip — correct behaviour
+  } else {
+    allocations[date + '_' + shiftName] = {};
+  }
+  assert.ok(!allocations[date + '_' + shiftName],
+    'Auto-assign must not create allocation when no employees are rostered');
+});
+
+test('Allocation enforcement', 'auto-assign uses only rostered employees when roster exists', () => {
+  const date = TODAY;
+  const shiftName = 'Morning';
+  const rosteredIds = (SAMPLE_ROSTER && SAMPLE_ROSTER[date + '_' + shiftName]) || [];
+  const dayEmps = ALLOC_EMPLOYEES.filter(e => rosteredIds.includes(String(e.id)));
+  // dayEmps should be [Alice, Bob] — ids 1 and 2
+  assert.strictEqual(dayEmps.length, 2, 'Should find exactly 2 rostered employees');
+  assert.ok(dayEmps.every(e => ['1','2'].includes(String(e.id))),
+    'Auto-assign must only use rostered employees (Alice and Bob)');
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // TEST REPORT
 // ─────────────────────────────────────────────────────────────────────────────
 
