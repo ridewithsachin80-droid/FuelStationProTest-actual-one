@@ -1379,15 +1379,24 @@
       }
     } catch (e) {
       if (e.name === 'NotAllowedError') {
-        // User cancelled biometric — fall through to password login
+        // User dismissed or timed out — show a gentle hint and fall through to password login
         console.log('[WebAuthn] Biometric cancelled by user — showing password login');
+        if (typeof toast === 'function') toast('Biometric cancelled — enter your password to log in', 'info');
+      } else if (e.name === 'SecurityError') {
+        // rpId mismatch or insecure context — clear stored credential and inform user
+        console.warn('[WebAuthn] SecurityError (rpId mismatch or HTTP?) — clearing credential:', e.message);
+        localStorage.removeItem(WA_CRED_KEY);
+        localStorage.removeItem(WA_TENANT_KEY);
+        if (typeof toast === 'function') toast('Biometric login unavailable on this connection — please log in with your password', 'warning');
       } else if (e.name === 'InvalidStateError' || e.name === 'NotFoundError') {
         // Credential no longer valid on this device — clear it and show password login
         console.warn('[WebAuthn] Credential invalid — clearing:', e.message);
         localStorage.removeItem(WA_CRED_KEY);
         localStorage.removeItem(WA_TENANT_KEY);
+        if (typeof toast === 'function') toast('Biometric session expired — please log in with your password to re-enable it', 'info');
       } else {
         console.warn('[WebAuthn] Auth failed:', e.name, e.message);
+        if (typeof toast === 'function') toast('Biometric failed — please log in with your password', 'warning');
       }
     }
     return false;
@@ -1398,50 +1407,61 @@
   window._offerBiometricSetup    = _offerBiometricSetup;
   window._webauthnAvailable      = _webauthnAvailable;
 
-  // ── Patch login success paths to offer biometric setup ───────────────────
-  // We wrap the phone-login and username-login paths to call _offerBiometricSetup
-  // after a successful login. We do this by patching appLogin after bridge.js loads.
-  const _patchLoginForBiometric = function() {
+  // ── Patch login success paths AND showLoginScreen AFTER DOMContentLoaded ──
+  // IMPORTANT: Both patches are deferred to DOMContentLoaded so that all
+  // scripts (app.js, multitenant.js, etc.) have fully executed and defined
+  // their globals before we capture and wrap them. Patching at script-eval
+  // time would capture `undefined` for showLoginScreen because app.js has
+  // not yet exposed it on window at that point.
+  function _applyBiometricPatches() {
+    // ── Patch 1: wrap appLogin to offer biometric setup after password login ──
     const _prevAppLogin = window.appLogin;
     if (typeof _prevAppLogin === 'function') {
       window.appLogin = async function() {
-        // Remember token state before login
         const tokenBefore = localStorage.getItem('_fb_auth_token');
         await _prevAppLogin.apply(this, arguments);
         const tokenAfter = localStorage.getItem('_fb_auth_token');
-        // If a new token was set, login succeeded — offer biometric
+        // Token changed → login succeeded → offer biometric registration
         if (tokenAfter && tokenAfter !== tokenBefore) {
           const sess = JSON.parse(localStorage.getItem('fb_session') || '{}');
           _offerBiometricSetup(tokenAfter, sess.tenant?.id, sess.adminUser?.name);
         }
       };
     }
-  };
-  // Patch after DOM ready so all login overrides are in place
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', _patchLoginForBiometric);
-  } else {
-    setTimeout(_patchLoginForBiometric, 100);
+
+    // ── Patch 2: wrap showLoginScreen to attempt biometric FIRST on app open ──
+    // FIX: captured here (deferred) so window.showLoginScreen is already defined
+    // by app.js instead of being undefined at bridge.js script-evaluation time.
+    const _origShowLoginScreen = window.showLoginScreen;
+    window.showLoginScreen = async function() {
+      // Skip biometric attempt if already logged in
+      if (typeof APP !== 'undefined' && APP.loggedIn) {
+        return typeof _origShowLoginScreen === 'function'
+          ? _origShowLoginScreen.apply(this, arguments)
+          : undefined;
+      }
+      const credentialId = localStorage.getItem(WA_CRED_KEY);
+      if (credentialId && _webauthnAvailable()) {
+        const tried = await _attemptBiometricLogin();
+        if (tried) return; // Biometric succeeded — skip login screen entirely
+        // Biometric failed / cancelled — fall through to password login below
+      }
+      if (typeof _origShowLoginScreen === 'function') {
+        return _origShowLoginScreen.apply(this, arguments);
+      }
+    };
+
+    console.log('[Bridge] Biometric patches applied');
   }
 
-  // ── Patch initApp to try biometric BEFORE showing login screen ───────────
-  // We hook into showLoginScreen: if biometric is available, try it first.
-  const _origShowLoginScreen = window.showLoginScreen;
-  window.showLoginScreen = async function() {
-    // Only try biometric if not already logged in
-    if (typeof APP !== 'undefined' && APP.loggedIn) {
-      if (typeof _origShowLoginScreen === 'function') return _origShowLoginScreen.apply(this, arguments);
-      return;
-    }
-    const credentialId = localStorage.getItem(WA_CRED_KEY);
-    if (credentialId && _webauthnAvailable()) {
-      // Show a biometric prompt screen instead of the full login form
-      const tried = await _attemptBiometricLogin();
-      if (tried) return; // Biometric succeeded — no need to show login screen
-    }
-    // Biometric not available, not set up, or user cancelled — show normal login
-    if (typeof _origShowLoginScreen === 'function') return _origShowLoginScreen.apply(this, arguments);
-  };
+  // Defer until all scripts have run. DOMContentLoaded fires after all
+  // synchronous bottom-of-body scripts execute, so this is the safe moment.
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', _applyBiometricPatches, { once: true });
+  } else {
+    // DOMContentLoaded already fired (e.g. script injected dynamically)
+    _applyBiometricPatches();
+  }
 
   // ── Manage biometric credentials (exposed for Settings page) ─────────────
   window.removeBiometricCredential = async function() {
