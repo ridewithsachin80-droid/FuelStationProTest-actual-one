@@ -781,7 +781,7 @@ function authRoutes(db) {
         console.warn('[webauthn/register] Origin mismatch — expected:', RP_ORIGIN, 'got:', clientData.origin);
         return res.status(403).json({ error: 'Origin mismatch — ensure you are accessing the app from the correct URL' });
       }
-      const challengeData = _getChallenge(clientData.challenge);
+      const challengeData = await _getChallenge(clientData.challenge);
       if (!challengeData || challengeData.action !== 'register') {
         return res.status(400).json({ error: 'Challenge expired or invalid — try again' });
       }
@@ -905,7 +905,7 @@ function authRoutes(db) {
         console.warn('[webauthn/authenticate] Origin mismatch — expected:', RP_ORIGIN, 'got:', clientData.origin);
         return res.status(403).json({ error: 'Origin mismatch — ensure you are accessing the app from the correct URL' });
       }
-      const challengeData = _getChallenge(clientData.challenge);
+      const challengeData = await _getChallenge(clientData.challenge);
       if (!challengeData || challengeData.action !== 'authenticate') {
         return res.status(400).json({ error: 'Challenge expired — try again' });
       }
@@ -1122,7 +1122,7 @@ function authRoutes(db) {
       if (clientData.origin !== RP_ORIGIN) {
         return res.status(403).json({ error: 'Origin mismatch' });
       }
-      const challengeData = _getChallenge(clientData.challenge);
+      const challengeData = await _getChallenge(clientData.challenge);
       if (!challengeData || challengeData.action !== 'register' || challengeData.userType !== 'employee') {
         return res.status(400).json({ error: 'Challenge invalid or expired' });
       }
@@ -1217,7 +1217,7 @@ function authRoutes(db) {
       if (clientData.origin !== RP_ORIGIN) {
         return res.status(403).json({ error: 'Origin mismatch' });
       }
-      const challengeData = _getChallenge(clientData.challenge);
+      const challengeData = await _getChallenge(clientData.challenge);
       if (!challengeData || challengeData.action !== 'authenticate' || challengeData.userType !== 'employee') {
         return res.status(400).json({ error: 'Challenge expired — try again' });
       }
