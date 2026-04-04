@@ -728,7 +728,7 @@ function authRoutes(db) {
     }
 
     const challenge = _base64url(crypto.randomBytes(32));
-    _storeChallenge(challenge, {
+    await _storeChallenge(challenge, {
       userId: session.user_id,
       tenantId: session.tenant_id,
       userType: 'admin',
@@ -865,7 +865,7 @@ function authRoutes(db) {
         });
       }
 
-      _storeChallenge(challenge, {
+      await _storeChallenge(challenge, {
         userId: cred.user_id,
         tenantId: cred.tenant_id,
         credentialId,
@@ -1073,7 +1073,7 @@ function authRoutes(db) {
       }
 
       const challenge = _base64url(crypto.randomBytes(32));
-      _storeChallenge(challenge, { userId: empId, tenantId, userType: 'employee', action: 'register' });
+      await _storeChallenge(challenge, { userId: empId, tenantId, userType: 'employee', action: 'register' });
 
       res.json({
         challenge,
@@ -1185,7 +1185,7 @@ function authRoutes(db) {
         });
       }
 
-      _storeChallenge(challenge, {
+      await _storeChallenge(challenge, {
         userId: cred.user_id, tenantId: cred.tenant_id,
         credentialId, action: 'authenticate', userType: 'employee'
       });
