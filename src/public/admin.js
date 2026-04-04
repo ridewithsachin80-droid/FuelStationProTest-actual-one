@@ -1014,16 +1014,15 @@ function renderStaff(D) {
   // Roster key format: "YYYY-MM-DD_ShiftName"
   const rosterKey = allocDate + '_' + allocShift;
   const rosteredIds = (window._rosterData && window._rosterData[rosterKey]) || [];
-  // If roster has assignments for this date+shift, show only those employees
-  // Otherwise fall back to employees whose shift field includes this shift
-  const shiftEmps = (rosteredIds.length > 0
-    ? D.employees.filter(e => rosteredIds.includes(String(e.id)))
-    : D.employees.filter(e => { const sh=(e.shift||'').trim(); return !sh || sh.split(',').map(s=>s.trim()).includes(allocShift); })
-  ).sort((a, b) => (a.name||'').localeCompare(b.name||''));
+  // Only employees on the roster for this date+shift are shown in Allocation.
+  // No fallback to shift-field matching — if no roster is set, no employees appear.
+  const shiftEmps = D.employees
+    .filter(e => rosteredIds.includes(String(e.id)))
+    .sort((a, b) => (a.name||'').localeCompare(b.name||''));
   const rosterFiltered = rosteredIds.length > 0;
 
   const empOptions = shiftEmps.map(e => `<option value="${e.id}">${e.name} (${e.role})</option>`).join('')
-    || `<option value="" disabled>No employees rostered for this shift</option>`;
+    || `<option value="" disabled>No employees rostered — set roster first</option>`;
 
   // Shift sort helper: Morning → Noon/Afternoon → Evening → Night (ascending time-of-day order)
   const SHIFT_ORDER = ['morning','noon','afternoon','evening','night'];
@@ -1081,9 +1080,10 @@ function renderStaff(D) {
   function getRosteredEmps(date) {
     const rk = date + '_' + allocShift;
     const ids = (window._rosterData && window._rosterData[rk]) || [];
-    return ids.length > 0
-      ? D.employees.filter(e => ids.includes(String(e.id)))
-      : D.employees.filter(e => { const sh=(e.shift||'').trim(); return !sh || sh.split(',').map(s=>s.trim()).includes(allocShift); });
+    // Strict: only return employees who are explicitly on the roster for this date+shift.
+    // No fallback — if no roster is set, the dropdown shows empty so un-rostered
+    // employees cannot be assigned to pumps.
+    return D.employees.filter(e => ids.includes(String(e.id)));
   }
 
   // Day header row
@@ -11224,6 +11224,15 @@ function assignNozzleForDate(pumpId, nozzle, date, empId) {
   const emp  = APP.data.employees.find(e => parseInt(e.id) === parseInt(empId));
   const pump = APP.data.pumps.find(p => String(p.id) === String(pumpId));
   const d    = new Date(date).toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short'});
+
+  // Roster enforcement: only allow assignment if employee is on the roster for this date+shift
+  const rosterKey = date + '_' + allocShift;
+  const rosteredIds = (window._rosterData && window._rosterData[rosterKey]) || [];
+  if (!rosteredIds.includes(String(empId))) {
+    toast(`${emp?.name || 'Employee'} is not on the roster for ${allocShift} on ${d}. Add them to the Roster tab first.`, 'error');
+    renderPage();
+    return;
+  }
   // Conflict check
   const conflicts = _findNozzleConflict(date, allocShift, pumpId, nozzle);
   if (conflicts) {
@@ -11327,9 +11336,8 @@ function openChangeAllocModal(pumpId, nozzle) {
   const pump = D.pumps.find(p => String(p.id) === String(pumpId));
   const rosterKey = allocDate + '_' + allocShift;
   const rosteredIds = (window._rosterData && window._rosterData[rosterKey]) || [];
-  const shiftEmps = rosteredIds.length > 0
-    ? D.employees.filter(e => rosteredIds.includes(String(e.id)))
-    : D.employees.filter(e => { const sh=(e.shift||'').trim(); return !sh || sh.split(',').map(s=>s.trim()).includes(allocShift); });
+  // Strict: only rostered employees — no fallback to shift-field matching
+  const shiftEmps = D.employees.filter(e => rosteredIds.includes(String(e.id)));
 
   const empItems = shiftEmps.map(e => {
     const isCurrent = e.id === currentEmpId;
@@ -11362,9 +11370,8 @@ function autoAssignAlloc() {
   let totalAssigned = 0;
   weekDays.forEach(date => {
     const rosteredIds = (window._rosterData && window._rosterData[date + '_' + allocShift]) || [];
-    const dayEmps = rosteredIds.length > 0
-      ? D.employees.filter(e => rosteredIds.includes(String(e.id)))
-      : D.employees.filter(e => { const sh=(e.shift||'').trim(); return !sh || sh.split(',').map(s=>s.trim()).includes(allocShift); });
+    // Strict: auto-assign only from rostered employees — no fallback
+    const dayEmps = D.employees.filter(e => rosteredIds.includes(String(e.id)));
     if (dayEmps.length === 0) return;
     const dk = date + '_' + allocShift;
     if (!allocations[dk]) allocations[dk] = {};
