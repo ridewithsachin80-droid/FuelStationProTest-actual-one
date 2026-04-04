@@ -407,6 +407,7 @@
             active:      true,
           };
           if (typeof mt_setActiveTenant === 'function') mt_setActiveTenant(tenantObj);
+          if (typeof clearExplicitLogout === 'function') clearExplicitLogout();
           localStorage.setItem('fb_session', typeof signData === 'function' ? signData({
             loggedIn: true, role: 'admin',
             adminUser: { name: result.userName, username: phone, role: result.userRole },
@@ -457,6 +458,7 @@
       const result = await AuthAPI.adminLogin(user, pass, tenant.id);
       if (result.success) {
         setAuthToken(result.token);
+        if (typeof clearExplicitLogout === 'function') clearExplicitLogout();
         localStorage.setItem('fb_session', typeof signData === 'function' ? signData({
           loggedIn: true, role: 'admin',
           adminUser: { name: result.userName, username: user, role: result.userRole },
@@ -506,6 +508,7 @@
         APP.tenant = tenant;
 
         // Save to sessionStorage for page refresh
+        if (typeof clearExplicitLogout === 'function') clearExplicitLogout();
         localStorage.setItem('fb_session', typeof signData === 'function' ? signData({
           loggedIn: true, role: 'admin', adminUser: APP.adminUser,
           tenant: tenant, token: result.token,
@@ -1016,6 +1019,7 @@
             setTenantId(result.tenantId);
             const tenantObj = { id: result.tenantId, name: result.tenantName, location: result.tenantLocation||'', icon: result.tenantIcon||'⛽', color:'#d4940f', colorLight:'#f0b429', active:true };
             if (typeof mt_setActiveTenant === 'function') mt_setActiveTenant(tenantObj);
+            if (typeof clearExplicitLogout === 'function') clearExplicitLogout();
             localStorage.setItem('fb_session', typeof signData === 'function' ? signData({ loggedIn:true, role:'admin', adminUser:{name:result.userName, username:phone, role:result.userRole}, tenant:tenantObj, token:result.token, timestamp:Date.now(), lastActive:Date.now() }) : JSON.stringify({ loggedIn:true, role:'admin', adminUser:{name:result.userName, username:phone, role:result.userRole}, tenant:tenantObj, token:result.token, timestamp:Date.now(), lastActive:Date.now() }));
             if (typeof APP !== 'undefined') { APP.loggedIn=true; APP.role='admin'; APP.adminUser={name:result.userName, username:phone, role:result.userRole}; APP.tenant=tenantObj; }
             window.db = new FuelDB('FuelBunkPro_' + result.tenantId);
@@ -1042,6 +1046,7 @@
         if (result.success) {
           setAuthToken(result.token);
           setTenantId(tenant.id);
+          if (typeof clearExplicitLogout === 'function') clearExplicitLogout();
           localStorage.setItem('fb_session', typeof signData === 'function' ? signData({ loggedIn:true, role:'admin', adminUser:{name:result.userName, username:user, role:result.userRole}, tenant, token:result.token, timestamp:Date.now(), lastActive:Date.now() }) : JSON.stringify({ loggedIn:true, role:'admin', adminUser:{name:result.userName, username:user, role:result.userRole}, tenant, token:result.token, timestamp:Date.now(), lastActive:Date.now() }));
           if (typeof APP !== 'undefined') { APP.loggedIn=true; APP.role='admin'; APP.adminUser={name:result.userName, username:user, role:result.userRole}; APP.tenant=tenant; }
           window.db = new FuelDB('FuelBunkPro_' + tenant.id);
@@ -1522,6 +1527,7 @@
           color: '#d4940f', colorLight: '#f0b429', active: true
         };
         if (typeof mt_setActiveTenant === 'function') mt_setActiveTenant(tenantObj);
+        if (typeof clearExplicitLogout === 'function') clearExplicitLogout();
         localStorage.setItem('fb_session', typeof signData === 'function' ? signData({
           loggedIn: true, role: 'admin',
           adminUser: { name: result.userName, role: result.userRole },
@@ -1704,12 +1710,14 @@
       }
     });
 
-    // Do NOT auto-trigger navigator.credentials.get() here.
-    // Chrome Android requires an explicit user gesture (button tap) for WebAuthn —
-    // calling it via requestAnimationFrame consumes no gesture, throws NotAllowedError
-    // immediately, and makes the "Try Again" button appear to do nothing because
-    // the error toast is hidden behind this overlay's z-index.
-    // The user will tap the button naturally.
+    // BUG-09 FIX: Use double-rAF instead of the previous blind 400ms timeout.
+    // Two animation frames guarantee the lock-screen overlay has fully laid out AND
+    // painted before doUnlock() fires — frame 1 = layout, frame 2 = paint commit.
+    // A fixed setTimeout was a race: too short on slow devices, wasted time on fast ones.
+    // NOTE: On Chrome Android, navigator.credentials.get() still requires a real button
+    // tap (user gesture). doUnlock() handles that gracefully — if the gesture check fails
+    // it shows the "Try Again" button and the user taps to complete auth normally.
+    requestAnimationFrame(() => requestAnimationFrame(doUnlock));
   }
 
   // ══════════════════════════════════════════════════════════════════════════

@@ -3648,6 +3648,13 @@ let ADMIN_USERS = (() => {
 
 function loadSession() {
   try {
+    // Explicit logout check — appLogout() sets this flag so that a session
+    // written by another code path (e.g. biometric callback) cannot be restored
+    // after the user has deliberately signed out.
+    if (localStorage.getItem('fb_explicit_logout') === '1') {
+      localStorage.removeItem('fb_session');
+      return false;
+    }
     const raw = localStorage.getItem('fb_session');
     if (!raw) return false;
     const s = verifyData(raw);
@@ -3659,7 +3666,7 @@ function loadSession() {
       localStorage.removeItem('fb_session');
       return false;
     }
-    if (s.lastActive && Date.now() - s.lastActive > SESSION_IDLE_TIMEOUT) {
+    if (s.lastActive && Date.now() - s.lastActive >= SESSION_IDLE_TIMEOUT) {
       localStorage.removeItem('fb_session');
       return false;
     }
@@ -3669,6 +3676,9 @@ function loadSession() {
 }
 function saveSession() {
   try {
+    // A new login is happening — clear any prior explicit logout flag so the
+    // freshly-created session can be restored on the next page load.
+    if (typeof clearExplicitLogout === 'function') clearExplicitLogout();
     const data = {
       loggedIn: APP.loggedIn, role: APP.role, adminUser: APP.adminUser,
       timestamp: Date.now(), lastActive: Date.now()
@@ -4538,6 +4548,9 @@ function appLogout() {
     empState.active = false;
     empState.page = 'login';
   }
+  // Mark explicit logout BEFORE clearSession() so the flag survives even if
+  // something tries to re-write fb_session between now and page unload.
+  if (typeof markExplicitLogout === 'function') markExplicitLogout();
   clearSession();
   // FIX: Use replaceState to clear the hash without pushing a new skippable history entry
   try { history.replaceState(null, '', window.location.pathname); } catch(e) { window.location.hash = ''; }

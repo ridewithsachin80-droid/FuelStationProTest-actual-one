@@ -212,9 +212,30 @@ function validateExpenseInput(amount, category, desc) {
 }
 
 // Session expiry constants
-const SESSION_MAX_AGE = 30 * 24 * 60 * 60 * 1000; // 30 days
-const SESSION_IDLE_TIMEOUT = 8 * 60 * 60 * 1000;   // 8 hours (covers a full work shift)
+const SESSION_MAX_AGE     = 30 * 24 * 60 * 60 * 1000; // 30 days
+const SESSION_IDLE_TIMEOUT = 15 * 60 * 1000;           // 15 minutes inactivity
 let idleTimer = null;
+
+// ── Explicit logout marker ───────────────────────────────────────────────────
+// Written by appLogout() so loadSession() can reject a session that was
+// explicitly ended, even if fb_session was somehow re-written before reopen.
+function markExplicitLogout() {
+  try { localStorage.setItem('fb_explicit_logout', '1'); } catch(e) {}
+}
+function clearExplicitLogout() {
+  try { localStorage.removeItem('fb_explicit_logout'); } catch(e) {}
+}
+
+// ── Browser/tab close: clear session immediately ─────────────────────────────
+// pagehide fires on tab close, window close, and navigation away from the page.
+// It is more reliable than beforeunload in mobile browsers and PWAs.
+// Clearing fb_session here means reopening the app always requires re-login,
+// regardless of how much time has passed or what the idle timeout is set to.
+if (typeof window !== 'undefined') {
+  window.addEventListener('pagehide', function() {
+    try { localStorage.removeItem('fb_session'); } catch(e) {}
+  });
+}
 
 function resetIdleTimer() {
   clearTimeout(idleTimer);
