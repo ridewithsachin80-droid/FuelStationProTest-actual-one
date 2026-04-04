@@ -279,9 +279,9 @@ function renderDashboard(D) {
       </div>`
     : '';
 
-  // Subscription status badge — fetch if not loaded or stale (>60s)
+  // Subscription status badge — always fetch fresh (was 60s cache — caused stale "Trial Expired" display)
   const _subAge = window._subStatusAt ? (Date.now() - window._subStatusAt) : Infinity;
-  if (!window._subStatus || _subAge > 60000) {
+  if (!window._subStatus || _subAge > 10000) {  // 10s max cache — fast refresh after settings save
     const tid = APP.tenant?.id;
     if (tid) {
       fetch('/api/public/subscription/' + encodeURIComponent(tid))
@@ -296,8 +296,9 @@ function renderDashboard(D) {
   }
   const sub = window._subStatus;
   const subBadge = sub ? (() => {
+    const tdl = sub.trial_days_left ?? sub.days_left ?? 0;
     const STATUS_MAP = {
-      trial:     { bg:'rgba(59,130,246,0.12)', col:'#60a5fa', icon:'⏱️', label: sub.trial_days_left > 0 ? `Trial — ${sub.trial_days_left} days left` : 'Trial Expired' },
+      trial:     { bg:'rgba(59,130,246,0.12)', col:'#60a5fa', icon:'⏱️', label: tdl > 0 ? `Trial — ${tdl} days left` : 'Trial Expired' },
       active:    { bg:'rgba(34,197,94,0.12)',  col:'var(--green)', icon:'✅', label: sub.days_left > 7 ? `Active — expires ${new Date(sub.sub_end).toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'})}` : `Active — ${sub.days_left} days left` },
       grace:     { bg:'rgba(249,115,22,0.12)', col:'var(--orange)', icon:'⚠️', label: `Grace period — renew now` },
       expired:   { bg:'rgba(239,68,68,0.12)',  col:'var(--red)', icon:'🔒', label: 'Subscription expired — Read only mode' },

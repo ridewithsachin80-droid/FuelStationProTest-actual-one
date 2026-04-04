@@ -2167,16 +2167,19 @@ Pack decoding: "300x40ML-POU"=packQty:300,packSize:"40ml",packType:"Pouch",isCar
   app.get('/api/public/subscription/:tenantId', async (req, res) => {
     try {
       const sub = await pool.query('SELECT * FROM subscriptions WHERE tenant_id=$1', [req.params.tenantId]);
-      if (!sub.rows[0]) return res.json({ status: 'trial', days_left: 30, is_read_only: false });
+      if (!sub.rows[0]) return res.json({ status: 'trial', effective_status: 'trial', trial_days_left: 30, days_left: 30, is_read_only: false });
       const row = sub.rows[0];
       const now = new Date();
       let effectiveStatus = row.status;
       let daysLeft = null;
+      let trialDaysLeft = null;
       if (row.status === 'trial') {
         const trialEnd = new Date(row.trial_start);
         trialEnd.setDate(trialEnd.getDate() + (row.trial_days || 30));
-        daysLeft = Math.ceil((trialEnd - now) / 86400000);
-        effectiveStatus = daysLeft > 0 ? 'trial' : 'expired';
+        trialDaysLeft = Math.ceil((trialEnd - now) / 86400000);
+        daysLeft = trialDaysLeft;
+        effectiveStatus = trialDaysLeft > 0 ? 'trial' : 'expired';
+        row.trial_end = trialEnd.toISOString();
       } else if (row.status === 'active' && row.sub_end) {
         const subEnd = new Date(row.sub_end);
         const graceEnd = new Date(subEnd);
@@ -2186,11 +2189,17 @@ Pack decoding: "300x40ML-POU"=packQty:300,packSize:"40ml",packType:"Pouch",isCar
         else if (now > subEnd) effectiveStatus = 'grace';
       }
       res.json({
-        plan: row.plan, status: effectiveStatus, days_left: daysLeft,
-        sub_end: row.sub_end, is_read_only: effectiveStatus === 'expired',
+        plan: row.plan,
+        status: effectiveStatus,          // effective_status for badge lookup
+        effective_status: effectiveStatus, // explicit field
+        trial_days_left: Math.max(0, trialDaysLeft ?? 0), // what dashboard badge checks
+        days_left: daysLeft,
+        sub_end: row.sub_end,
+        trial_end: row.trial_end || null,
+        is_read_only: effectiveStatus === 'expired',
         price_monthly: row.price_monthly
       });
-    } catch(e) { res.json({ status: 'trial', days_left: 30, is_read_only: false }); }
+    } catch(e) { res.json({ status: 'trial', effective_status: 'trial', trial_days_left: 30, days_left: 30, is_read_only: false }); }
   });
 
   // Keep legacy /api/data/* and new /api/* route styles working together.
