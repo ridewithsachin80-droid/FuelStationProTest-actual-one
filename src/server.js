@@ -1468,6 +1468,32 @@ async function startServer() {
       res.status(429).json({ error: 'Too many login attempts. Please wait a few minutes and try again.' });
     },
   });
+
+  // BUG-03 FIX: Dedicated tight limiter for the two unauthenticated WebAuthn endpoints.
+  // The loginOnlyLimiter above keys by req.body.username, which WebAuthn requests don't
+  // have — it degrades to per-IP and is far too loose (30/5min) for a biometric auth flow.
+  // This limiter keys by credentialId (the device-specific handle) so a brute-force attempt
+  // against one credential doesn't exhaust the budget for other users on the same proxy IP.
+  const webauthnLimiter = rateLimit({
+    windowMs: 60_000,  // 1-minute window
+    max: 10,           // 10 attempts per minute per credentialId (or IP as fallback)
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req) => {
+      const credId = (req.body?.id || req.body?.credentialId || '').slice(0, 128);
+      const ip     = (req.headers['x-forwarded-for'] || req.ip || 'unknown').split(',')[0].trim();
+      return credId ? `wa:${credId}` : `wa-ip:${ip}`;
+    },
+    handler: (req, res) => {
+      res.status(429).json({ error: 'Too many biometric attempts — please wait a minute and try again.' });
+    },
+  });
+  // Apply before the main authRoutes mount so it fires first
+  app.use('/api/auth/webauthn/auth-options',           webauthnLimiter);
+  app.use('/api/auth/webauthn/authenticate',           webauthnLimiter);
+  app.use('/api/auth/webauthn/employee/auth-options',  webauthnLimiter);
+  app.use('/api/auth/webauthn/employee/authenticate',  webauthnLimiter);
+
   app.use('/api/auth', loginOnlyLimiter, authRoutes(db));
 
   // ── Settings routes ──────────────────────────────────────────────────────

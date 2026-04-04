@@ -785,7 +785,7 @@ function emp_renderLogin() {
         onclick="emp_doLogin()" ${hasEmployees ? '' : 'disabled'}>🔐 Login with PIN</button>
     </div>
     ${bioSupported && hasEmployees ? `<button id="empUsePinBtn" onclick="emp_showPinFallback(false)"
-      style="background:none;border:none;color:var(--text-3);font-size:11px;cursor:pointer;display:block;width:100%;text-align:center;margin-top:8px;padding:4px">
+      style="background:none;border:none;color:var(--text-3);font-size:11px;cursor:pointer;display:none;width:100%;text-align:center;margin-top:8px;padding:4px">
       Use PIN instead →
     </button>` : ''}
     ${hasEmployees ? '' : '<div style="font-size:11px;color:var(--red);margin-top:8px">No employees with PIN set. Ask admin to assign PINs in Staff &amp; Allocation.</div>'}
@@ -1524,36 +1524,10 @@ function emp_bioClearFails(empId) {
   } catch(e) {}
 }
 
-function emp_bioIsRegistered(empId) {
-  try {
-    const raw = localStorage.getItem(emp_bioStorageKey(empId));
-    return !!raw;
-  } catch(e) { return false; }
-}
-
-function emp_bioGetFails(empId) {
-  try {
-    const d = JSON.parse(localStorage.getItem(BIO_FAIL_KEY) || '{}');
-    return d[empId] || 0;
-  } catch(e) { return 0; }
-}
-
-function emp_bioRecordFail(empId) {
-  try {
-    const d = JSON.parse(localStorage.getItem(BIO_FAIL_KEY) || '{}');
-    d[empId] = (d[empId] || 0) + 1;
-    localStorage.setItem(BIO_FAIL_KEY, JSON.stringify(d));
-    return d[empId];
-  } catch(e) { return BIO_MAX_FAILS; }
-}
-
-function emp_bioClearFails(empId) {
-  try {
-    const d = JSON.parse(localStorage.getItem(BIO_FAIL_KEY) || '{}');
-    delete d[empId];
-    localStorage.setItem(BIO_FAIL_KEY, JSON.stringify(d));
-  } catch(e) {}
-}
+// BUG-02 FIX: The four duplicate localStorage-backed bio functions that used to
+// appear here have been removed. The sessionStorage-backed versions above are the
+// correct implementations — JS last-definition-wins meant those were silently
+// overriding the fix every time the page loaded.
 
 // BUG-06 FIX: emp_bioRegister now uses a server-issued challenge and stores
 // the credential server-side in webauthn_credentials (user_type='employee').
@@ -4300,15 +4274,12 @@ async function doEmpLogin() {
       }
       pinValid = vResult.valid === true;
     } catch(netErr) {
-      // Network error despite navigator.onLine — try local hash as last resort
-      console.warn('[doEmpLogin] Network error, trying local hash:', netErr.message);
-      const localHash = emp.pinHash;
-      if (localHash && localHash !== '__server__' && !localHash.startsWith('$2')) {
-        pinValid = pinHash === localHash; // SHA-256 comparison
-      } else {
-        toast('Cannot verify PIN — check your connection and try again.', 'error');
-        return;
-      }
+      // BUG-04 FIX: Never fall back to local SHA-256 on a network error while online.
+      // An attacker who can trigger 5xx (or intercept the response) would bypass bcrypt
+      // completely. Hard-fail here — the user must retry once their connection is stable.
+      console.warn('[doEmpLogin] Server unreachable:', netErr.message);
+      toast('Cannot verify PIN — check your connection and try again.', 'error');
+      return;
     }
   } else {
     // OFFLINE PATH: use local SHA-256 hash only

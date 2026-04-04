@@ -1085,7 +1085,7 @@
 
     // ── App logout ────────────────────────────────────────────────────────
     window.appLogout = async function() {
-      _biometricUnlocked = false; // FIX 4: always reset on logout
+      _bioLock.reset(); // FIX 4: always reset on logout
       try { await AuthAPI.logout(); } catch {}
       if (typeof APP !== 'undefined') {
         APP.loggedIn = false; APP.role = null; APP.adminUser = null; APP.data = null;
@@ -1237,23 +1237,29 @@
   // on app open when a saved credential exists on the device.
   // ══════════════════════════════════════════════════════════════════
 
-  const WA_CRED_KEY    = 'fb_wa_cred'; // localStorage key for saved credential ID
-  const WA_TENANT_KEY  = 'fb_wa_tid';  // localStorage key for tenant ID
+  // BUG-05 FIX: Use sessionStorage for WebAuthn credential IDs.
+  // localStorage persists across browser restarts, making the credential ID
+  // readable by any JS running in the page (XSS) and by anyone with physical
+  // access who opens DevTools after the browser has been closed. sessionStorage
+  // is wiped when the tab closes, limiting the exposure window significantly.
+  const WA_CRED_KEY    = 'fb_wa_cred'; // sessionStorage key for saved credential ID
+  const WA_TENANT_KEY  = 'fb_wa_tid';  // sessionStorage key for tenant ID
 
-  // ── Unlock state ────────────────────────────────────────────────────────────
-  // false = biometric identity not yet verified this session
-  // true  = user passed biometric (or just logged in via password) this session
-  // Reset to false when: app goes to background for > RELOCK_AFTER ms, or logout.
-  //
-  // BUG-09 NOTE — security boundary: _biometricUnlocked is a JavaScript variable
-  // and can be set from DevTools or a bookmarklet. It is a UX gate, not a security
-  // boundary. The actual security control is the server-side session token stored
-  // by setAuthToken(): every API call requires a valid Bearer token, and the server
-  // validates it on every request. If the token is missing or expired the server
-  // returns 401 regardless of this flag's value.
-  let _biometricUnlocked = false;
-  let _hiddenAt          = null;       // timestamp when app was last hidden
-  const RELOCK_AFTER     = 60 * 1000; // re-lock after 60 s in background
+  // ── Unlock state ─────────────────────────────────────────────────────────
+  // BUG-07 FIX: Wrap the unlock flag in a closure object so it cannot be
+  // trivially set to `true` from DevTools / a bookmarklet by name.
+  // Note: this remains a UX gate, not a security boundary — the real
+  // security control is the server-side Bearer token validated on every request.
+  const _bioLock = (() => {
+    let _unlocked = false;
+    return {
+      get:   ()    => _unlocked,
+      set:   (val) => { _unlocked = !!val; },
+      reset: ()    => { _unlocked = false; },
+    };
+  })();
+  let _hiddenAt      = null;
+  const RELOCK_AFTER = 60 * 1000; // re-lock after 60 s in background
 
   function _b64urlToBuffer(b64) {
     const b64std = b64.replace(/-/g, '+').replace(/_/g, '/');
@@ -1281,7 +1287,7 @@
     if (!token) return;
 
     // Don't ask again if already registered on this device
-    const existingCred = localStorage.getItem(WA_CRED_KEY);
+    const existingCred = sessionStorage.getItem(WA_CRED_KEY);
     if (existingCred) return;
 
     // Small delay so the welcome toast shows first
@@ -1367,8 +1373,8 @@
 
       if (result.success) {
         // Save credential ID locally for next app open
-        localStorage.setItem(WA_CRED_KEY, credential.id);
-        localStorage.setItem(WA_TENANT_KEY, tenantId);
+        sessionStorage.setItem(WA_CRED_KEY, credential.id);
+        sessionStorage.setItem(WA_TENANT_KEY, tenantId);
         if (typeof toast === 'function') toast('✅ Biometric login enabled! Use it next time.', 'success');
       }
     } catch (e) {
@@ -1384,8 +1390,8 @@
   async function _attemptBiometricLogin() {
     if (!_webauthnAvailable()) return false;
 
-    const credentialId = localStorage.getItem(WA_CRED_KEY);
-    const tenantId = localStorage.getItem(WA_TENANT_KEY);
+    const credentialId = sessionStorage.getItem(WA_CRED_KEY);
+    const tenantId = sessionStorage.getItem(WA_TENANT_KEY);
     if (!credentialId || !tenantId) return false;
 
     try {
@@ -1452,7 +1458,7 @@
         if (typeof loadData === 'function') {
           try { await loadData(); } catch(e) { console.warn('[WebAuthn] loadData:', e.message); }
         }
-        _biometricUnlocked = true; // ← must be true BEFORE enterApp() so the wrap passes through
+        _bioLock.set(true); // ← must be true BEFORE enterApp() so the wrap passes through
         if (typeof enterApp === 'function') enterApp();
         if (typeof toast === 'function') toast('👋 Welcome, ' + result.userName, 'success');
         return true;
@@ -1465,14 +1471,14 @@
       } else if (e.name === 'SecurityError') {
         // rpId mismatch or insecure context — clear stored credential and inform user
         console.warn('[WebAuthn] SecurityError (rpId mismatch or HTTP?) — clearing credential:', e.message);
-        localStorage.removeItem(WA_CRED_KEY);
-        localStorage.removeItem(WA_TENANT_KEY);
+        sessionStorage.removeItem(WA_CRED_KEY);
+        sessionStorage.removeItem(WA_TENANT_KEY);
         if (typeof toast === 'function') toast('Biometric login unavailable on this connection — please log in with your password', 'warning');
       } else if (e.name === 'InvalidStateError' || e.name === 'NotFoundError') {
         // Credential no longer valid on this device — clear it and show password login
         console.warn('[WebAuthn] Credential invalid — clearing:', e.message);
-        localStorage.removeItem(WA_CRED_KEY);
-        localStorage.removeItem(WA_TENANT_KEY);
+        sessionStorage.removeItem(WA_CRED_KEY);
+        sessionStorage.removeItem(WA_TENANT_KEY);
         if (typeof toast === 'function') toast('Biometric session expired — please log in with your password to re-enable it', 'info');
       } else {
         console.warn('[WebAuthn] Auth failed:', e.name, e.message);
@@ -1547,7 +1553,7 @@
       var ok = await _attemptBiometricLogin();
 
       if (ok) {
-        // _biometricUnlocked was set true inside _attemptBiometricLogin.
+        // _bioLock was set true inside _attemptBiometricLogin.
         // enterApp() was also already called there — dismiss overlay and done.
         dismiss();
         if (opts.onSuccess) opts.onSuccess();
@@ -1566,7 +1572,7 @@
 
     document.getElementById('fb-bio-pw-btn').addEventListener('click', function() {
       dismiss();
-      _biometricUnlocked = false;
+      _bioLock.reset();
       if (opts.onFallback) {
         opts.onFallback();
       } else {
@@ -1577,8 +1583,11 @@
       }
     });
 
-    // Auto-trigger biometric after a short delay so the overlay renders first
-    setTimeout(doUnlock, 400);
+    // BUG-09 FIX: Use double requestAnimationFrame instead of a hardcoded 400ms
+    // delay. rAF fires after the browser has committed the current frame to the
+    // screen, so the lock-screen overlay is guaranteed to be visible before the
+    // biometric prompt appears — regardless of device speed.
+    requestAnimationFrame(() => requestAnimationFrame(doUnlock));
   }
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -1599,14 +1608,14 @@
     // The previous fix only hooked showLoginScreen, so biometric was completely
     // skipped every time the app opened with a valid session.
     // FIX: intercept enterApp itself. If a biometric credential is saved and
-    // _biometricUnlocked is still false, show the lock screen before entering.
+    // _bioLock is still false, show the lock screen before entering.
     if (typeof _origEnterApp === 'function') {
       window.enterApp = function() {
-        var credentialId = localStorage.getItem(WA_CRED_KEY);
-        if (credentialId && _webauthnAvailable() && !_biometricUnlocked) {
+        var credentialId = sessionStorage.getItem(WA_CRED_KEY);
+        if (credentialId && _webauthnAvailable() && !_bioLock.get()) {
           // Show lock screen — it will call _attemptBiometricLogin(), which on
-          // success sets _biometricUnlocked = true then calls enterApp() again.
-          // That second call will see _biometricUnlocked = true and pass through.
+          // success sets _bioLock to true then calls enterApp() again.
+          // That second call will see _bioLock.get() as true and pass through.
           _showBiometricLockScreen({
             onFallback: function() {
               // User chose password — clear session and show original login form
@@ -1624,7 +1633,7 @@
 
     // ── PATCH 2: wrap ALL password login entry points ──────────────────────
     // BUG-1 FIX: The HTML form calls doAdminLogin() (not appLogin). Both must
-    // be wrapped so that any successful password login sets _biometricUnlocked = true
+    // be wrapped so that any successful password login sets _bioLock to true
     // BEFORE enterApp() is called, preventing the lock screen from firing immediately
     // after a deliberate password login.
     function _wrapLoginFn(fnName) {
@@ -1636,7 +1645,7 @@
         var tokenAfter = localStorage.getItem('_fb_auth_token');
         if (tokenAfter && tokenAfter !== tokenBefore) {
           // A new token was issued → login succeeded → mark device as unlocked
-          _biometricUnlocked = true;
+          _bioLock.set(true);
           var sess = JSON.parse(localStorage.getItem('fb_session') || '{}');
           _offerBiometricSetup(tokenAfter, sess.tenant && sess.tenant.id, sess.adminUser && sess.adminUser.name);
         }
@@ -1654,7 +1663,7 @@
         if (typeof APP !== 'undefined' && APP.loggedIn) {
           return _origShowLoginScreen.apply(this, arguments);
         }
-        var credentialId = localStorage.getItem(WA_CRED_KEY);
+        var credentialId = sessionStorage.getItem(WA_CRED_KEY);
         if (credentialId && _webauthnAvailable()) {
           var tried = await _attemptBiometricLogin();
           if (tried) return;
@@ -1666,7 +1675,7 @@
     // ── PATCH 4: wrap appLogout — reset unlock state ────────────────────────
     if (typeof _origAppLogout === 'function' && !_origAppLogout._bioWrapped) {
       window.appLogout = async function() {
-        _biometricUnlocked = false;
+        _bioLock.reset();
         return _origAppLogout.apply(this, arguments);
       };
       window.appLogout._bioWrapped = true;
@@ -1701,12 +1710,12 @@
 
       if (elapsed < _relockThreshold) return;
 
-      var credentialId = localStorage.getItem(WA_CRED_KEY);
+      var credentialId = sessionStorage.getItem(WA_CRED_KEY);
       var isLoggedIn   = typeof APP !== 'undefined' && APP.loggedIn;
       if (!isLoggedIn || !credentialId || !_webauthnAvailable()) return;
 
       // Enough time has passed — re-lock
-      _biometricUnlocked = false;
+      _bioLock.reset();
       _showBiometricLockScreen({
         // onSuccess: overlay dismissed, app already running — nothing else needed
         onFallback: function() {
@@ -1728,18 +1737,18 @@
 
   // ── Manage biometric credentials (exposed for Settings page) ─────────────
   window.removeBiometricCredential = async function() {
-    const credentialId = localStorage.getItem(WA_CRED_KEY);
+    const credentialId = sessionStorage.getItem(WA_CRED_KEY);
     if (!credentialId) { if(typeof toast==='function') toast('No biometric set up on this device', 'info'); return; }
     try {
       const list = await AuthAPI.webauthnCredentials();
       const match = (list.credentials || []).find(c => c.credential_id === credentialId);
       if (match) await AuthAPI.webauthnRemoveCredential(match.id);
-      localStorage.removeItem(WA_CRED_KEY);
-      localStorage.removeItem(WA_TENANT_KEY);
+      sessionStorage.removeItem(WA_CRED_KEY);
+      sessionStorage.removeItem(WA_TENANT_KEY);
       if(typeof toast==='function') toast('Biometric login removed from this device', 'success');
     } catch(e) {
-      localStorage.removeItem(WA_CRED_KEY);
-      localStorage.removeItem(WA_TENANT_KEY);
+      sessionStorage.removeItem(WA_CRED_KEY);
+      sessionStorage.removeItem(WA_TENANT_KEY);
       if(typeof toast==='function') toast('Biometric login removed', 'success');
     }
   };

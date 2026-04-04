@@ -291,7 +291,7 @@ function openChangeMyPasswordModal() {
     ? `<div class="form-group" style="border-top:1px solid var(--border);padding-top:14px;margin-top:4px">
          <label class="form-label">🔐 Biometric Login</label>
          <p style="color:var(--text-muted);font-size:12px;margin-bottom:10px">Use fingerprint, face, or screen PIN instead of password when opening the app.</p>
-         ${localStorage.getItem('fb_wa_cred')
+         ${sessionStorage.getItem('fb_wa_cred')
            ? `<button class="btn btn-ghost" style="width:100%;border-color:var(--danger)" onclick="closeModal();removeBiometricCredential()">Remove Biometric from This Device</button>`
            : `<button class="btn btn-ghost" style="width:100%" onclick="closeModal();setupBiometricNow()">Set Up Biometric Login →</button>`
          }

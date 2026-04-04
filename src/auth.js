@@ -18,6 +18,7 @@
  */
 const express = require('express');
 const { hashPassword, verifyPassword } = require('./schema');
+const { extractPublicKeyDER, verifyWebAuthnSignature } = require('./webauthn-crypto');
 const {
   bruteForceCheck, recordLoginAttempt, createSession,
   destroySession, auditLog, requireRole
@@ -797,9 +798,18 @@ function authRoutes(db) {
       // using the standard SubtleCrypto approach on the client side.
       // For server-side verification we use the clientDataJSON hash approach.
 
-      // Store credential — the credentialId (id) is the unique device key
+      // Extract SPKI DER from the attestationObject and store it directly.
+      // This replaces the previous approach of storing the raw attestationObject blob,
+      // which made server-side signature verification impossible without a CBOR library.
       const credentialId = id;
-      const publicKeyBlob = credResponse.attestationObject; // base64url encoded
+      let publicKeyBlob;
+      try {
+        const derBuf = extractPublicKeyDER(credResponse.attestationObject);
+        publicKeyBlob = derBuf.toString('base64'); // stored as standard base64
+      } catch (keyErr) {
+        console.error('[webauthn/register] Failed to extract public key:', keyErr.message);
+        return res.status(400).json({ error: 'Unsupported authenticator key type — only P-256 (ES256) is supported' });
+      }
 
       // Check if already registered (update counter reset)
       const existing = await db.prepare(
@@ -925,6 +935,27 @@ function authRoutes(db) {
           'stored counter:', cred.counter, 'received:', signCount);
         return res.status(403).json({ error: 'Authentication rejected — possible replay attack' });
       }
+
+      // ── ECDSA Signature Verification (BUG-01 FIX) ──────────────────────
+      // Verify the authenticator's cryptographic signature against the stored
+      // public key. Without this, ANY credential ID + challenge is accepted.
+      let sigValid = false;
+      try {
+        sigValid = verifyWebAuthnSignature(
+          cred.public_key,                  // base64 SPKI DER (or legacy attestationObject)
+          credResponse.authenticatorData,   // base64url
+          credResponse.clientDataJSON,      // base64url
+          credResponse.signature            // base64url DER-encoded ECDSA sig
+        );
+      } catch (sigErr) {
+        console.error('[webauthn/authenticate] Signature verification error:', sigErr.message);
+        return res.status(403).json({ error: 'Biometric verification failed' });
+      }
+      if (!sigValid) {
+        console.warn('[webauthn/authenticate] INVALID signature for credential:', id);
+        return res.status(403).json({ error: 'Biometric verification failed — invalid signature' });
+      }
+      // ── Signature verified ✓ ─────────────────────────────────────────────
 
       // All checks passed — update counter and issue session
       await db.prepare(
@@ -1099,6 +1130,16 @@ function authRoutes(db) {
       const empId    = empSession ? empSession.user_id    : (bodyEmpId || challengeData.userId);
       const tenantId = empSession ? empSession.tenant_id  : (adminSession?.tenant_id || challengeData.tenantId);
 
+      // Extract SPKI DER from attestationObject for server-side sig verification
+      let empPublicKeyBlob;
+      try {
+        const derBuf = extractPublicKeyDER(credResponse.attestationObject);
+        empPublicKeyBlob = derBuf.toString('base64');
+      } catch (keyErr) {
+        console.error('[webauthn/employee/register] Key extraction failed:', keyErr.message);
+        return res.status(400).json({ error: 'Unsupported authenticator key type — only P-256 (ES256) is supported' });
+      }
+
       // Upsert: update last_used if already registered, otherwise insert
       const existing = await db.prepare(
         'SELECT id FROM webauthn_credentials WHERE credential_id = $1'
@@ -1114,7 +1155,7 @@ function authRoutes(db) {
            VALUES ($1, $2, $3, $4, $5, $6, $7)`
         ).run(
           String(empId), 'employee', tenantId,
-          id, credResponse.attestationObject, 0, deviceName || 'My Device'
+          id, empPublicKeyBlob, 0, deviceName || 'My Device'
         );
       }
       res.json({ success: true, message: 'Biometric registered — use it next time you log in!' });
@@ -1199,6 +1240,25 @@ function authRoutes(db) {
         console.warn('[webauthn/employee] Replay attack detected! credentialId:', id);
         return res.status(403).json({ error: 'Authentication rejected — possible replay attack' });
       }
+
+      // ── ECDSA Signature Verification (BUG-01 FIX) ──────────────────────
+      let sigValid = false;
+      try {
+        sigValid = verifyWebAuthnSignature(
+          cred.public_key,
+          credResponse.authenticatorData,
+          credResponse.clientDataJSON,
+          credResponse.signature
+        );
+      } catch (sigErr) {
+        console.error('[webauthn/employee/authenticate] Signature error:', sigErr.message);
+        return res.status(403).json({ error: 'Biometric verification failed' });
+      }
+      if (!sigValid) {
+        console.warn('[webauthn/employee/authenticate] INVALID signature for credential:', id);
+        return res.status(403).json({ error: 'Biometric verification failed — invalid signature' });
+      }
+      // ── Signature verified ✓ ─────────────────────────────────────────────
 
       await db.prepare(
         'UPDATE webauthn_credentials SET counter = $1, last_used_at = NOW() WHERE credential_id = $2'
