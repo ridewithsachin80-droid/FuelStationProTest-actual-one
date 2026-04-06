@@ -1502,6 +1502,28 @@ async function startServer() {
   const { requireRole: reqRole, auditLog: auLog } = require('./security');
   const { hashPassword: hashPw, verifyPassword: verifyPw } = require('./schema');
 
+  // GET global username uniqueness check (super admin only)
+  // Used by the Add Station form to detect duplicate admin usernames across all stations.
+  app.get('/api/data/check-username', authMiddleware(db), reqRole('super'), async (req, res) => {
+    const username = (req.query.username || '').trim().toLowerCase();
+    if (!username || username.length < 2) {
+      return res.status(400).json({ error: 'Username required' });
+    }
+    try {
+      const row = await db.prepare(
+        `SELECT au.username, t.name AS station_name, t.id AS tenant_id
+         FROM admin_users au JOIN tenants t ON t.id = au.tenant_id
+         WHERE LOWER(au.username) = $1 LIMIT 1`
+      ).get(username);
+      if (row) {
+        return res.json({ duplicate: true, station_name: row.station_name, tenant_id: row.tenant_id });
+      }
+      return res.json({ duplicate: false });
+    } catch (e) {
+      return res.status(500).json({ error: e.message });
+    }
+  });
+
   // GET tenant admins
   // BUG-07 FIX: Allow station Owner/admin to list admins in their own tenant (needed for the
   // saveAdminPassword bridge fix which fetches real DB IDs before calling reset-password).
