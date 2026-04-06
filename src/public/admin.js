@@ -8154,6 +8154,16 @@ function buildNav() {
   if (APP.loggedIn && APP.role === 'admin' && APP.adminUser?.role) {
     html += `<div style="padding:8px 14px;margin-top:8px;font-size:11px;color:var(--text-3)">Logged in as <span style="font-weight:700;color:var(--text-1)">${sanitize(APP.adminUser.name||'')}</span> · ${roleBadge(APP.adminUser.role)}</div>`;
   }
+  // Logout button — always visible in sidebar (critical for mobile where topbar button is hidden)
+  if (APP.loggedIn) {
+    html += `<div style="margin:6px 12px 4px;border-top:1px solid var(--border-light)"></div>
+    <button class="nav-btn" onclick="appLogout()" style="margin:2px 8px;color:var(--red);border:1px solid rgba(220,53,53,0.25);border-radius:8px;background:rgba(220,53,53,0.06)">
+      <span class="nav-icon" style="font-size:15px">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+      </span>
+      <span class="nav-label">Logout</span>
+    </button>`;
+  }
   document.getElementById('nav').innerHTML = html;
 }
 
