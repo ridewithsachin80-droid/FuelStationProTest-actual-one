@@ -351,7 +351,7 @@ function mt_showTenantForm(existing) {
           </div>
           <div class="form-row">
             <div class="form-group"><label class="form-label" for="tIcon">Phone</label>
-              <div style="display:flex;gap:8px"><input class="form-input" id="tPhoneCC" type="tel" inputmode="numeric" maxlength="4" placeholder="+91" value="${existing?.phoneCC||'+91'}" style="width:72px;flex-shrink:0" /><input class="form-input" id="tPhone" type="tel" inputmode="numeric" maxlength="10" minlength="10" oninput="this.value=this.value.replace(/[^0-9]/g,'')" placeholder="10-digit number" value="${existing?.phone||''}" style="flex:1" /></div>
+              <div style="display:flex;gap:8px"><input class="form-input" id="tPhoneCC" type="tel" inputmode="numeric" maxlength="4" placeholder="+91" value="${existing?.phoneCC||'+91'}" style="width:72px;flex-shrink:0" /><input class="form-input" id="tPhone" type="tel" inputmode="numeric" maxlength="10" minlength="10" oninput="this.value=this.value.replace(/[^0-9]/g,'');mt_mirrorPhoneToAdmin(this.value)" placeholder="10-digit number" value="${existing?.phone||''}" style="flex:1" /></div>
             </div>
             <div class="form-group"><label class="form-label">Station Icon</label>
               <select class="form-input" id="tIcon">
@@ -377,7 +377,8 @@ function mt_showTenantForm(existing) {
             </div>
             <div class="form-row">
               <div class="form-group mb-0"><label class="form-label" for="tAdminUser">Admin Username</label>
-                <input class="form-input" id="tAdminUser" placeholder="e.g. mirji_owner" />
+                <input class="form-input" id="tAdminUser" placeholder="e.g. mirji_owner" oninput="mt_checkAdminUserDuplicate(this.value)" onblur="mt_checkAdminUserDuplicate(this.value)" />
+                <div id="tAdminUserError" style="display:none;color:var(--red);font-size:11px;margin-top:4px;line-height:1.4;padding:5px 8px;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.2);border-radius:5px"></div>
               </div>
               <div class="form-group mb-0"><label class="form-label" for="tAdminPass">Admin Password</label>
                 <input class="form-input" id="tAdminPass" type="password" placeholder="Min 8 characters" />
@@ -397,6 +398,80 @@ function mt_showTenantForm(existing) {
 
 }
 
+
+// ── Phone → Admin Username auto-fill ──────────────────────────────────────
+// Mirrors the station phone number into the admin username field as a default.
+// Only fills if the admin field hasn't been manually changed by the user.
+function mt_mirrorPhoneToAdmin(phone) {
+  const adminField = document.getElementById('tAdminUser');
+  if (!adminField) return;
+  // Only auto-fill when the user hasn't overridden the field manually
+  if (!adminField.dataset.manuallyEdited) {
+    adminField.value = phone;
+    mt_checkAdminUserDuplicate(phone);
+  }
+}
+
+// ── Global admin username duplicate check ─────────────────────────────────
+// Checks the entered username against all existing stations (server-side for
+// accuracy, falls back to local tenant cache when offline).
+// Shows an inline error and returns true if a duplicate is found.
+let _adminCheckTimer = null;
+async function mt_checkAdminUserDuplicate(username) {
+  const errEl = document.getElementById('tAdminUserError');
+  if (!errEl) return false;
+
+  // Mark field as manually edited once the user has touched it directly
+  const adminField = document.getElementById('tAdminUser');
+  if (adminField && document.activeElement === adminField) {
+    adminField.dataset.manuallyEdited = '1';
+  }
+
+  if (!username || username.length < 2) {
+    errEl.style.display = 'none';
+    return false;
+  }
+
+  // Debounce — don't fire on every keystroke
+  clearTimeout(_adminCheckTimer);
+  return await new Promise((resolve) => {
+    _adminCheckTimer = setTimeout(async () => {
+      const currentId = document.getElementById('tId')?.value;
+
+      // ── Try server-side check first (most accurate) ──────────────────
+      try {
+        const resp = await apiFetch(`/data/check-username?username=${encodeURIComponent(username)}`);
+        if (resp && resp.duplicate) {
+          // Only flag if it belongs to a *different* station
+          if (resp.tenant_id && resp.tenant_id !== currentId) {
+            errEl.innerHTML = `⚠️ Username <strong>"${username}"</strong> is already used at <strong>"${resp.station_name}"</strong>. Please choose a different username.`;
+            errEl.style.display = 'block';
+            return resolve(true);
+          }
+        }
+        errEl.style.display = 'none';
+        return resolve(false);
+      } catch (_) {
+        // Server unreachable or not super-logged-in → fall back to local cache
+      }
+
+      // ── Offline fallback: scan local tenant registry ─────────────────
+      const tenants = mt_getTenants();
+      const uLower = username.toLowerCase();
+      for (const t of tenants) {
+        if (t.id === currentId) continue;
+        const admins = t.adminUsers || [];
+        if (admins.some(a => (a.username || '').toLowerCase() === uLower)) {
+          errEl.innerHTML = `⚠️ Username <strong>"${username}"</strong> is already used at <strong>"${t.name}"</strong>. Please choose a different username.`;
+          errEl.style.display = 'block';
+          return resolve(true);
+        }
+      }
+      errEl.style.display = 'none';
+      resolve(false);
+    }, 350);
+  });
+}
 
 async function mt_saveTenant(isEdit) {
   const id       = document.getElementById('tId')?.value;
@@ -419,6 +494,15 @@ async function mt_saveTenant(isEdit) {
   }
   if (!name || name.length < 2) { mt_toast('Enter a station name', 'error'); return; }
   if (!phone || phone.length !== 10 || !/^[0-9]{10}$/.test(phone)) { mt_toast('Phone number must be exactly 10 digits', 'error'); return; }
+
+  // Block save if admin username is flagged as duplicate
+  if (!isEdit && adminUser) {
+    const isDup = await mt_checkAdminUserDuplicate(adminUser);
+    if (isDup) {
+      mt_toast('Admin username already exists at another station — please choose a unique username', 'error');
+      return;
+    }
+  }
 
   // Use API if available
   if (typeof TenantAPI !== 'undefined') {
