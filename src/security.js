@@ -213,6 +213,21 @@ async function createSession(db, { tenantId, userId, userType, userName, role, i
   const token = generateToken();
   // Super admin: 4h (security). Admin/owner: 30 days — biometric re-auth covers security.
   const hours = userType === 'super' ? 4 : 720;
+
+  // Single-session enforcement: evict all existing non-expired sessions for this
+  // user before inserting the new token. Any other tab or device holding an old
+  // token will receive 401 on their next API call, which triggers appLogout().
+  // Scoping: super = global (no tenant); admin/employee = scoped per tenant.
+  if (userType === 'super') {
+    await db.prepare(
+      "DELETE FROM sessions WHERE user_type = 'super' AND expires_at > NOW()"
+    ).run();
+  } else if (userId) {
+    await db.prepare(
+      'DELETE FROM sessions WHERE user_id = $1 AND user_type = $2 AND tenant_id = $3 AND expires_at > NOW()'
+    ).run(userId, userType, tenantId || '');
+  }
+
   // BUG FIX: Use parameterized interval instead of string interpolation
   await db.prepare(
     `INSERT INTO sessions
